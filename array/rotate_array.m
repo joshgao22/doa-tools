@@ -79,6 +79,7 @@ else
     error('Unsupported rotation type.');
 end
 
+design_rot = design;
 design_rot.element_positions = elem_pos_rot;
 
 end
@@ -108,6 +109,7 @@ function design_rot = rotate_general_array(design, n)
                          design.element_positions - mean(design.element_positions)];
     elem_pos_rot = rot_mat * elem_pos_centroid;
     
+    design_rot = design;
     design_rot.element_positions = elem_pos_rot;
 end
 
