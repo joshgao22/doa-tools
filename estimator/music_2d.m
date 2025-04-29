@@ -1,8 +1,8 @@
-function sp = music_1d(R, n, design, wavelength, grid_size, varargin)
-%MUSIC_1D 1D MUSIC.
+function sp = music_2d(R, n, design, wavelength, grid_size, varargin)
+%MUSIC_2D 2D MUSIC.
 %Syntax:
-%   sp = MUSIC_1D(R, n, design, wavelength, grid_size, ...);
-%   sp = MUSIC_1D(R, n, f_steering, [], grid_size, ...);
+%   sp = MUSIC_2D(R, n, design, wavelength, grid_size, ...);
+%   sp = MUSIC_2D(R, n, f_steering, [], grid_size, ...);
 %Inputs:
 %   R - Sample covariance matrix.
 %   n - Number of sources.
@@ -10,7 +10,9 @@ function sp = music_1d(R, n, design, wavelength, grid_size, varargin)
 %            a steering matrix. This function must take two arguments,
 %            wavelength and the doa vector.
 %   wavelength - Wavelength.
-%   grid_size - Number of grid points used.
+%   grid_size - Number of grid points. For 2D DOAs, grid_size can be 
+%               2-element vector, specifying the number of grid points 
+%               for azimuth and elevation angles, respectively.
 %   ... - Options:
 %           'Unit' - Can be 'radian', 'degree', or 'sin'. Default value is
 %                   'radian'.
@@ -18,10 +20,10 @@ function sp = music_1d(R, n, design, wavelength, grid_size, varargin)
 %                               direction of arrivals around the grid.
 %Output:
 %   sp - Spectrum structure with the following fields:
-%           x - An 1 x grid_size vector.
+%           x - A 2 x grid_size vector, with azimuth and elevation.
 %           y - An 1 x grid_size vector. Calling `plot(x, y)` will plot the
 %               spectrum.
-%           x_est - An 1 x n vector storing the estimated DOAs. May not
+%           x_est - A 2 x n vector storing the estimated DOAs. May not
 %                   fall on the grid if 'RefineEstimates' is set to true.
 %           x_unit - The same as the unit specified by 'Unit'.
 %           resolved - True if the number of peaks in the spectrum is
@@ -50,7 +52,7 @@ if n >= m
     error('Too many sources.');
 end
 % discretize and create the corresponding steering matrix
-[doa_grid_rad, doa_grid_display, ~] = default_doa_grid(grid_size, unit, 1);
+[doa_grid_rad, doa_grid_display, ~] = default_doa_grid(grid_size, unit, 2);
 % find noise subspace
 [U, D] = eig(0.5*(R + R'), 'vector');
 % possible asymmetry due to floating point error
