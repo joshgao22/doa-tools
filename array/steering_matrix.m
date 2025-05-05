@@ -82,7 +82,7 @@ else
     if use_normalized_angles
         error('Normalized angles are not supported for 2D/3D arrays yet.');
     end
-    if isvector(doas)
+    if size(doas, 1) == 1
         % only broadside angles are provided
         % to be consistent with the 1D case where the array is lied on the
         % x-axis, we assume the sources are on the xy-plane, and the
