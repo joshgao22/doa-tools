@@ -1,4 +1,4 @@
-function design_rot = rotate_array(design, n, center)
+function [design_rot, rot_mat] = rotate_array(design, n, center)
 %ROTATE_ARRAY Rotate an array to align its normal vector to a target direction.
 %
 %   design_rot = rotate_array(design, n, center) rotates the array described 
@@ -22,29 +22,22 @@ function design_rot = rotate_array(design, n, center)
 %Outputs:
 %   design_rot - Rotated array structure with updated element positions.
 
-% Validate inputs
+% Ensure n is a 2D or 3D vector
 if ~(isvector(n) && (length(n) == 2 || length(n) == 3))
-    error('Target normal vector n must be 2D or 3D.');
+    error('Target normal vector n must be a 2D or 3D vector.');
 end
 
 % Normalize the target normal vector
+n = n(:);  % Ensure column vector
 n = n / norm(n);
 
-% Check if center is provided, if not, set it to the origin (default behavior)
-if nargin < 3
-    if length(n) == 2
-        center = [0; 0];  % Default to the origin for 2D rotation
-    elseif length(n) == 3
-        center = [0; 0; 0];  % Default to the origin for 3D rotation
-    end
+% Handle center input
+if nargin < 3 || isempty(center)
+    center = zeros(size(n));  % Default center is origin of same dimension as n
 else
-    % Ensure center is a column vector (for 2D or 3D)
-    center = center(:);
-    % Ensure center has the correct number of dimensions
-    if length(n) == 2 && length(center) ~= 2
-        error('For 2D rotation, center must be a 2D vector.');
-    elseif length(n) == 3 && length(center) ~= 3
-        error('For 3D rotation, center must be a 3D vector.');
+    center = center(:);  % Ensure column vector
+    if length(center) ~= length(n)
+        error('Center and target normal vector n must have the same dimension (2D or 3D).');
     end
 end
 
@@ -54,11 +47,11 @@ switch design.dim
         % 1D array: check if 2D or 3D rotation is needed
         if length(n) == 2
             % 2D rotation for 1D array
-            design_rot = rotate_1d_array(design, n, center, '2D');
+            [design_rot, rot_mat] = rotate_1d_array(design, n, center, '2D');
             design_rot.dim = 2;
         elseif length(n) == 3
             % 3D rotation for 1D array
-            design_rot = rotate_1d_array(design, n, center, '3D');
+            [design_rot, rot_mat] = rotate_1d_array(design, n, center, '3D');
             design_rot.dim = 3;
         else
             error('Invalid normal vector length for 1D array.');
@@ -66,7 +59,7 @@ switch design.dim
     case 2
         % 2D array: only 3D rotation is allowed
         if length(n) == 3
-            design_rot = rotate_2d_array(design, n, center);
+            [design_rot, rot_mat] = rotate_2d_array(design, n, center);
             design_rot.dim = 3;
         else
             error('Only 3D rotation is allowed for 2D array.');
@@ -74,7 +67,7 @@ switch design.dim
     case 3
         % 3D array: only 3D rotation is allowed
         if length(n) == 3
-            design_rot = rotate_3d_array(design, n, center);
+            [design_rot, rot_mat] = rotate_3d_array(design, n, center);
             design_rot.dim = 3;  % No change in dimension
         else
             error('Only 3D rotation is allowed for 3D array.');
@@ -89,7 +82,7 @@ design_rot.element_positions = design_rot.element_positions;
 end
 
 % General helper function for 1D and 2D array rotation
-function design_rot = rotate_1d_array(design, n, center, type)
+function [design_rot, rot_mat] = rotate_1d_array(design, n, center, type)
 % Rotate a 1D or 2D array to align its normal vector to target direction (2D or 3D).
 
 % If 2D rotation, calculate the angle in 2D
@@ -105,7 +98,7 @@ if strcmp(type, '2D')
     
 elseif strcmp(type, '3D')
     % 3D rotation, we need the full rotation logic
-    design_rot = rotate_general_array(design, n, center);
+    [design_rot, rot_mat] = rotate_general_array(design, n, center);
     return;
 else
     error('Unsupported rotation type.');
@@ -115,8 +108,18 @@ design_rot.element_positions = elem_pos_rot;
 
 end
 
+% Helper function for 2D array rotation to 3D direction
+function [design_rot, rot_mat] = rotate_2d_array(design, n, center)
+    [design_rot, rot_mat] = rotate_general_array(design, n, center);
+end
+
+% Helper function for 3D rotation of 3D array
+function [design_rot, rot_mat] = rotate_3d_array(design, n, center)
+    [design_rot, rot_mat] = rotate_general_array(design, n, center);
+end
+
 % General rotation function for both 1D/2D arrays when rotating to 3D
-function design_rot = rotate_general_array(design, n, center)
+function [design_rot, rot_mat] = rotate_general_array(design, n, center)
     % Rotate to a 3D direction using axis-angle method
     original_n = [0; 0; 1];  % Original normal is along +Z axis
     axis_rot = cross(original_n, n);
@@ -132,7 +135,7 @@ function design_rot = rotate_general_array(design, n, center)
     else
         axis_rot = axis_rot / axis_norm;
         angle_rot = acos(dot(original_n, n));
-        rot_mat = axis_angle_to_matrix(axis_rot, angle_rot);
+        rot_mat = axang2rot(axis_rot, angle_rot);
     end
     
     % Apply rotation for array
@@ -151,29 +154,4 @@ function design_rot = rotate_general_array(design, n, center)
     
     design_rot = design;
     design_rot.element_positions = elem_pos_rot;
-end
-
-% Helper function for 2D array rotation to 3D direction
-function design_rot = rotate_2d_array(design, n, center)
-    design_rot = rotate_general_array(design, n, center);
-end
-
-% Helper function for 3D rotation of 3D array
-function design_rot = rotate_3d_array(design, n, center)
-    design_rot = rotate_general_array(design, n, center);
-end
-
-% Helper function to generate 3D rotation matrix from axis and angle
-function R = axis_angle_to_matrix(axis, angle)
-    % Generate rotation matrix from axis and angle
-    x = axis(1);
-    y = axis(2);
-    z = axis(3);
-    c = cos(angle);
-    s = sin(angle);
-    C = 1 - c;
-
-    R = [x*x*C + c,   x*y*C - z*s, x*z*C + y*s;
-         y*x*C + z*s, y*y*C + c,   y*z*C - x*s;
-         z*x*C - y*s, z*y*C + x*s, z*z*C + c];
 end
