@@ -10,8 +10,8 @@ function sp = music_2d(R, n, design, wavelength, grid_size, varargin)
 %            a steering matrix. This function must take two arguments,
 %            wavelength and the doa vector.
 %   wavelength - Wavelength.
-%   grid_size - Number of grid points. For 2D DOAs, grid_size can be 
-%               2-element vector, specifying the number of grid points 
+%   grid_size - Number of grid points. For 2D DOAs, grid_size can be
+%               2-element vector, specifying the number of grid points
 %               for azimuth and elevation angles, respectively.
 %   ... - Options:
 %           'Unit' - Can be 'radian', 'degree', or 'sin'. Default value is
@@ -52,7 +52,7 @@ if n >= m
     error('Too many sources.');
 end
 % discretize and create the corresponding steering matrix
-[doa_grid_rad, doa_grid_display, ~] = default_doa_grid(grid_size, unit, 2);
+[doa_grid_rad, doa_grid_display, ~, doa_grid_list] = default_doa_grid(grid_size, unit, 2);
 % find noise subspace
 [U, D] = eig(0.5*(R + R'), 'vector');
 % possible asymmetry due to floating point error
@@ -78,7 +78,7 @@ if resolved && refine_estimates
         otherwise
             error('Invalid unit ''%s''.', unit);
     end
-    x_est = refine_grid_estimates(f_obj, doa_grid_display, x_est_idx);
+    x_est = refine_grid_estimates(f_obj, doa_grid_list, x_est_idx);
 end
 % return
 sp = struct();
@@ -99,4 +99,3 @@ end
 v = Un' * A;
 v = real(sum(conj(v) .* v, 1));
 end
-
