@@ -17,7 +17,7 @@ if nargin <= 2
 elseif ~ischar(name)
     error('Name must be a string.');
 end
-design.element_indices = grid2(0, size(1)-1, 0, size(2) - 1, size(1), size(2));
+design.element_indices = grid2(0, size(1), 0, size(2), size(1), size(2));
 design.element_positions = design.element_indices*d;
 design.element_spacing = d;
 design.element_count = size(1)*size(2);

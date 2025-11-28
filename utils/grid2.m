@@ -4,9 +4,9 @@ function g = grid2(xmin, xmax, ymin, ymax, nx, ny)
 %   g = GRID2(xmin, xmax, ymin, ymax, nx[, ny]);
 %Inputs:
 %   xmin - Minimum x value (inclusive).
-%   xmax - Maximum x value (inclusive).
+%   xmax - Maximum x value (exclusive).
 %   ymin - Minimum y value (inclusive).
-%   ymax - Maximum y value (inclusive).
+%   ymax - Maximum y value (exclusive).
 %   nx - Number of grid point along x.
 %   ny - (Optional) number of grid points along y. If omitted, will be set
 %        to nx.
