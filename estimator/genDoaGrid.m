@@ -69,7 +69,7 @@ function doaGrid = genDoaGrid(type, dimension, resolution, range, arrayCenter, s
 arguments
   type char {mustBeMember(type, ["angle", "latlon"])}
   dimension (1,1) {mustBeMember(dimension, [1, 2])}
-  resolution (:,2) {mustBePositive, mustBeNumeric}
+  resolution (1,:) {mustBePositive, mustBeNumeric}
   range {mustBeNumeric} = []
   arrayCenter (3,:) {mustBeNumeric} = []
   spheroid (1,1) {mustBeA(spheroid, ["referenceEllipsoid", "oblateSpheroid", ...

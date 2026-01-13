@@ -169,7 +169,7 @@ switch dim
         % Construct a local grid within current bounds and evaluate spectrum.
         candidateGrid = genDoaGrid('angle', 1, subgridSize, neighbourGrid);
 
-        objSpectrum = objFunction(candidateGrid);
+        objSpectrum = objFunction({candidateGrid});
 
         % Pick the best point on this local grid (global max in 1D).
         [~, peakIdx] = max(objSpectrum);
