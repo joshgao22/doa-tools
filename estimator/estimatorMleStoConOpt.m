@@ -1,37 +1,99 @@
 function [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, ...
   wavelen, sampleCovMat, numSource, doaGrid, initParam, verbose)
-%ESTIMATORMLESTOCONOPT Stochastic ML (uncorrelated) estimator via joint optimization.
-% Solves the stochastic uncorrelated-source ML problem by directly minimizing
-%   min_{Theta, p, sigma} logdet(S) + tr(S^{-1} R)
-%   s.t. S = A(Theta) diag(p) A(Theta)^H + sigma I,
-%        p >= 0, sigma >= 0,
-% where Theta contains the DOA parameters per source (1D or 2D, read from doaGrid.dimension).
-% The result is a continuous-domain estimate (non-grid/discrete).
+%ESTIMATORMLESTOCONOPT Stochastic ML (concentrated) DOA estimation via continuous optimization.
 %
-%Syntax:
-%  [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, wavelength, sampleCovMat, ...
-%    numSource, doaGrid)
-%  ... = estimatorMLEStoConOpt(..., verbose)
+% This function estimates directions of arrival (DOAs) by directly minimizing
+% the stochastic uncorrelated-source negative log-likelihood:
+%   f(Theta, p, sigma^2) = logdet(S) + tr(S^{-1} Rhat)
+% subject to nonnegativity constraints:
+%   p >= 0,  sigma^2 >= 0,
+% with the covariance model
+%   S = A(Theta) diag(p) A(Theta)^H + sigma^2 I.
 %
-%Inputs:
-%  array        - Array struct for steeringMatrix().
-%  wavelen      - Wavelength (scalar).
-%  sampleCovMat - Sample covariance (MxM), Hermitian.
-%  numSource    - Number of sources (K).
-%  doaGrid      - DOA grid struct (used for bounds and initial guess).
-%                - dimension: 1 or 2
-%                - type: 'local' recommended
-%                - angleGrid: dim x N (radians), optional for MVDR initialization
-%  verbose      - (Optional) true/false, show fmincon iterations if true (default: false).
+% The DOA parameters Theta are optimized in the continuous domain (not limited
+% to discrete grid points). The doaGrid input is used to define parameter
+% bounds and (optionally) construct an initial guess.
 %
-%Outputs:
-%  doaResult    - DOA result struct:
-%                - doaGrid, spectrum (empty), peakIndices (empty)
-%                - estimatedDoas: dim x K DOAs (radians)
-%                - isResolved: true if optimization succeeds
-%                - isDiscrete: true (discrete solution)
-%  signalPower  - Estimated source powers (Kx1), nonnegative.
-%  noiseVar     - Estimated noise variance (scalar), nonnegative.
+% Supported modes:
+%   1) Single-array optimization: array/sampleCovMat/doaGrid are structs.
+%   2) Multi-array joint optimization: array/sampleCovMat/doaGrid are cells.
+%      The objective is the sum over arrays (joint likelihood up to constants).
+%
+% Initialization:
+%   - If initParam is empty, an MVDR-based initializer is attempted.
+%   - For grid type 'angle', Theta is parameterized directly in radians.
+%   - For grid type 'latlon', optimization variables are (lat, lon) in degrees,
+%     which are mapped to local (az, el) angles (radians) per array when forming
+%     steering matrices.
+%
+%% Syntax
+%   [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, wavelen, ...
+%       sampleCovMat, numSource, doaGrid)
+%   [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, wavelen, ...
+%       sampleCovMat, numSource, doaGrid, initParam)
+%   [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, wavelen, ...
+%       sampleCovMat, numSource, doaGrid, initParam, verbose)
+%
+%% Inputs
+%   array        - Array geometry object(s). Either:
+%                  * struct/object representing one array, or
+%                  * 1-by-N cell array for multiple arrays.
+%                  Each array must be compatible with steeringMatrix().
+%   wavelen      - Signal wavelength (scalar, same unit as array geometry).
+%   sampleCovMat - Sample covariance matrix/matrices. Either:
+%                  * M-by-M complex matrix (single array), or
+%                  * 1-by-N cell array, each is Mi-by-Mi (multi-array).
+%                  Matrices are Hermitianized internally as 0.5*(R + R').
+%   numSource    - Number of sources (positive integer, K).
+%   doaGrid      - Grid definition struct(s) used for:
+%                  * parameterization selection via .type in {'angle','latlon'}
+%                  * DOA dimension via .dimension in {1,2}
+%                  * box bounds via .range
+%                  Additional fields required for 'latlon':
+%                    .spheroid, .arrayCenter
+%   initParam    - (Optional) Initial optimization vector. If empty, an
+%                  initializer is constructed internally.
+%                  Layout: [doaParam(:); p; noiseVar], where doaParam depends
+%                  on doaGrid.type (see Notes).
+%   verbose      - (Optional) Logical flag to show fmincon iterations.
+%                  Default: false.
+%
+%% Outputs
+%   doaResult    - MUSIC-like result struct with fields:
+%                  .doaGrid     : input grid cell/struct (for metadata)
+%                  .spectrum    : [] (continuous optimization, no scan spectrum)
+%                  .peakIndices : [] (not applicable)
+%                  .angleEst    : dim-by-K DOA estimates in radians (for 'angle';
+%                                for 'latlon' only set when numArray==1)
+%                  .latlonEst   : 2-by-K (lat;lon) in degrees when grid type is 'latlon'
+%                  .isResolved  : true if optimization exitflag indicates success
+%                  .isDiscrete  : flag indicating discrete vs continuous output
+%                                (see Notes regarding current implementation)
+%   signalPower  - Estimated source powers stacked across arrays.
+%                  Size: (K*numArray)-by-1, with K entries per array in array order.
+%   noiseVar     - Estimated noise variance per array.
+%                  Size: numArray-by-1.
+%
+%% Notes
+%   - Objective: this implements the standard stochastic ML criterion for
+%     uncorrelated sources. The objective is summed across arrays in multi-array mode.
+%   - DOA parameterization:
+%       * doaGrid.type == 'angle'  : doaParam(:) stores angles in radians.
+%         For dim=2, stacking is [az1; el1; az2; el2; ...] (column-major).
+%       * doaGrid.type == 'latlon' : doaParam(:) stores [lat1; lon1; lat2; lon2; ...]
+%         in degrees; each array maps (lat,lon) to local (az,el) radians using
+%         geodetic2ecef + ecefToAngleGrid relative to doaGrid{ii}.arrayCenter.
+%   - Bounds: only box constraints are used (see setDoaBounds). Power and noise
+%     variables are constrained by [0, +inf).
+%   - Output consistency: for grid type 'latlon' and numArray>1, angleEst is left
+%     empty because local (az,el) depends on arrayCenter; latlonEst is the shared
+%     global estimate.
+%   - Implementation note: doaResult.isDiscrete is currently set to true in code,
+%     but this solver produces continuous-domain estimates. Consider setting it
+%     to false for semantic consistency (not changed here).
+%
+%% See also
+%   fmincon, steeringMatrix, estimatorMvdr, setDoaBounds, nllStoUc, ecefToAngleGrid
 
 arguments (Input)
   array (1,:) {mustBeA(array, ["struct", "cell"])}
@@ -43,15 +105,16 @@ arguments (Input)
   verbose (1,1) logical = false
 end
 
-isArrayCell = iscell(array);
-numArray = numel(array);
-
-if ~isArrayCell
-  array = {array};
+% Normalize inputs to cell containers
+% Wrap single-array inputs into 1-by-1 cells to unify downstream processing.
+if ~iscell(array)
+  array        = {array};
   sampleCovMat = {sampleCovMat};
-  doaGrid = {doaGrid};
+  doaGrid      = {doaGrid};
 end
 
+% Validate multi-array container lengths
+numArray = numel(array);
 if numel(sampleCovMat) ~= numArray || numel(doaGrid) ~= numArray
   error('estimatorMusic:InvalidInput', ...
     'Cell inputs "array", "sampleCovMat", and "doaGrid" must have the same number of elements.');
@@ -193,7 +256,11 @@ noiseVar = max(noiseVar, 0);
 % Build doaResult (MUSIC-like output struct)
 % -------------------------------------------------------------------------
 doaResult = struct();
-doaResult.doaGrid = doaGrid;
+if numArray == 1
+  doaResult.doaGrid = doaGrid{1};
+else
+  doaResult.doaGrid = doaGrid;
+end
 doaResult.spectrum = [];
 doaResult.peakIndices = [];
 doaResult.angleEst = estAngle;
@@ -209,31 +276,28 @@ end
 function [lb, ub] = setDoaBounds(lb, ub, doaGrid, dim, numSource)
 %SETDOABOUNDS Set box constraints for continuous DOA optimization variables.
 %
-%This function fills the lower/upper bounds of the DOA-related entries in the
-%optimization vector, according to the grid domain stored in doaGrid.
+% This helper fills the lower/upper bounds of the DOA-related entries in the
+% optimization vector, according to the domain specified by doaGrid.range.
+% Only DOA variables are modified; bounds for source power and noise variance
+% are handled outside this function.
 %
-%DOA parameterization:
-%  - 1D DOA: theta (broadside angle)
-%  - 2D DOA: azimuth–elevation pairs [az; el]
+% DOA variable stacking (MATLAB column-major):
+%   Let K = numSource, dim ∈ {1,2}.
+%   - dim = 1 (1D): doaParam(:) = [theta_1; theta_2; ...; theta_K]
+%   - dim = 2 (2D): doaParam(:) = [v1_1; v2_1; v1_2; v2_2; ...; v1_K; v2_K]
+%     where (v1,v2) is:
+%       * (az, el) in radians when doaGrid.type == 'angle'
+%       * (lat, lon) in degrees when doaGrid.type == 'latlon'
 %
-%Bounds:
-%  - 1D: theta ∈ [doaGrid.range(1), doaGrid.range(2)]
-%  - 2D: az ∈ [doaGrid.range(1,1), doaGrid.range(1,2)]
-%         el ∈ [doaGrid.range(2,1), doaGrid.range(2,2)]
+% Bounds:
+%   - dim = 1:
+%       theta ∈ [doaGrid.range(1), doaGrid.range(2)]
+%   - dim = 2:
+%       v1 ∈ [doaGrid.range(1,1), doaGrid.range(1,2)]
+%       v2 ∈ [doaGrid.range(2,1), doaGrid.range(2,2)]
 %
-%Optimization vector layout (MATLAB column-major stacking):
-%  Let K = numSource, dim ∈ {1,2}.
-%
-%  - dim = 1:
-%      Theta(:) = [theta_1; theta_2; ...; theta_K]
-%
-%  - dim = 2:
-%      Theta(:) = [az_1; el_1; az_2; el_2; ...; az_K; el_K]
-%
-%Notes:
-%  - This function assumes doaGrid.range has already been validated.
-%  - Only the DOA-related entries are modified; bounds for power/noise
-%    variables should be handled separately.
+%% See also
+%   estimatorMleStoConOpt, nllStoUc
 
 if dim == 1
   lb(1:numSource) = doaGrid.range(1);
@@ -262,39 +326,38 @@ end
 
 
 function obj = nllStoUc(array, wavelength, sampleCovMat, doaGrid, dim, numSource, optVar)
-%NLLSTOUC Stochastic uncorrelated-source negative log-likelihood.
+%NLLSTOUC Joint stochastic uncorrelated-source negative log-likelihood.
 %
-%Computes the objective
-%    f(Theta, p, sigma) = log det(S) + tr(S^{-1} Rhat),
-%where
-%    S = A(Theta) diag(p) A(Theta)^H + sigma I,
-%    Rhat = sampleCovMat,
-%    p >= 0 is the source power vector, and sigma >= 0 is the noise variance.
+% This helper evaluates the per-array stochastic ML objective and sums across
+% arrays (joint criterion up to constants):
+%   obj = sum_i [ logdet(S_i) + tr(S_i^{-1} Rhat_i) ].
 %
-%DOA parameterization and optVar layout:
-%  optVar = [doaParam(:); p; sigma]
-%  - doaParam depends on doaGrid.type:
-%      * 'angle'  : doaParam(:) is Theta(:) with Theta = [az; el] (rad) for dim=2
-%                  (MATLAB column-major stacking: [az1; el1; az2; el2; ...]).
-%      * 'latlon' : doaParam(:) stores [lat1; lon1; lat2; lon2; ...] (deg).
-%                  Each (lat,lon) is mapped to local (az,el) (rad) using
-%                  geodetic2ecef() + ecefToAngleGrid() w.r.t. doaGrid.arrayCenter.
-%  - p is a Kx1 vector (K = numSource).
-%  - sigma is a scalar.
+% Per array i, the covariance model is
+%   S_i = A_i(Theta_i) diag(p_i) A_i(Theta_i)^H + sigma_i^2 I,
+% where p_i >= 0 (source powers) and sigma_i^2 >= 0 (noise variance).
 %
-%Inputs:
-%  array        : array struct for steeringMatrix()
-%  wavelength   : wavelength (scalar)
-%  sampleCovMat : sample covariance Rhat (MxM, Hermitian)
-%  doaGrid      : grid struct with fields:
-%                 - type in {'angle','latlon'}
-%                 - spheroid, arrayCenter (required for 'latlon')
-%  dim          : DOA dimension (1 or 2)
-%  numSource    : number of sources K
-%  optVar       : optimization variable vector as above
+% The optimization vector layout is:
+%   optVar = [doaParam(:); signalPower; noiseVar]
+% where:
+%   - doaParam(:) contains K DOA hypotheses (dim-by-K) in either radians ('angle')
+%     or degrees ('latlon'), stacked column-wise.
+%   - signalPower stacks K powers per array: (K*numArray)-by-1.
+%   - noiseVar stacks one variance per array: numArray-by-1.
 %
-%Output:
-%  obj          : scalar objective value; returns +inf if S is not PD
+% DOA decoding:
+%   - doaGrid{1}.type == 'angle':
+%       doaParam(:) is interpreted directly as local DOA parameters (radians).
+%   - doaGrid{1}.type == 'latlon':
+%       doaParam(:) stores [lat1; lon1; lat2; lon2; ...] (degrees). The shared
+%       global (lat,lon) is mapped to local angles (az,el) radians for each array
+%       using geodetic2ecef() + ecefToAngleGrid() w.r.t. doaGrid{ii}.arrayCenter.
+%
+% Numerical evaluation:
+%   - Cholesky factorization is used for stable logdet and linear solves.
+%   - If any S_i is not positive definite, obj returns +Inf.
+%
+%% See also
+%   steeringMatrix, geodetic2ecef, ecefToAngleGrid, setDoaBounds
 
 arguments
   array {mustBeA(array, "cell")}
