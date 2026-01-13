@@ -81,11 +81,19 @@ if resolved && refine_estimates
     x_est = refine_grid_estimates(f_obj, doa_grid_list, x_est_idx);
 end
 % return
+az_list = doa_grid_list{1};
+el_list = doa_grid_list{2};
+n_az = numel(az_list);
+n_el = numel(el_list);
+
 sp = struct();
 sp.x = doa_grid_display;
 sp.x_est = x_est;
 sp.x_unit = unit;
 sp.y = sp_intl;
+sp.az_list = az_list;
+sp.el_list = el_list;
+sp.z = reshape(sp_intl, n_el, n_az);
 sp.resolved = resolved;
 sp.discrete = false;
 end

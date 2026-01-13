@@ -1,54 +1,40 @@
-function u_global = dir2global(u_local, z_axis_local)
-%DIR2GLOBAL Convert a direction vector from local frame to global frame.
+function [u_global, rotMat_l2g] = dir2global(u_local, z_axis_global)
+%DIR2GLOBAL Convert a direction vector from a local frame to the global frame.
+%   [u_global, rotMat_l2g] = dir2global(u_local, z_axis_global)
 %
-%   u_global = dir2global(u_local, z_axis_local)
-%
-%   Inputs:
-%     u_local       : 2x1 or 3x1 direction vector in local frame
-%     z_axis_local  : 2x1 or 3x1 vector specifying local z-axis (same as in dir2local)
-%
-%   Output:
-%     u_global      : direction vector expressed in global frame
+%Inputs:
+%   u_local      : 2×1 or 3×1 direction vector expressed in the local frame
+%   z_axis_global:
+%       Direction of the local frame's z-axis expressed in the global frame.
+%       - In 2D, this argument specifies the local x-axis
+%         (e.g., [cos(theta); sin(theta)]).
+%       - In 3D, this argument specifies the desired local z-axis direction.
+%Outputs:
+%   u_global     : u_local expressed in the global coordinate frame
+%   rotMat_l2g   : Rotation matrix whose columns are the local axes
+%                  expressed in the global frame (local → global).
+%Usage:
+%   u_global = rotMat_l2g * u_local
+%Note:
+%   This function uses get_rotation_mat(z_axis_global) to construct
+%   the local-to-global rotation matrix consistent with dir2local.
 
-    % Ensure column vectors
-    u_local = u_local(:);
-    z_axis_local = z_axis_local(:);
+arguments
+  u_local {mustBeVector, mustBeNumeric}
+  z_axis_global {mustBeVector, mustBeNumeric}
+end
 
-    % Dimension check
-    d = length(z_axis_local);
-    if length(u_local) ~= d
-        error('u_local and z_axis_local must have the same dimension.');
-    end
+% Ensure column vectors
+u_local = u_local(:);
+z_axis_global = z_axis_global(:);
 
-    % 2D case
-    if d == 2
-        z_hat = z_axis_local / norm(z_axis_local);
-        x_hat = z_hat;
-        y_hat = [-z_hat(2); z_hat(1)];
-        R = [x_hat, y_hat];  % Local basis in global coordinates
-        u_global = R * u_local;
+% Dimension check
+d = length(z_axis_global);
+if length(u_local) ~= d
+  error('u_local and z_axis_global must have the same dimension.');
+end
 
-    % 3D case
-    elseif d == 3
-        if norm(z_axis_local) < 1e-8
-            error('z_axis_local must be non-zero.');
-        end
-        z_hat = z_axis_local / norm(z_axis_local);
-        if abs(z_hat(1)) < 0.9
-            v = [1; 0; 0];
-        else
-            v = [0; 1; 0];
-        end
-        x_hat = cross(v, z_hat);
-        if norm(x_hat) < 1e-8
-            error('Failed to compute orthogonal x-axis.');
-        end
-        x_hat = x_hat / norm(x_hat);
-        y_hat = cross(z_hat, x_hat);
-        R = [x_hat, y_hat, z_hat];
-        u_global = R * u_local;
+rotMat_l2g = get_rotation_mat(z_axis_global);
+u_global = rotMat_l2g * u_local;
 
-    else
-        error('Only 2D or 3D vectors are supported.');
-    end
 end

@@ -61,9 +61,9 @@ function est = refine_grid_estimates(f_obj, grid_list, est_idx)
         n_iter = 10;
         subgrid_size = [4 4];
 
-        for kk = 1:size(est_idx, 1)
-            az_idx = est_idx(kk, 1);
-            el_idx = est_idx(kk, 2);
+        for kk = 1:size(est_idx, 2)
+            az_idx = est_idx(1, kk);
+            el_idx = est_idx(2, kk);
 
             % Initial bounds
             lb_az = az_list(max(az_idx - 1, 1));
@@ -89,7 +89,7 @@ function est = refine_grid_estimates(f_obj, grid_list, est_idx)
                 ub_el = el_sub(min(min_el_idx + 1, end));
             end
 
-            est(kk, :) = [az_sub(min_az_idx), el_sub(min_el_idx)];
+            est(:, kk) = [az_sub(min_az_idx), el_sub(min_el_idx)];
         end
     else
         error('grid_list must be a vector (1D) or a 2-element cell array (2D).');

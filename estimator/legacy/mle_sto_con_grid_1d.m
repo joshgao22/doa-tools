@@ -52,7 +52,7 @@ end
 [doa_grid_rad, doa_grid_display, ~] = default_doa_grid(grid_size, unit, 1);
 % compute spectrum
 sp_intl = compute_spectrum(R, design, wavelength, doa_grid_rad);
-[x_est, x_est_idx, resolved] = find_doa_from_spectrum_1d(doa_grid_display, sp_intl, k);
+[x_est, x_est_idx, resolved] = find_doa_from_spectrum(doa_grid_display, sp_intl, k);
 % refine
 if resolved && refine_estimates
   switch unit

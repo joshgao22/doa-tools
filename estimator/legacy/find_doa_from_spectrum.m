@@ -9,8 +9,8 @@ function [est, est_idx, resolved] = find_doa_from_spectrum(dg, y, n, varargin)
 %   varargin  - Optional: grid_size = [num_azimuth_points, num_elevation_points]
 %
 % Outputs:
-%   est       - Estimated DOAs (1×n or n×2)
-%   est_idx   - Estimated indices (1×n for 1D, n×2 for 2D)
+%   est       - Estimated DOAs (1×n or 2×n)
+%   est_idx   - Estimated indices (1×n for 1D, 2×n for 2D)
 %   resolved  - Boolean flag
 
 if ~isempty(varargin)
@@ -68,8 +68,8 @@ elseif dim == 2
     sel_az_idx = az_idx(sort_idx(1:n));
 
     lin_idx = sub2ind([ny, nx], sel_el_idx, sel_az_idx);
-    est = dg(:, lin_idx).';  % n × 2
-    est_idx = [sel_az_idx, sel_el_idx];  % az_idx, el_idx
+    est = dg(:, lin_idx);  % 2 × n
+    est_idx = [sel_az_idx'; sel_el_idx'];  % az_idx, el_idx
     resolved = true;
 else
     error('Only 1D and 2D direction grids are supported.');

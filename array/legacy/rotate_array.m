@@ -104,6 +104,7 @@ else
     error('Unsupported rotation type.');
 end
 
+design_rot = design;
 design_rot.element_positions = elem_pos_rot;
 
 end

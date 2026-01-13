@@ -76,7 +76,7 @@ if isempty(x0)
     if ishandle(design)
         A = design(wavelength, x0(1:n));
     else
-        A = steering_matrix(design, wavelength, x0(1:n));
+        A = steering_matrix(design, wavelength, x0(1:n)');
     end
     B = [khatri_rao(conj(A), A) reshape(eye(size(A, 1)), [], 1)];
     z = real(B\R(:));
