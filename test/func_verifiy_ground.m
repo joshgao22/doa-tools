@@ -12,8 +12,8 @@ E = wgs84Ellipsoid('meters');
 
 % Set position
 h = 550e3;
-lat_sat = 35; 
-lon_sat = 120;  
+lat_sat = 35;
+lon_sat = 120;
 [x, y, z] = geodetic2ecef(E, lat_sat, lon_sat, h);
 posSat = [x; y; z];
 
@@ -38,9 +38,9 @@ posUsr3 = [xu; yu; zu];
 % Compute the local doa (relative to the satellite)
 rotMat_l2g = get_rotation_mat(-posSat);
 
-doa1_local = ecef2local_doa(posUsr1, posSat, rotMat_l2g);
-doa2_local = ecef2local_doa(posUsr2, posSat, rotMat_l2g);
-doa3_local = ecef2local_doa(posUsr3, posSat, rotMat_l2g);
+doa1_local = globalToLocalDoa(posUsr1, posSat, rotMat_l2g);
+doa2_local = globalToLocalDoa(posUsr2, posSat, rotMat_l2g);
+doa3_local = globalToLocalDoa(posUsr3, posSat, rotMat_l2g);
 
 doa_local = [doa1_local, doa2_local, doa3_local];
 doa_local = doa_local + (rand(size(doa_local))-0.5)*pi/3600;

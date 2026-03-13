@@ -42,8 +42,8 @@ latlonUsr = [lat(1); lon(1)];
 rotMat1_l2g = get_rotation_mat(-posSat1);
 rotMat2_l2g = get_rotation_mat(-posSat2);
 
-doa1_local = ecef2local_doa(posUsr1, posSat1, rotMat1_l2g);
-doa2_local = ecef2local_doa(posUsr1, posSat2, rotMat2_l2g);
+doa1_local = globalToLocalDoa(posUsr1, posSat1, rotMat1_l2g);
+doa2_local = globalToLocalDoa(posUsr1, posSat2, rotMat2_l2g);
 
 % design a URA with m elements
 arrUpa = createUpa(size, elemSpace);

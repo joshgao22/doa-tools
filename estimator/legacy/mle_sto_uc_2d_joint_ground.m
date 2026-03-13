@@ -258,7 +258,7 @@ for ell = 1:L
   Q_l   = geom.Q_l2g{ell};
 
   % 2.1 Ground points -> local DOAs at array ell
-  doas_l = ecef2local_doa(pos_g, pos_l, Q_l);
+  doas_l = globalToLocalDoa(pos_g, pos_l, Q_l);
 
   % 2.2 Steering matrix for array ell
   if isa(designl, 'function_handle')
