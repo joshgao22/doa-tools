@@ -1,51 +1,52 @@
 function satAccess = checkSatAccess(usrPos, satPos, minUsrElevationDeg, maxSatOffAxisDeg)
 %CHECKSATACCESS Evaluate satellite visibility and beam availability.
-% Computes user-side elevation, satellite-side nadir off-axis angle, and 
-% availability indicators for a set of satellites with respect to one user position.
-%
+% Computes user-side elevation, satellite-side nadir off-axis angle, and
+% availability indicators for a set of satellites with respect to one or
+% more user positions.
 %Syntax:
 %  satAccess = checkSatAccess(usrPos, satPos)
 %  satAccess = checkSatAccess(usrPos, satPos, minUsrElevationDeg, maxSatOffAxisDeg)
-%
 %Inputs:
-%  usrPos             - 3x1 user position vector
-%
+%  usrPos             - 3xNu user position matrix
 %  satPos             - satellite positions, supported formats:
-%                       - 3xN numeric matrix
-%                       - 3x1xN numeric array
+%                       - 3xNs numeric matrix
+%                       - 3x1xNs numeric array
 %                       - 1xK / Kx1 cell, each cell is:
-%                           * 3xN matrix, or
-%                           * 3x1xN array
-%
+%                           * 3xNs matrix, or
+%                           * 3x1xNs array
 %  minUsrElevationDeg - (optional) minimum user elevation angle in degrees
 %                       default: 15
-%
 %  maxSatOffAxisDeg   - (optional) maximum satellite nadir off-axis angle
 %                       in degrees
 %                       default: 55
-%
 %Output:
 %  satAccess          - structure with fields:
-%                       .isAvailable       : Nsx1 logical
-%                       .isVisible         : Nsx1 logical
-%                       .isInBeam          : Nsx1 logical
-%                       .usrElevationDeg   : Nsx1 user elevation angle
-%                       .satOffAxisDeg     : Nsx1 satellite nadir off-axis angle
-%                       .slantRange        : Nsx1 slant range
+%                       .isAvailable       : NsxNu logical
+%                       .isVisible         : NsxNu logical
+%                       .isInBeam          : NsxNu logical
+%                       .usrElevationDeg   : NsxNu user elevation angle
+%                       .satOffAxisDeg     : NsxNu satellite nadir off-axis angle
+%                       .slantRange        : NsxNu slant range
 %                       .numSat            : scalar
-%
+%                       .numUser           : scalar
+%Definitions:
+%  los(:,k,u)         = satPos(:,k) - usrPos(:,u)
+%  slantRange(k,u)    = || los(:,k,u) ||
+%  usrElevationDeg    = asind(dot(losHat, usrZenithHat))
+%  satOffAxisDeg      = acosd(dot(losHat, satRadialHat))
 %Notes:
 %  - User elevation is defined by the LOS direction relative to the local
 %    zenith at the user position.
 %  - Satellite off-axis angle is measured between the satellite-to-user
 %    direction and the satellite nadir direction.
 %  - For cell input, all satellite positions are concatenated column-wise.
-%
+%  - If usrPos contains a single user, the output still keeps the user
+%    dimension in the form Nsx1.
 %See also:
 %  vecnorm, asind, acosd
 
 arguments
-  usrPos (3,1) {mustBeNumeric, mustBeReal, mustBeFinite}
+  usrPos (3,:) {mustBeNumeric, mustBeReal, mustBeFinite}
   satPos
   minUsrElevationDeg (1,1) {mustBeNumeric, mustBeReal, mustBeFinite} = 15
   maxSatOffAxisDeg (1,1) {mustBeNumeric, mustBeReal, mustBeFinite} = 55
@@ -69,37 +70,41 @@ end
 % -------------------------------------------------------------------------
 satPosMat = localParseSatPos(satPos);
 numSat = size(satPosMat, 2);
+numUser = size(usrPos, 2);
 
 % -------------------------------------------------------------------------
-% User local zenith direction
+% User local zenith directions
 % -------------------------------------------------------------------------
-usrNorm = norm(usrPos);
-if usrNorm == 0
+usrNorm = vecnorm(usrPos, 2, 1);
+if any(usrNorm == 0)
   error('checkSatAccess:InvalidUsrPos', ...
-    'usrPos must be a non-zero 3x1 vector.');
+    'Each user position must be a non-zero 3x1 vector.');
 end
-usrZenithHat = usrPos / usrNorm;
+usrZenithHat = usrPos ./ usrNorm;
 
 % -------------------------------------------------------------------------
-% Line-of-sight vectors from user to satellites
+% Line-of-sight vectors from users to satellites
 % -------------------------------------------------------------------------
-losMat = satPosMat - usrPos;                   % 3xNs
-slantRange = vecnorm(losMat, 2, 1);            % 1xNs
+satPosExp = reshape(satPosMat, 3, numSat, 1);           % 3xNsx1
+usrPosExp = reshape(usrPos, 3, 1, numUser);             % 3x1xNu
+losMat = satPosExp - usrPosExp;                         % 3xNsxNu
+slantRange = reshape(vecnorm(losMat, 2, 1), numSat, numUser);
 
-if any(slantRange == 0)
+if any(slantRange(:) == 0)
   error('checkSatAccess:CoincidentPosition', ...
-    'At least one satellite position coincides with usrPos.');
+    'At least one satellite position coincides with a user position.');
 end
 
-losHatMat = losMat ./ slantRange;              % 3xNs
+losHatMat = losMat ./ reshape(slantRange, 1, numSat, numUser);
 
 % -------------------------------------------------------------------------
 % User-side elevation angles
 %   sin(elev) = dot(losHat, usrZenithHat)
 % -------------------------------------------------------------------------
-sinUsrElevation = usrZenithHat.' * losHatMat;  % 1xNs
+usrZenithExp = reshape(usrZenithHat, 3, 1, numUser);   % 3x1xNu
+sinUsrElevation = reshape(sum(losHatMat .* usrZenithExp, 1), numSat, numUser);
 sinUsrElevation = max(-1, min(1, sinUsrElevation));
-usrElevationDeg = asind(sinUsrElevation).';    % Nsx1
+usrElevationDeg = asind(sinUsrElevation);
 
 % -------------------------------------------------------------------------
 % Satellite-side nadir off-axis angles
@@ -108,22 +113,23 @@ usrElevationDeg = asind(sinUsrElevation).';    % Nsx1
 %   cos(offAxis)  = dot(satToUsrHat, satNadirHat)
 %                 = dot(losHat, satPosHat)
 % -------------------------------------------------------------------------
-satNorm = vecnorm(satPosMat, 2, 1);            % 1xNs
+satNorm = vecnorm(satPosMat, 2, 1);
 if any(satNorm == 0)
   error('checkSatAccess:InvalidSatPos', ...
     'Satellite positions must be non-zero vectors.');
 end
 
-satRadialHatMat = satPosMat ./ satNorm;        % 3xNs
-cosSatOffAxis = sum(losHatMat .* satRadialHatMat, 1);
+satRadialHatMat = satPosMat ./ satNorm;
+satRadialExp = reshape(satRadialHatMat, 3, numSat, 1); % 3xNsx1
+cosSatOffAxis = reshape(sum(losHatMat .* satRadialExp, 1), numSat, numUser);
 cosSatOffAxis = max(-1, min(1, cosSatOffAxis));
-satOffAxisDeg = acosd(cosSatOffAxis).';        % Nsx1
+satOffAxisDeg = acosd(cosSatOffAxis);
 
 % -------------------------------------------------------------------------
 % Visibility and beam constraints
 % -------------------------------------------------------------------------
-isVisible   = usrElevationDeg >= minUsrElevationDeg;
-isInBeam    = satOffAxisDeg <= maxSatOffAxisDeg;
+isVisible = usrElevationDeg >= minUsrElevationDeg;
+isInBeam = satOffAxisDeg <= maxSatOffAxisDeg;
 isAvailable = isVisible & isInBeam;
 
 % -------------------------------------------------------------------------
@@ -135,8 +141,9 @@ satAccess = struct( ...
   'isInBeam',         isInBeam, ...
   'usrElevationDeg',  usrElevationDeg, ...
   'satOffAxisDeg',    satOffAxisDeg, ...
-  'slantRange',       slantRange.', ...
-  'numSat',           numSat);
+  'slantRange',       slantRange, ...
+  'numSat',           numSat, ...
+  'numUser',          numUser);
 end
 
 function satPosMat = localParseSatPos(satPos)
