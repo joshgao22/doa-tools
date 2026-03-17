@@ -61,9 +61,9 @@ sp_mle_sto_opt_2d_old = mle_sto_uc_2d(R, numSource, design_upa, wavelen);
 
 arrayUpa = createUpa([4, 4], d);
 [~, R, ~] = snapGenStochastic(arrayUpa, doa_local, wavelen, numSnap, pwrNoise, pwrSource);
-doagrid = genDoaGrid("latlon", 2, [100 100], [lat_sat-30, lat_sat+30; lon_sat-30, lon_sat+30], posSat, E);
+doagrid = genDoaGrid("latlon", 2, [100 100], [lat_sat-30, lat_sat+30; lon_sat-30, lon_sat+30], "ecef", [], posSat, [], E);
 sp_music_2d_new = estimatorMusic(arrayUpa, wavelen, R, numSource, doagrid, true);
 sp_mvdr_2d_new = estimatorMvdr(arrayUpa, wavelen, R, numSource, doagrid, true);
-sp_mle_sto_grid_2d_new = estimatorMleStoConGrid(arrayUpa, wavelen, R, numSource, doagrid, true);
+sp_mle_sto_grid_2d_new = estimatorMleStoConGrid(arrayUpa, wavelen, R, numSource, doagrid, false);
 sp_mle_sto_opt_2d_new = estimatorMleStoConOpt(arrayUpa, wavelen, R, numSource, doagrid);
 

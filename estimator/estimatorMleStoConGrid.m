@@ -86,7 +86,7 @@ arguments (Input)
   doaGrid (1,:) {mustBeA(doaGrid, ["struct","cell"])}
   refineEstimates (1,1) logical = false
   maxIterations (1,1) {mustBePositive, mustBeInteger} = 10
-  subgridSize (1,1) {mustBePositive, mustBeInteger} = 10
+  subgridSize (1,:) {mustBePositive, mustBeInteger} = 10
 end
 
 %% Normalize inputs to cell containers
@@ -141,20 +141,35 @@ if isfield(doaResult, 'isResolved') && doaResult.isResolved && refineEstimates
   doaResult.latlonEst = latlonEst;
 end
 
+%% Normalize final angle estimates for latlon grid
+% In multi-array joint ground estimation, each array has its own local DOA
+% realization for the same latitude-longitude hypothesis. Rebuild per-array
+% angle estimates from doaResult.latlonEst so that downstream closed-form
+% power/noise estimation uses the correct steering matrix on each array.
+if isfield(doaResult, 'isResolved') && doaResult.isResolved && ...
+    isfield(doaResult, 'latlonEst') && ~isempty(doaResult.latlonEst)
+  doaResult.angleEst = localBuildAngleEst(doaGrid, doaResult.latlonEst);
+end
+
 %% Closed-form estimates of signal powers and noise variance at final DOAs
 % Per-array estimates are computed given the final K=numSource angle estimates.
 signalPower = [];
 noiseVar    = [];
 
 if isfield(doaResult,'isResolved') && doaResult.isResolved
-  estAngles = doaResult.angleEst;
+  finalAngleEst = doaResult.angleEst;
 
   noiseVar     = zeros(numArray, 1);
   signalPower  = zeros(numSource*numArray, 1);
 
   for ii = 1:numArray
     R = sampleCovMat{ii};
-    steeringMat = steeringMatrix(array{ii}, wavelength, estAngles); % MxK
+    if iscell(finalAngleEst)
+      steeringDoa = finalAngleEst{ii};
+    else
+      steeringDoa = finalAngleEst;
+    end
+    steeringMat = steeringMatrix(array{ii}, wavelength, steeringDoa); % MxK
     M = size(R, 1);
 
     if M <= numSource
@@ -287,3 +302,91 @@ for gg = 1:numGrid
 end
 
 end
+
+function angleEst = localBuildAngleEst(doaGrid, latlonEst)
+%LOCALBUILDANGLEEST Build final local DOA estimates from latitude-longitude.
+% Recomputes local DOAs for each array/grid from the final latitude-
+% longitude estimates. For single-array mode, a 2-by-K matrix is returned.
+% For multi-array mode, a 1-by-N cell array is returned.
+
+arguments
+  doaGrid (1,:) cell
+  latlonEst (2,:) {mustBeNumeric}
+end
+
+numGridCell = numel(doaGrid);
+lat = latlonEst(1, :).';
+lon = latlonEst(2, :).';
+
+if numGridCell == 1
+  angleEst = localLatlonToAngle(doaGrid{1}, lat, lon);
+else
+  angleEst = cell(1, numGridCell);
+  for iGrid = 1:numGridCell
+    angleEst{iGrid} = localLatlonToAngle(doaGrid{iGrid}, lat, lon);
+  end
+end
+
+end
+
+
+function doa = localLatlonToAngle(doaGrid, lat, lon)
+%LOCALLATLONTOANGLE Map latitude-longitude hypotheses to local DOAs.
+% Supports both ECEF and ECI global frames according to doaGrid.globalFrame.
+
+arguments
+  doaGrid (1,1) struct
+  lat (:,1) {mustBeNumeric}
+  lon (:,1) {mustBeNumeric}
+end
+
+lat = lat(:);
+lon = lon(:);
+
+globalFrame = "ecef";
+if isfield(doaGrid, 'globalFrame') && ~isempty(doaGrid.globalFrame)
+  globalFrame = lower(string(doaGrid.globalFrame));
+end
+
+spheroid = wgs84Ellipsoid("meter");
+if isfield(doaGrid, 'spheroid') && ~isempty(doaGrid.spheroid)
+  spheroid = doaGrid.spheroid;
+end
+
+switch globalFrame
+  case "ecef"
+    [x, y, z] = geodetic2ecef(spheroid, lat, lon, zeros(size(lat)));
+    posGlob = [x.'; y.'; z.'];
+    doa = ecefToAngleGrid(posGlob, doaGrid.arrayCenter);
+
+  case "eci"
+    utcMat = localExpandUtc(doaGrid.utc, numel(lat));
+    posGlob = lla2eci([lat, lon, zeros(size(lat))], utcMat).';
+    doa = globalToLocalDoa(posGlob, doaGrid.arrayCenter, doaGrid.rotMat);
+
+  otherwise
+    error('estimatorMleStoConGrid:InvalidGlobalFrame', ...
+      'Unsupported globalFrame: %s.', char(globalFrame));
+end
+
+end
+
+
+function utcMat = localExpandUtc(utc, numPoint)
+%LOCALEXPUTC Expand UTC input to an N-by-6 numeric date matrix.
+
+if isa(utc, 'datetime')
+  utc = datevec(utc);
+end
+
+if isnumeric(utc) && isequal(size(utc), [1, 6])
+  utcMat = repmat(utc, numPoint, 1);
+elseif isnumeric(utc) && size(utc, 2) == 6 && size(utc, 1) == numPoint
+  utcMat = utc;
+else
+  error('estimatorMleStoConGrid:InvalidUtc', ...
+    'utc must be a datetime scalar, 1x6 date vector, or N-by-6 date matrix.');
+end
+
+end
+

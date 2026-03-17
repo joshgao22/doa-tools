@@ -65,8 +65,8 @@ mseMleJoint = zeros(numParam, 1);
 
 progressbar('reset', numParam);
 
-doaGrid1 = genDoaGrid("latlon", 2, [50 50], [min(lat)-5, max(lat)+5; min(lon)-5, max(lon)+5], posSat1, E);
-doaGrid2 = genDoaGrid("latlon", 2, [50 50], [min(lat)-5, max(lat)+5; min(lon)-5, max(lon)+5], posSat2, E);
+doaGrid1 = genDoaGrid("latlon", 2, [50 50], [min(lat)-5, max(lat)+5; min(lon)-5, max(lon)+5], "ecef", [], posSat1, [], E);
+doaGrid2 = genDoaGrid("latlon", 2, [50 50], [min(lat)-5, max(lat)+5; min(lon)-5, max(lon)+5], "ecef", [], posSat1, [], E);
 
 for ii = 1:numParam %[output:group:60487aa6]
   pwrNoise = pwrSource / (10^(snr_db(ii) / 10));

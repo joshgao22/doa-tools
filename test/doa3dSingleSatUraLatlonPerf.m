@@ -42,9 +42,9 @@ posSat = [x; y; z];
 %%
 %[text] ## Array Formulation
 % design a UPA
-arrUra = createUpa(size, elemSpace); 
+arrUra = createUpa(size, elemSpace);
 
-% Compute the global unit direction vector from user to satellite (relative to the origin) 
+% Compute the global unit direction vector from user to satellite (relative to the origin)
 u = (posSat - posUsr) / norm(posSat - posUsr);
 
 % Compute the local doa (relative to the satellite)
@@ -63,7 +63,7 @@ mse_mle = zeros(numParam, 1);
 
 progressbar('reset', numParam);
 
-doaGrid = genDoaGrid("latlon", 2, [50 50], [lat_sat-25, lat_sat+25; lon_sat-25, lon_sat+25], posSat, E);
+doaGrid = genDoaGrid("latlon", 2, [50 50], [lat_sat-25, lat_sat+25; lon_sat-25, lon_sat+25], "ecef", [], posSat, [], E);
 
 for ii = 1:numParam %[output:group:62710ef8]
   pwrNoise = pwrSource / (10^(snr_db(ii) / 10));

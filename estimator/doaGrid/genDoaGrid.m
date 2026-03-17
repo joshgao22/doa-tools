@@ -1,126 +1,222 @@
-function doaGrid = genDoaGrid(type, dimension, resolution, range, arrayCenter, spheroid)
-%GENDOAGRID Generate a DOA grid structure for local or ground-based directions.
+function doaGrid = genDoaGrid( ...
+  type, dimension, resolution, range, globalFrame, utc, arrayCenter, rotMat, spheroid)
+%GENDOAGRID Generate a DOA grid structure for local or ground-based search.
 % Creates a direction-of-arrival (DOA) grid represented as a structure,
-% supporting both array-centric (local angular) grids and geodetic
-% (ground/ECEF) grids for satellite and remote-sensing applications.
+% supporting both array-centric angular grids and latitude-longitude grids
+% under either the ECEF or ECI global frame.
 %
 %Syntax:
-%   doaGrid = genDoaGrid('angle', dimension, resolution)
-%   doaGrid = genDoaGrid('angle', dimension, resolution, range)
-%   doaGrid = genDoaGrid('latlon', 2, resolution, range, arrayCenter)
-%   doaGrid = genDoaGrid('latlon', 2, resolution, range, arrayCenter, spheroid)
+%  doaGrid = genDoaGrid('angle', dimension, resolution)
+%  doaGrid = genDoaGrid('angle', dimension, resolution, range)
+%  doaGrid = genDoaGrid('latlon', 2, resolution, range, ...
+%    'ecef', [], arrayCenter, [], spheroid)
+%  doaGrid = genDoaGrid('latlon', 2, resolution, range, ...
+%    'eci', utc, arrayCenter, rotMat, spheroid)
 %
 %Inputs:
-%   type        - Grid type: 'angle' or 'latlon'
+%  type         - Grid type
 %                 'angle'  : array-centric angular grid
-%                 'latlon' : latitude/longitude grid mapped to ECEF
+%                 'latlon' : latitude/longitude grid
 %
-%   dimension   - Grid dimensionality
-%                 1: 1D grid (theta, local mode only)
-%                 2: 2D grid (azimuth-elevation for local,
-%                              latitude-longitude for ground)
+%  dimension    - Grid dimensionality
+%                 1: 1D angular grid
+%                 2: 2D angular or lat/lon grid
 %
-%   resolution  - Grid resolution
-%                 Scalar: number of points per dimension
+%  resolution   - Grid resolution
+%                 scalar          : same number of points per dimension
 %                 2-element vector: [N1, N2] for 2D grid
 %
-%   range       - Grid domain
-%                 local, 1D: [theta_min, theta_max] (radians)
-%                 local, 2D: [az_min az_max; el_min el_max] (radians)
-%                 ground   : [lat_min lat_max; lon_min lon_max] (degrees)
+%  range        - Grid domain
+%                 angle, 1D : [thetaMin, thetaMax] (rad)
+%                 angle, 2D : [azMin azMax; elMin elMax] (rad)
+%                 latlon    : [latMin latMax; lonMin lonMax] (deg)
 %
-%   arrayCenter - (Required for 'latlon')
-%                 3×1 ECEF coordinates of array/satellite (meters)
+%  globalFrame  - Global frame for 'latlon' mode
+%                 'ecef' : map lat/lon grid to ECEF, then to local DOA
+%                 'eci'  : map lat/lon grid to ECI at utc, then to local DOA
+%                 For 'angle' mode, this input is ignored and can be [].
 %
-%   spheroid    - (Optional, ground only)
-%                 Reference spheroid for geodetic2ecef conversion
+%  utc          - UTC time for 'latlon' + 'eci' mode
+%                 Supported forms:
+%                 - datetime scalar
+%                 - 1x6 numeric date vector [Y M D h m s]
+%                 Otherwise use [].
+%
+%  arrayCenter  - Reference array position
+%                 'latlon' + 'ecef' : 3x1 ECEF array center
+%                 'latlon' + 'eci'  : 3x1 ECI  array center
+%
+%  rotMat       - Local-to-global rotation matrix for 'latlon' + 'eci'
+%                 3x3 matrix, mapping local coordinates to ECI
+%
+%  spheroid     - Reference spheroid for geodetic conversion
 %                 Default: wgs84Ellipsoid("meter")
 %
 %Output:
-%   doaGrid - Structure with fields:
-%     - type        : 'angle' or 'latlon'
-%     - dimension   : 1 or 2
-%     - resolution  : grid resolution
-%     - range       : angular or lat/lon domain
-%     - angleGrid   : angle grid
-%                     local  : angles in radians
-%                     ground : [az; el] (radians) from arrayCenter
-%     - latlonGrid  : 2×N [latitude; longitude] (degrees), ground only
-%     - ecefGrid    : 3×N [x; y; z] (meters, ECEF), ground only
-%     - arrayCenter : ECEF reference position (ground only)
-%     - spheroid    : reference spheroid object (ground only)
+%  doaGrid      - Structure with fields:
+%                 .type
+%                 .dimension
+%                 .resolution
+%                 .range
+%                 .globalFrame
+%                 .angleGrid
+%                 .latlonGrid
+%                 .ecefGrid
+%                 .eciGrid
+%                 .utc
+%                 .arrayCenter
+%                 .rotMat
+%                 .spheroid
 %
 %Notes:
-%   - For "angle" mode, only angular grids are generated.
-%   - For "latlon" mode, a latitude-longitude grid is constructed and
-%     mapped to ECEF; angleGrid gives the local azimuth/elevation from the
-%     array center to each grid point.
-%   - All grid points are stored column-wise.
-%
-%Example:
-%   g1 = genDoaGrid("angle", 1, 180);
-%   g2 = genDoaGrid("angle", 2, [90 45], [0 2*pi; 0 pi/4]);
-%   g3 = genDoaGrid("latlon", 2, [100 200], [-60 60; 0 180], [7e6;0;0]);
+%  - For 'angle' mode, only angleGrid is generated.
+%  - For 'latlon' + 'ecef', angleGrid is computed by ecefToAngleGrid.
+%  - For 'latlon' + 'eci', angleGrid is computed by globalToLocalDoa after
+%    converting each lat/lon grid point to ECI at the given utc.
+%  - All grid points are stored column-wise.
 %
 %See also:
-%   genAngleGrid, genGroundGrid, ground2angleGrid,
-%   geodetic2ecef, wgs84Ellipsoid
+%  genAngleGrid, genEcefGrid, ecefToAngleGrid, globalToLocalDoa, lla2eci
 
 arguments
-  type char {mustBeMember(type, ["angle", "latlon"])}
+  type {mustBeMember(type, ["angle", "latlon"])}
   dimension (1,1) {mustBeMember(dimension, [1, 2])}
   resolution (1,:) {mustBePositive, mustBeNumeric}
   range {mustBeNumeric} = []
-  arrayCenter (3,:) {mustBeNumeric} = []
-  spheroid (1,1) {mustBeA(spheroid, ["referenceEllipsoid", "oblateSpheroid", ...
-    "referenceSphere"])} = wgs84Ellipsoid("meter")
+  globalFrame {mustBeMember(globalFrame, ["ecef", "eci"])} = []
+  utc (:,6) {mustBeNumeric} = []
+  arrayCenter (3,1) {mustBeNumeric} = zeros(3,1)
+  rotMat {mustBeNumeric} = []
+  spheroid (1,1) {mustBeA(spheroid, ["referenceEllipsoid", ...
+    "oblateSpheroid", "referenceSphere"])} = wgs84Ellipsoid("meter")
 end
 
 % -------------------------------------------------------------------------
 % Initialize output structure
 % -------------------------------------------------------------------------
 doaGrid = struct();
-doaGrid.type       = type;
-doaGrid.dimension  = dimension;
-doaGrid.resolution = resolution;
+doaGrid.type        = char(string(type));
+doaGrid.dimension   = dimension;
+doaGrid.resolution  = resolution;
+doaGrid.range       = range;
+doaGrid.globalFrame = [];
+doaGrid.angleGrid   = [];
+doaGrid.latlonGrid  = [];
+doaGrid.ecefGrid    = [];
+doaGrid.eciGrid     = [];
+doaGrid.utc         = [];
+doaGrid.arrayCenter = [];
+doaGrid.rotMat      = [];
+doaGrid.spheroid    = [];
 
-switch type
-  case 'angle'
-    % Local (array-centric) angular grid
-
+switch lower(string(type))
+  case "angle"
+    % ---------------------------------------------------------------------
+    % Local angular grid
+    % ---------------------------------------------------------------------
     [doaGrid.angleGrid, doaGrid.range] = genAngleGrid(dimension, ...
-        resolution, range);
-    doaGrid.latlonGrid  = [];
-    doaGrid.ecefGrid    = [];
-    doaGrid.arrayCenter = [];
-    doaGrid.spheroid    = [];
+      resolution, range);
 
-  case 'latlon'
-    % Ground-based grid (latitude/longitude mapped to ECEF)
-
-    % ---- Input validation ----
-    if isempty(arrayCenter)
-      error("genDoaGrid:MissingECEF", ...
-        "Ground grid requires arrayCenter (ECEF position).");
+  case "latlon"
+    % ---------------------------------------------------------------------
+    % Latitude / longitude grid
+    % ---------------------------------------------------------------------
+    if dimension ~= 2
+      error('genDoaGrid:InvalidDimension', ...
+        '''latlon'' grid only supports dimension = 2.');
     end
 
-    if ~isequal(size(range), [2 2])
-      error("genDoaGrid:InvalidRange", ...
-        "Ground grid requires range: [lat_min lat_max; lon_min lon_max].");
+    if ~isequal(size(range), [2, 2])
+      error('genDoaGrid:InvalidRange', ...
+        ['''latlon'' grid requires range = ', ...
+         '[latMin latMax; lonMin lonMax].']);
     end
 
-    doaGrid.range       = range;
+    if isempty(globalFrame)
+      error('genDoaGrid:MissingGlobalFrame', ...
+        ['''latlon'' grid requires globalFrame = ', ...
+         '''ecef'' or ''eci''.']);
+    end
+
+    globalFrame = lower(string(globalFrame));
+
+    doaGrid.globalFrame = char(globalFrame);
     doaGrid.arrayCenter = arrayCenter;
     doaGrid.spheroid    = spheroid;
 
-    % ---- Grid generation ----
-    % Each column corresponds to one ground point
-    [doaGrid.latlonGrid, doaGrid.ecefGrid] = ...
-      genEcefGrid(resolution, range, spheroid);
+    % ---------------------------------------------------------------------
+    % Generate latitude / longitude grid and ECEF positions
+    % ---------------------------------------------------------------------
+    [doaGrid.latlonGrid, doaGrid.ecefGrid] = genEcefGrid( ...
+      resolution, range, spheroid);
 
-    % ---- Angle mapping ----
-    % Convert ECEF grid to local azimuth/elevation w.r.t. arrayCenter
-    doaGrid.angleGrid = ...
-      ecefToAngleGrid(doaGrid.ecefGrid, arrayCenter);
+    switch globalFrame
+      case "ecef"
+        % ---------------------------------------------------------------
+        % ECEF mode
+        % ---------------------------------------------------------------
+        if all(arrayCenter == 0)
+          error('genDoaGrid:MissingArrayCenter', ...
+            ['''latlon'' + ''ecef'' grid requires non-empty ', ...
+             'arrayCenter in ECEF.']);
+        end
+
+        doaGrid.angleGrid = ecefToAngleGrid(doaGrid.ecefGrid, arrayCenter);
+
+      case "eci"
+        % ---------------------------------------------------------------
+        % ECI mode
+        % ---------------------------------------------------------------
+        if isempty(utc)
+          error('genDoaGrid:MissingUtc', ...
+            '''latlon'' + ''eci'' grid requires utc.');
+        end
+
+        if all(arrayCenter == 0)
+          error('genDoaGrid:MissingArrayCenter', ...
+            ['''latlon'' + ''eci'' grid requires non-empty ', ...
+             'arrayCenter in ECI.']);
+        end
+
+        if isempty(rotMat) || ~isequal(size(rotMat), [3, 3])
+          error('genDoaGrid:InvalidRotMat', ...
+            ['''latlon'' + ''eci'' grid requires rotMat to be a ', ...
+             'non-empty 3x3 matrix.']);
+        end
+
+        doaGrid.utc    = utc;
+        doaGrid.rotMat = rotMat;
+        doaGrid.eciGrid = localLatlonToEciGrid(doaGrid.latlonGrid, utc);
+
+        doaGrid.angleGrid = globalToLocalDoa( ...
+          doaGrid.eciGrid, arrayCenter, rotMat);
+    end
 end
+
+end
+
+% =========================================================================
+% Local functions
+% =========================================================================
+function eciGrid = localLatlonToEciGrid(latlonGrid, utc)
+%LOCALLATLONTOECIGRID Convert [lat; lon] grid to ECI positions at utc.
+
+numGrid = size(latlonGrid, 2);
+eciGrid = zeros(3, numGrid);
+
+if isa(utc, 'datetime')
+  utc = datevec(utc);
+end
+if isnumeric(utc) && isequal(size(utc), [1, 6])
+  utcMat = repmat(utc, numGrid, 1);
+elseif isnumeric(utc) && size(utc, 2) == 6 && size(utc, 1) == numGrid
+  utcMat = utc;
+else
+  error('genDoaGrid:InvalidUtcFormat', ...
+    'utc must be a datetime scalar, 1x6 date vector, or N-by-6 date matrix.');
+end
+
+llaTmp = [latlonGrid.', zeros(numGrid, 1)];
+eciGrid = lla2eci(llaTmp, utcMat).';
+
 end

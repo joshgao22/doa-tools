@@ -23,8 +23,8 @@ function [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, ...
 %   - If initParam is empty, an MVDR-based initializer is attempted.
 %   - For grid type 'angle', Theta is parameterized directly in radians.
 %   - For grid type 'latlon', optimization variables are (lat, lon) in degrees,
-%     which are mapped to local (az, el) angles (radians) per array when forming
-%     steering matrices.
+%     which are mapped to local (az, el) angles per array according to the
+%     global frame stored in doaGrid.globalFrame.
 %
 %% Syntax
 %   [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, wavelen, ...
@@ -50,7 +50,9 @@ function [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, ...
 %                  * DOA dimension via .dimension in {1,2}
 %                  * box bounds via .range
 %                  Additional fields required for 'latlon':
-%                    .spheroid, .arrayCenter
+%                    .globalFrame, .arrayCenter, .spheroid
+%                  Additional fields required for 'latlon' + 'eci':
+%                    .utc, .rotMat
 %   initParam    - (Optional) Initial optimization vector. If empty, an
 %                  initializer is constructed internally.
 %                  Layout: [doaParam(:); p; noiseVar], where doaParam depends
@@ -65,10 +67,9 @@ function [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, ...
 %                  .peakIndices : [] (not applicable)
 %                  .angleEst    : dim-by-K DOA estimates in radians (for 'angle';
 %                                for 'latlon' only set when numArray==1)
-%                  .latlonEst   : 2-by-K (lat;lon) in degrees when grid type is 'latlon'
+%                  .latlonEst   : 2-by-K (lat; lon) in degrees when grid type is 'latlon'
 %                  .isResolved  : true if optimization exitflag indicates success
-%                  .isDiscrete  : flag indicating discrete vs continuous output
-%                                (see Notes regarding current implementation)
+%                  .isDiscrete  : false for continuous optimization
 %   signalPower  - Estimated source powers stacked across arrays.
 %                  Size: (K*numArray)-by-1, with K entries per array in array order.
 %   noiseVar     - Estimated noise variance per array.
@@ -81,19 +82,19 @@ function [doaResult, signalPower, noiseVar] = estimatorMleStoConOpt(array, ...
 %       * doaGrid.type == 'angle'  : doaParam(:) stores angles in radians.
 %         For dim=2, stacking is [az1; el1; az2; el2; ...] (column-major).
 %       * doaGrid.type == 'latlon' : doaParam(:) stores [lat1; lon1; lat2; lon2; ...]
-%         in degrees; each array maps (lat,lon) to local (az,el) radians using
-%         geodetic2ecef + ecefToAngleGrid relative to doaGrid{ii}.arrayCenter.
+%         in degrees. Each array maps (lat, lon) to local (az, el) according to
+%         doaGrid.globalFrame:
+%           - 'ecef': geodetic2ecef + ecefToAngleGrid
+%           - 'eci' : lla2eci + globalToLocalDoa
 %   - Bounds: only box constraints are used (see setDoaBounds). Power and noise
 %     variables are constrained by [0, +inf).
-%   - Output consistency: for grid type 'latlon' and numArray>1, angleEst is left
-%     empty because local (az,el) depends on arrayCenter; latlonEst is the shared
+%   - Output consistency: for grid type 'latlon' and numArray > 1, angleEst is left
+%     empty because local (az, el) depends on arrayCenter; latlonEst is the shared
 %     global estimate.
-%   - Implementation note: doaResult.isDiscrete is currently set to true in code,
-%     but this solver produces continuous-domain estimates. Consider setting it
-%     to false for semantic consistency (not changed here).
 %
 %% See also
-%   fmincon, steeringMatrix, estimatorMvdr, setDoaBounds, nllStoUc, ecefToAngleGrid
+%   fmincon, steeringMatrix, estimatorMvdr, setDoaBounds, nllStoUc, ...
+%   ecefToAngleGrid, globalToLocalDoa
 
 arguments (Input)
   array (1,:) {mustBeA(array, ["struct", "cell"])}
@@ -131,19 +132,20 @@ end
 if isempty(initParam)
   initParam = zeros(numOptVars, 1);
 
-  % -------------------------------------------------------------------------
+  % -----------------------------------------------------------------------
   % Initial guess from MVDR (dim x K, radians)
-  % -------------------------------------------------------------------------
+  % -----------------------------------------------------------------------
   mvdrResult = estimatorMvdr(array, wavelen, sampleCovMat, numSource, doaGrid);
 
-  % choose init DOA parameterization based on gridType
+  % Choose init DOA parameterization based on gridType.
   switch baseGrid.type
     case 'angle'
       if mvdrResult.isResolved
         initParam(1:numDoaVars) = mvdrResult.angleEst(:); % radians, dim x K
       else
-        warning('estimatorMleStoConOpt: Failed to obtain a good initial guess.');
-        % we just assume the doas is uniformly placed
+        warning('estimatorMleStoConOpt:FailedInit', ...
+          'Failed to obtain a good initial guess.');
+        % We just assume the DOAs are uniformly placed.
         switch dim
           case 1
             initParam(1:numDoaVars) = ...
@@ -164,23 +166,20 @@ if isempty(initParam)
 
     case 'latlon'
       if mvdrResult.isResolved
-        initParam(1:dim*numSource) = mvdrResult.latlonEst(:); % degrees, 2 x K  (lat; lon)
+        initParam(1:numDoaVars) = mvdrResult.latlonEst(:); % degrees, 2 x K  (lat; lon)
       else
-        warning('estimatorMleStoConOpt: Failed to obtain a good initial guess.');
+        warning('estimatorMleStoConOpt:FailedInit', ...
+          'Failed to obtain a good initial guess.');
         initParam(1:2:numDoaVars-1) = ...
           linspace(baseGrid.range(1,1), baseGrid.range(1,2), numSource);
         initParam(2:2:numDoaVars) = ...
           linspace(baseGrid.range(2,1), baseGrid.range(2,2), numSource);
       end
 
+      lat0 = initParam(1:2:numDoaVars-1);
+      lon0 = initParam(2:2:numDoaVars);
       for ii = 1:numArray
-        % altitude fixed at 0
-        [x,y,z] = geodetic2ecef(doaGrid{ii}.spheroid, initParam(1:2:numDoaVars-1), ...
-          initParam(2:2:numDoaVars), zeros(numSource, 1));
-        ecef = [x'; y'; z'];  % 3xK
-
-        % local angles in radians, columns are [az; el]
-        Theta0 = ecefToAngleGrid(ecef, doaGrid{ii}.arrayCenter); % 2xK
+        Theta0 = localLatlonToAngle(doaGrid{ii}, lat0, lon0);
         A = steeringMatrix(array{ii}, wavelen, Theta0);
         B = [khatri_rao(conj(A), A), reshape(eye(size(A, 1)), [], 1)];
         z = real(B \ sampleCovMat{ii}(:));
@@ -229,20 +228,20 @@ estDoaParam = reshape(optVar(1:numDoaVars), dim, numSource);  % angle(rad) or la
 signalPower = optVar(numDoaVars + (1:numSource*numArray));
 noiseVar    = optVar(end-numArray+1:end);
 
-% Convert to angles for output consistency
+% Convert to angles for output consistency.
 switch baseGrid.type
   case 'angle'
     estAngle = estDoaParam; % radians
     estLatlon = [];
+
   case 'latlon'
     estLatlon = estDoaParam; % degrees
     if numArray == 1
-      [x,y,z] = geodetic2ecef(baseGrid.spheroid, estLatlon(1,:), estLatlon(2,:), zeros(1,numSource));
-      estEcef = [x;y;z];
-      estAngle = ecefToAngleGrid(estEcef, baseGrid.arrayCenter); % radians (az;el)
+      estAngle = localLatlonToAngle(baseGrid, estLatlon(1,:), estLatlon(2,:));
       [~, sortIdx] = sort(estAngle(1,:));
-      estAngle     = estAngle(:, sortIdx);
-      signalPower  = signalPower(sortIdx);
+      estLatlon   = estLatlon(:, sortIdx);
+      estAngle    = estAngle(:, sortIdx);
+      signalPower = signalPower(sortIdx);
     else
       estAngle = [];
     end
@@ -265,7 +264,12 @@ doaResult.spectrum = [];
 doaResult.peakIndices = [];
 doaResult.angleEst = estAngle;
 doaResult.latlonEst = estLatlon;
-doaResult.isResolved = exitflag > 0 && all(isfinite(estAngle(:)));
+if isempty(estAngle)
+  isAngleValid = true;
+else
+  isAngleValid = all(isfinite(estAngle(:)));
+end
+doaResult.isResolved = exitflag > 0 && isAngleValid;
 doaResult.isDiscrete = true;
 
 end
@@ -349,15 +353,15 @@ function obj = nllStoUc(array, wavelength, sampleCovMat, doaGrid, dim, numSource
 %       doaParam(:) is interpreted directly as local DOA parameters (radians).
 %   - doaGrid{1}.type == 'latlon':
 %       doaParam(:) stores [lat1; lon1; lat2; lon2; ...] (degrees). The shared
-%       global (lat,lon) is mapped to local angles (az,el) radians for each array
-%       using geodetic2ecef() + ecefToAngleGrid() w.r.t. doaGrid{ii}.arrayCenter.
+%       global (lat, lon) is mapped to local angles (az, el) for each array by
+%       localLatlonToAngle(), which supports both ECEF and ECI metadata.
 %
 % Numerical evaluation:
 %   - Cholesky factorization is used for stable logdet and linear solves.
 %   - If any S_i is not positive definite, obj returns +Inf.
 %
 %% See also
-%   steeringMatrix, geodetic2ecef, ecefToAngleGrid, setDoaBounds
+%   steeringMatrix, localLatlonToAngle, setDoaBounds
 
 arguments
   array {mustBeA(array, "cell")}
@@ -383,19 +387,15 @@ switch gridType
   case 'latlon'
     % doaParam(:) = [lat1; lon1; lat2; lon2; ...] (deg)
     latlonVec = optVar(1:numDoaVars);
-    lat = latlonVec(1:2:end).';
-    lon = latlonVec(2:2:end).';
-
-    % altitude fixed at 0
-    [x,y,z] = geodetic2ecef(baseGrid.spheroid, lat, lon, zeros(size(lat)));
-    ecef = [x; y; z];  % 3xK
+    lat = latlonVec(1:2:end);
+    lon = latlonVec(2:2:end);
 
     doaVec = cell(size(array));
     for ii = 1:numArray
-      doaVec{ii} = zeros(numDoaVars,1);
-      doa = ecefToAngleGrid(ecef, doaGrid{ii}.arrayCenter);
-      doaVec{ii}(1:2:end) = doa(1,:).';
-      doaVec{ii}(2:2:end) = doa(2,:).';
+      doa = localLatlonToAngle(doaGrid{ii}, lat, lon);
+      doaVec{ii} = zeros(numDoaVars, 1);
+      doaVec{ii}(1:2:end) = doa(1, :).';
+      doaVec{ii}(2:2:end) = doa(2, :).';
     end
 
   otherwise
@@ -409,7 +409,7 @@ noiseVar    = optVar(end-numArray+1:end);
 % ---- covariance model ----
 obj = 0;
 for ii = 1:numArray
-  Theta = reshape(doaVec{ii}, dim, numSource);                 % dim x K, radians
+  Theta = reshape(doaVec{ii}, dim, numSource);          % dim x K, radians
   A     = steeringMatrix(array{ii}, wavelength, Theta); % M x K
   M     = size(A, 1);
 
@@ -427,5 +427,62 @@ for ii = 1:numArray
   logdetS = 2 * sum(log(diag(L)));
   SinvR   = L' \ (L \ sampleCovMat{ii});
   obj     = obj + logdetS + real(trace(SinvR));
+end
+end
+
+
+function doa = localLatlonToAngle(doaGrid, lat, lon)
+%LOCALLATLONTOANGLE Map lat/lon hypotheses to local DOAs.
+% Converts latitude-longitude hypotheses to local azimuth-elevation angles
+% according to doaGrid.globalFrame.
+
+arguments
+  doaGrid (1,1) struct
+  lat (:,1) {mustBeNumeric}
+  lon (:,1) {mustBeNumeric}
+end
+
+lat = lat(:);
+lon = lon(:);
+
+if ~isfield(doaGrid, 'globalFrame') || isempty(doaGrid.globalFrame)
+  globalFrame = "ecef";
+else
+  globalFrame = lower(string(doaGrid.globalFrame));
+end
+
+switch globalFrame
+  case "ecef"
+    [x, y, z] = geodetic2ecef(doaGrid.spheroid, lat, lon, zeros(size(lat)));
+    posGlob = [x.'; y.'; z.'];
+    doa = ecefToAngleGrid(posGlob, doaGrid.arrayCenter);
+
+  case "eci"
+    utcMat = localExpandUtc(doaGrid.utc, numel(lat));
+    numPoint = numel(lat);
+    posGlob = lla2eci([lat, lon, zeros(numPoint, 1)], utcMat).';
+    doa = globalToLocalDoa(posGlob, doaGrid.arrayCenter, doaGrid.rotMat);
+
+  otherwise
+    error('localLatlonToAngle:InvalidGlobalFrame', ...
+      'Unsupported globalFrame: %s.', char(globalFrame));
+end
+end
+
+
+function utcMat = localExpandUtc(utc, numPoint)
+%LOCALEXPUTC Expand utc to N-by-6 numeric date matrix.
+
+if isa(utc, 'datetime')
+  utc = datevec(utc);
+end
+
+if isnumeric(utc) && isequal(size(utc), [1, 6])
+  utcMat = repmat(utc, numPoint, 1);
+elseif isnumeric(utc) && size(utc, 2) == 6 && size(utc, 1) == numPoint
+  utcMat = utc;
+else
+  error('localExpandUtc:InvalidUtc', ...
+    'utc must be a datetime scalar, 1x6 date vector, or N-by-6 date matrix.');
 end
 end
