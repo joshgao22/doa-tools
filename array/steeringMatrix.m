@@ -22,7 +22,9 @@ function [A, dA] = steeringMatrix(array, wavelength, doas, useNormalizedAngles)
 %
 %Outputs:
 %   A  - Steering matrix (M×N)
-%   dA - Derivative matrix (1D DOA only)
+%   dA - Struct of derivatives
+%        1D / broadside-only: dA.theta  (M×N)
+%        az/el form         : dA.az, dA.el (each M×N)
 
 arguments
   array (1,1) struct
@@ -32,9 +34,11 @@ arguments
 end
 
 needDerivative = (nargout == 2);
-if needDerivative && ~isvector(doas)
-  error('steeringMatrix:DerivativeNotSupported', ...
-    'Derivative output is only available for 1D DOA (vector doas).');
+
+if needDerivative
+  dA = struct();
+else
+  dA = [];
 end
 
 elementPositions = array.positions;
@@ -48,8 +52,6 @@ if isfield(array, 'positionErrors') && ~isempty(array.positionErrors)
   elementPositions = applyPositionErrors(elementPositions, array.positionErrors);
   arrayDim = size(elementPositions, 1);
 end
-
-dA = [];
 
 % -------------------------------------------------------------------------
 % Steering matrix computation
@@ -65,14 +67,14 @@ if arrayDim == 1
     posNorm = elementPositions(:) / array.spacing;
     A = exp(1j * (posNorm * broadside));
     if needDerivative
-      dA = (1j * posNorm) .* A;
+      dA.theta = (1j * posNorm) .* A;
     end
   else
     k = 2*pi / wavelength;
     x = elementPositions(:);
     A = exp(1j * k * (x * sin(broadside)));
     if needDerivative
-      dA = A .* (1j * k * (x * cos(broadside)));
+      dA.theta = A .* (1j * k * (x * cos(broadside)));
     end
   end
 
@@ -88,31 +90,59 @@ else
 
   k = 2*pi / wavelength;
 
+  x = elementPositions(1,:).';
+  y = elementPositions(2,:).';
+
   if size(doas,1) == 1
     % broadside only (assume source on xy-plane, angle relative to y-axis)
     broadside = reshape(doas, 1, []);
-    x = elementPositions(1,:).';
-    y = elementPositions(2,:).';
     A = exp(1j * k * (x * sin(broadside) + y * cos(broadside)));
     if needDerivative
-      dA = A .* (1j * k * (x * cos(broadside) - y * sin(broadside)));
+      dA.theta = A .* (1j * k * (x * cos(broadside) - y * sin(broadside)));
     end
+
   else
     % azimuth / elevation
     az = doas(1,:);
     el = doas(2,:);
-    cosEl = cos(el);
-    cc = cosEl .* cos(az);
-    cs = cosEl .* sin(az);
 
-    x = elementPositions(1,:).';
-    y = elementPositions(2,:).';
+    cosAz = cos(az);
+    sinAz = sin(az);
+    cosEl = cos(el);
+    sinEl = sin(el);
+
+    % direction cosines
+    cc = cosEl .* cosAz;   % x coefficient
+    cs = cosEl .* sinAz;   % y coefficient
 
     if arrayDim == 2
       A = exp(1j * k * (x * cc + y * cs));
+
+      if needDerivative
+        % d/d az
+        dphi_daz = k * (-x * (cosEl .* sinAz) + y * (cosEl .* cosAz));
+        dA.az = 1j * dphi_daz .* A;
+
+        % d/d el   (z = 0)
+        dphi_del = k * (-x * (sinEl .* cosAz) - y * (sinEl .* sinAz));
+        dA.el = 1j * dphi_del .* A;
+      end
+
     else
       z = elementPositions(3,:).';
-      A = exp(1j * k * (x * cc + y * cs + z * sin(el)));
+      A = exp(1j * k * (x * cc + y * cs + z * sinEl));
+
+      if needDerivative
+        % d/d az
+        dphi_daz = k * (-x * (cosEl .* sinAz) + y * (cosEl .* cosAz));
+        dA.az = 1j * dphi_daz .* A;
+
+        % d/d el
+        dphi_del = k * (-x * (sinEl .* cosAz) ...
+                      - y * (sinEl .* sinAz) ...
+                      + z * cosEl);
+        dA.el = 1j * dphi_del .* A;
+      end
     end
   end
 end
@@ -127,7 +157,13 @@ if isfield(array, 'gainErrors') && ~isempty(array.gainErrors)
       'array.gainErrors length must match number of elements.');
   end
   A = g .* A;
-  if ~isempty(dA), dA = g .* dA; end
+
+  if needDerivative
+    fn = fieldnames(dA);
+    for ii = 1:numel(fn)
+      dA.(fn{ii}) = g .* dA.(fn{ii});
+    end
+  end
 end
 
 if isfield(array, 'phaseErrors') && ~isempty(array.phaseErrors)
@@ -138,7 +174,13 @@ if isfield(array, 'phaseErrors') && ~isempty(array.phaseErrors)
   end
   ph = exp(1j * p);
   A = ph .* A;
-  if ~isempty(dA), dA = ph .* dA; end
+
+  if needDerivative
+    fn = fieldnames(dA);
+    for ii = 1:numel(fn)
+      dA.(fn{ii}) = ph .* dA.(fn{ii});
+    end
+  end
 end
 
 end
