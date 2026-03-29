@@ -167,8 +167,9 @@ arrayCell = localParseArrayTemplate(arrayTemplate, numSat);
 % -------------------------------------------------------------------------
 % Access check for all user-satellite pairs
 % -------------------------------------------------------------------------
-access = checkSatAccess(usrPosEci, satPosEci, ...
+accessInfo = checkSatAccess(usrPosEci, satPosEci, ...
   minUsrElevationDeg, maxSatOffAxisDeg);
+access = accessInfo.isAvailable;
 
 % -------------------------------------------------------------------------
 % Local frames and local DOAs
@@ -216,6 +217,7 @@ scene.numSat = numSat;
 scene.satPosEci = satPosEci;
 scene.satVelEci = satVelEci;
 scene.access = access;
+scene.accessInfo = accessInfo;
 scene.rotMat = rotMat;
 scene.localDoa = localDoa;
 scene.array = arrayCell;
