@@ -6,7 +6,7 @@ numSym = 32;
 sampleRate = 122.88e6;
 symbolRate = 3.84e6;
 osf = sampleRate / symbolRate;
-carrierFreq = 1e9;
+carrierFreq = 18e9;
 wavelen = 299792458 / carrierFreq;
 rng(253)
 
@@ -53,7 +53,7 @@ modelOpt.carrierPhaseMode = 'none';
 % s-t music
 doaGrid1 = genDoaGrid("latlon", 2, [50 50], [usrLla(1)-5, usrLla(1)+5; usrLla(2)-5, usrLla(2)+5], 'eci', datevec(utc), scene.satPosEci(:,1), scene.rotMat{1}, E);
 doaGrid2 = genDoaGrid("latlon", 2, [50 50], [usrLla(1)-5, usrLla(1)+5; usrLla(2)-5, usrLla(2)+5], 'eci', datevec(utc), scene.satPosEci(:,2), scene.rotMat{2}, E);
-fdRange = [-2e4 2e4];
+fdRange = [0 2e5];
 
 % mle
 [ddEstResult, ddPathGain, ddNoiseVar] = estimatorDoaDopplerMlePilotOpt(scene, ...
@@ -67,9 +67,9 @@ doa2_local = scene.localDoa(:,2);
 [crb, aux] = crbPilotDoaDoppler(scene, pilotWave, carrierFreq, sampleRate, ...
   usrLla(1:2), linkParam.ref.fdGeom, 1, pwrNoise);
 
-ddEstResult.doaParamEst
-ddEstResult.fdRefEst
-estResult.doaParamEst
+ddEstResult.doaParamEst %[output:36d99c43]
+ddEstResult.fdRefEst %[output:9a2c33b1]
+estResult.doaParamEst %[output:7973bdae]
 
 %[appendix]{"version":"1.0"}
 %---
@@ -78,4 +78,13 @@ estResult.doaParamEst
 %---
 %[metadata:view]
 %   data: {"layout":"inline","rightPanelPercent":14.8}
+%---
+%[output:36d99c43]
+%   data: {"dataType":"matrix","outputData":{"columns":1,"name":"ans","rows":2,"type":"double","value":[["37.7794"],["36.5929"]]}}
+%---
+%[output:9a2c33b1]
+%   data: {"dataType":"textualVariable","outputData":{"name":"ans","value":"1.0487e+05"}}
+%---
+%[output:7973bdae]
+%   data: {"dataType":"matrix","outputData":{"columns":1,"name":"ans","rows":2,"type":"double","value":[["37.7795"],["36.5942"]]}}
 %---

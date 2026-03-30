@@ -118,10 +118,10 @@ for ii = 1:numParam %[output:group:60487aa6]
 end %[output:group:60487aa6]
 %%
 semilogy( ... %[output:273aaf8c]
-  snr_db, mseMusSingl, '-o', snr_db, mseMusMulti, '--o', snr_db, mseMusJoint, '-.o', ... %[output:273aaf8c]
-  snr_db, mseMleSingl, '-x', snr_db, mseMleMulti, '--x', snr_db, mseMleJoint, '-.x'); %[output:273aaf8c]
+  snr_db, mseMusSingl, '-o', snr_db, mseMusJoint, '-.o', ... %[output:273aaf8c]
+  snr_db, mseMleSingl, '-x', snr_db, mseMleJoint, '-.x'); %[output:273aaf8c]
 xlabel('SNR (dB)'); ylabel('MSE / rad^2'); grid on; %[output:273aaf8c]
-legend({'MUSIC-Single', 'MUSIC-Multi', 'MUSIC-Joint', 'CSML-Single', 'CSML-Multi', 'CSML-Joint'}, Location="southwest"); %[output:273aaf8c]
+legend({'MUSIC-Single', 'MUSIC-Joint', 'CSML-Single', 'CSML-Joint'}, Location="southwest"); %[output:273aaf8c]
 title(['DoA Est with UPA (Sinlge Source, ', num2str(numSnap), ' snaps)']); %[output:273aaf8c]
 %%
 saveExpSnapshot("doa3dDualSatUra"); %[output:85b63d25]
