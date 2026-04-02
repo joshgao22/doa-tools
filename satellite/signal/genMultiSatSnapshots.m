@@ -7,6 +7,11 @@ function [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ..
 % time origin, while different users are injected with different effective
 % delays on that common time axis.
 %
+% This version supports both a simplified grouped interface and the legacy
+% flat options. The grouped interface separates:
+%   1) waveform propagation options under modelOpt.wave
+%   2) optional precomputed phase sequences under modelOpt.precomp
+%
 %Syntax:
 %  [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ...
 %    steeringInput, txSig, linkParam, carrierFreq, sampleRate)
@@ -18,13 +23,12 @@ function [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ..
 %    steeringInput, txSig, linkParam, carrierFreq, sampleRate, noiseCov, pathGain)
 %
 %  ... = genMultiSatSnapshots( ...
-%    steeringInput, txSig, linkParam, carrierFreq, sampleRate, ...
-%    noiseCov, pathGain, modelOpt)
+%    steeringInput, txSig, linkParam, carrierFreq, sampleRate, noiseCov, pathGain, modelOpt)
 %
 %Inputs:
 %  steeringInput  - steering information
 %                   - struct : output of getSceneSteering
-%                   - cell   : 1xNs cell, each cell is an MkxNu steering matrix
+%                   - cell   : 1xNs cell, each cell is an Mk x Nu steering matrix
 %
 %  txSig          - Nu x T transmitted baseband waveforms
 %                   each row corresponds to one user waveform
@@ -50,26 +54,42 @@ function [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ..
 %                   - Ns x Nu       : one gain per link
 %                   default: 1
 %
-%  modelOpt       - optional waveform model options
-%                   .delayMode        - 'waveform' or 'phaseOnly'
-%                                       default: 'waveform'
-%                   .delayRefMode     - global delay reference mode
-%                                       - 'globalMin' : subtract global earliest delay
-%                                       - 'obsStart'  : subtract user-specified obsStartTime
-%                                       - 'total'     : use total delay directly
-%                                       default: 'globalMin'
-%                   .obsStartTime     - global observation start time in seconds
-%                                       used only when delayRefMode='obsStart'
-%                   .carrierPhaseMode - 'effective', 'total', or 'none'
-%                                       default: 'effective'
-%                   .outputLengthMode - 'globalExpand' or 'same'
-%                                       default: 'globalExpand'
-%                   .filterHalfLen    - half length of fractional-delay kernel
-%                                       default: 8
-%                   .windowType       - window type passed to applyFracDelay
-%                                       default: 'hann'
-%                   .useAccessMask    - whether to apply steering access mask
-%                                       default: true
+%  modelOpt       - optional waveform model options. Recommended grouped form:
+%
+%                   .wave.delayModel        - 'waveform' or 'phaseOnly'
+%                                             default: 'waveform'
+%                   .wave.timeRef           - waveform time reference
+%                                             - 'minDelay' : subtract the
+%                                                            earliest delay
+%                                             - 'zero'     : use total delay
+%                                             - 'custom'   : use obsStartTime
+%                                             default: 'minDelay'
+%                   .wave.obsStartTime      - observation start time in seconds
+%                                             used when wave.timeRef='custom'
+%                   .wave.carrierPhaseModel - 'relativeDelay',
+%                                             'absoluteDelay', or 'none'
+%                                             default: 'relativeDelay'
+%                   .wave.rxLengthMode      - 'expand' or 'same'
+%                                             default: 'expand'
+%                   .wave.filterHalfLen     - half length of fractional-delay
+%                                             kernel, default: 8
+%                   .wave.windowType        - window type passed to
+%                                             applyFracDelay, default: 'hann'
+%                   .wave.useAccessMask     - whether to apply access mask
+%                                             default: true
+%
+%                   .precomp.phaseSeqCell   - optional custom 1xNs cell,
+%                                             each entry is Nu x Nrx complex
+%                                             phase sequence. When provided,
+%                                             it overrides the default
+%                                             exp(j2pifdt) built from fdGeom
+%                                             and timeSecRel.
+%
+%                   Legacy flat fields are still accepted for backward
+%                   compatibility:
+%                     delayMode, delayRefMode, obsStartTime,
+%                     carrierPhaseMode, outputLengthMode, filterHalfLen,
+%                     windowType, useAccessMask, dopplerSeqCell.
 %
 %Outputs:
 %  rxSig          - 1xNs cell, each cell is Mk x Nrx received snapshots
@@ -91,10 +111,10 @@ function [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ..
 %                   .sampleRate
 %                   .accessMask
 %                   .pathGain
-%                   .delayMode
-%                   .delayRefMode
-%                   .carrierPhaseMode
-%                   .outputLengthMode
+%                   .delayMode / .delayModel
+%                   .delayRefMode / .timeRef
+%                   .carrierPhaseMode / .carrierPhaseModel
+%                   .outputLengthMode / .rxLengthMode
 %                   .obsStartTime
 %                   .tauEff
 %                   .delaySamples
@@ -107,6 +127,7 @@ function [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ..
 %                   .deltaFdGeom
 %                   .tauGeom
 %                   .fdGeom
+%                   .phaseSeqSource / .dopplerSeqSource
 %
 %Signal model:
 %  For satellite k and user u:
@@ -114,7 +135,7 @@ function [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ..
 %    x_k[n] = sum_u a_{k,u} * alpha(k,u) * s_u[n; tauEff_{k,u}, fd_{k,u}] + w_k[n]
 %
 %  where tauEff is built from a global observation start time shared by all
-%  satellites and users. With delayRefMode='globalMin':
+%  satellites and users. With wave.timeRef='minDelay':
 %
 %    obsStartTime = min_{k,u} tauGeom(k,u)
 %    tauEff(k,u)  = tauGeom(k,u) - obsStartTime
@@ -122,33 +143,12 @@ function [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ..
 %Notes:
 %  - txSig should be waveform-level input, e.g. the output of
 %    genPilotWaveform.
-%  - For joint delay estimation across satellites, delayRefMode='globalMin'
-%    or delayRefMode='obsStart' is usually more appropriate than a
-%    satellite-wise local reference.
+%  - For joint delay estimation across satellites, timeRef='minDelay' or
+%    timeRef='custom' is usually more appropriate than a satellite-wise
+%    local reference.
 %  - linkParam.ref.tauGeom and linkParam.ref.deltaTauGeom are preserved in
 %    meta for later estimation, but they are not used as the raw waveform
 %    alignment reference by default.
-%
-%Example:
-%  [pilotSym, pilotInfo] = genPilotSymbol(numUser, numSym, 'zadoffchu', 1);
-%
-%  pulseOpt = struct();
-%  pulseOpt.rolloff = 0.25;
-%  pulseOpt.span = 8;
-%
-%  [pilotWave, waveInfo] = genPilotWaveform(pilotSym, symRate, 8, 'rrc', pulseOpt);
-%
-%  modelOpt = struct();
-%  modelOpt.delayMode = 'waveform';
-%  modelOpt.delayRefMode = 'globalMin';
-%  modelOpt.carrierPhaseMode = 'effective';
-%  modelOpt.outputLengthMode = 'globalExpand';
-%  modelOpt.filterHalfLen = 8;
-%  modelOpt.windowType = 'hann';
-%
-%  [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiSatSnapshots( ...
-%    steeringInfo, pilotWave, linkParam, carrierFreq, waveInfo.sampleRate, ...
-%    noiseCov, pathGain, modelOpt);
 %
 %See also:
 %  getSceneSteering, getLinkParam, genPilotWaveform, applyFracDelay
@@ -212,14 +212,18 @@ fdGeom = reshape(linkParam.fdGeom, numSat, numUser);
 % -------------------------------------------------------------------------
 % Parse model options
 % -------------------------------------------------------------------------
-modelOpt = localParseModelOpt(modelOpt);
-delayMode = modelOpt.delayMode;
-delayRefMode = modelOpt.delayRefMode;
-carrierPhaseMode = modelOpt.carrierPhaseMode;
-outputLengthMode = modelOpt.outputLengthMode;
-filterHalfLen = modelOpt.filterHalfLen;
-windowType = modelOpt.windowType;
-useAccessMask = modelOpt.useAccessMask;
+waveOpt = localParseWaveOpt(modelOpt);
+delayMode = waveOpt.delayMode;
+delayRefMode = waveOpt.delayRefMode;
+timeRef = waveOpt.timeRef;
+carrierPhaseMode = waveOpt.carrierPhaseMode;
+carrierPhaseModel = waveOpt.carrierPhaseModel;
+outputLengthMode = waveOpt.outputLengthMode;
+rxLengthMode = waveOpt.rxLengthMode;
+filterHalfLen = waveOpt.filterHalfLen;
+windowType = waveOpt.windowType;
+useAccessMask = waveOpt.useAccessMask;
+phaseSeqCell = waveOpt.phaseSeqCell;
 
 % -------------------------------------------------------------------------
 % Parse path gain
@@ -230,7 +234,7 @@ pathGainMat = localParsePathGain(pathGain, numSat, numUser);
 % Build effective delay and carrier phase
 % -------------------------------------------------------------------------
 [obsStartTime, tauEff] = localBuildEffectiveDelay( ...
-  tauGeom, delayRefMode, modelOpt.obsStartTime);
+  tauGeom, delayRefMode, waveOpt.obsStartTime);
 
 delaySamples = tauEff * sampleRate;
 delayPad = localBuildDelayPad(delaySamples, delayMode, outputLengthMode);
@@ -257,6 +261,11 @@ end
 numRxSnap = size(txSigPad, 2);
 timeSecRel = (0:numRxSnap-1) / sampleRate;
 timeSecAbs = obsStartTime + timeSecRel;
+
+% -------------------------------------------------------------------------
+% Parse custom phase sequence
+% -------------------------------------------------------------------------
+phaseSeqCell = localParsePhaseSeqCell(phaseSeqCell, numSat, numUser, numRxSnap);
 
 % -------------------------------------------------------------------------
 % Initialize outputs
@@ -295,10 +304,15 @@ for iSat = 1:numSat
   end
 
   % -----------------------------------------------------------------------
-  % Apply Doppler
+  % Apply phase-time sequence
   % -----------------------------------------------------------------------
-  dopplerSeq = exp(1j * 2*pi * (currentFd * timeSecRel));   % Nu x Nrx
-  currentSourceSig = delayedSourceSig .* dopplerSeq;
+  if isempty(phaseSeqCell)
+    currentPhaseSeq = exp(1j * 2*pi * (currentFd * timeSecRel));
+  else
+    currentPhaseSeq = phaseSeqCell{iSat};
+  end
+
+  currentSourceSig = delayedSourceSig .* currentPhaseSeq;
 
   % -----------------------------------------------------------------------
   % Apply carrier phase and link gain
@@ -346,9 +360,13 @@ meta.sampleRate = sampleRate;
 meta.accessMask = accessMask;
 meta.pathGain = pathGainMat;
 meta.delayMode = delayMode;
+meta.delayModel = delayMode;
 meta.delayRefMode = delayRefMode;
+meta.timeRef = timeRef;
 meta.carrierPhaseMode = carrierPhaseMode;
+meta.carrierPhaseModel = carrierPhaseModel;
 meta.outputLengthMode = outputLengthMode;
+meta.rxLengthMode = rxLengthMode;
 meta.obsStartTime = obsStartTime;
 meta.tauEff = tauEff;
 meta.delaySamples = delaySamples;
@@ -361,136 +379,204 @@ meta.deltaTauGeom = deltaTauGeom;
 meta.deltaFdGeom = deltaFdGeom;
 meta.tauGeom = tauGeom;
 meta.fdGeom = fdGeom;
+if isempty(phaseSeqCell)
+  meta.phaseSeqSource = 'framelocal';
+  meta.dopplerSeqSource = 'framelocal';
+else
+  meta.phaseSeqSource = 'custom';
+  meta.dopplerSeqSource = 'custom';
+end
 end
 
 
-function modelOpt = localParseModelOpt(modelOpt)
-%LOCALPARSEMODELOPT Parse waveform model options.
+function waveOpt = localParseWaveOpt(modelOpt)
+%LOCALPARSEWAVEOPT Parse grouped and legacy waveform options.
 
 if ~isstruct(modelOpt)
   error('genMultiSatSnapshots:InvalidModelOpt', ...
     'modelOpt must be a struct.');
 end
 
-if ~isfield(modelOpt, 'delayMode') || isempty(modelOpt.delayMode)
-  modelOpt.delayMode = 'waveform';
+waveGroup = localReadField(modelOpt, {'wave'}, struct());
+if ~isstruct(waveGroup)
+  error('genMultiSatSnapshots:InvalidWaveOpt', ...
+    'modelOpt.wave must be a struct.');
 end
 
-if isstring(modelOpt.delayMode)
-  modelOpt.delayMode = char(modelOpt.delayMode);
+precompGroup = localReadField(modelOpt, {'precomp'}, struct());
+if ~isstruct(precompGroup)
+  error('genMultiSatSnapshots:InvalidPrecompOpt', ...
+    'modelOpt.precomp must be a struct.');
 end
 
-if ~ischar(modelOpt.delayMode)
-  error('genMultiSatSnapshots:InvalidDelayMode', ...
-    'modelOpt.delayMode must be a character vector or string scalar.');
+waveOpt = struct();
+waveOpt.delayMode = localReadField(waveGroup, {'delayModel'}, '');
+if isempty(waveOpt.delayMode)
+  waveOpt.delayMode = localReadField(modelOpt, {'delayMode'}, 'waveform');
 end
-
-modelOpt.delayMode = lower(strtrim(modelOpt.delayMode));
+waveOpt.delayMode = localNormalizeText(waveOpt.delayMode, 'waveform');
 validDelayMode = {'waveform', 'phaseonly'};
-if ~ismember(modelOpt.delayMode, validDelayMode)
+if ~ismember(waveOpt.delayMode, validDelayMode)
   error('genMultiSatSnapshots:UnsupportedDelayMode', ...
-    'Unsupported delayMode: %s.', modelOpt.delayMode);
+    'Unsupported delayMode: %s.', waveOpt.delayMode);
 end
 
-if ~isfield(modelOpt, 'delayRefMode') || isempty(modelOpt.delayRefMode)
-  modelOpt.delayRefMode = 'globalMin';
+waveTimeRef = localReadField(waveGroup, {'timeRef'}, '');
+if isempty(waveTimeRef)
+  delayRefModeLegacy = localReadField(modelOpt, {'delayRefMode'}, 'globalMin');
+  delayRefModeLegacy = localNormalizeText(delayRefModeLegacy, 'globalmin');
+
+  switch delayRefModeLegacy
+    case 'globalmin'
+      waveTimeRef = 'mindelay';
+    case 'total'
+      waveTimeRef = 'zero';
+    case 'obsstart'
+      waveTimeRef = 'custom';
+    otherwise
+      error('genMultiSatSnapshots:UnsupportedDelayRefMode', ...
+        'Unsupported delayRefMode: %s.', delayRefModeLegacy);
+  end
+else
+  waveTimeRef = localNormalizeText(waveTimeRef, 'mindelay');
 end
 
-if isstring(modelOpt.delayRefMode)
-  modelOpt.delayRefMode = char(modelOpt.delayRefMode);
+switch waveTimeRef
+  case {'mindelay', 'globalmin'}
+    waveOpt.timeRef = 'minDelay';
+    waveOpt.delayRefMode = 'globalMin';
+  case {'zero', 'total'}
+    waveOpt.timeRef = 'zero';
+    waveOpt.delayRefMode = 'total';
+  case {'custom', 'obsstart'}
+    waveOpt.timeRef = 'custom';
+    waveOpt.delayRefMode = 'obsStart';
+  otherwise
+    error('genMultiSatSnapshots:UnsupportedTimeRef', ...
+      'Unsupported wave.timeRef: %s.', waveTimeRef);
 end
 
-if ~ischar(modelOpt.delayRefMode)
-  error('genMultiSatSnapshots:InvalidDelayRefMode', ...
-    'modelOpt.delayRefMode must be a character vector or string scalar.');
+waveOpt.obsStartTime = localReadField(waveGroup, {'obsStartTime'}, []);
+if isempty(waveOpt.obsStartTime)
+  waveOpt.obsStartTime = localReadField(modelOpt, {'obsStartTime'}, []);
 end
-
-modelOpt.delayRefMode = lower(strtrim(modelOpt.delayRefMode));
-validDelayRefMode = {'globalmin', 'obsstart', 'total'};
-if ~ismember(modelOpt.delayRefMode, validDelayRefMode)
-  error('genMultiSatSnapshots:UnsupportedDelayRefMode', ...
-    'Unsupported delayRefMode: %s.', modelOpt.delayRefMode);
-end
-
-if ~isfield(modelOpt, 'obsStartTime') || isempty(modelOpt.obsStartTime)
-  modelOpt.obsStartTime = [];
-end
-
-if ~isempty(modelOpt.obsStartTime)
-  if ~isscalar(modelOpt.obsStartTime) || ~isfinite(modelOpt.obsStartTime)
+if ~isempty(waveOpt.obsStartTime)
+  if ~isscalar(waveOpt.obsStartTime) || ~isfinite(waveOpt.obsStartTime)
     error('genMultiSatSnapshots:InvalidObsStartTime', ...
-      'modelOpt.obsStartTime must be a finite scalar.');
+      'obsStartTime must be a finite scalar.');
   end
 end
 
-if ~isfield(modelOpt, 'carrierPhaseMode') || isempty(modelOpt.carrierPhaseMode)
-  modelOpt.carrierPhaseMode = 'effective';
+carrierPhaseModel = localReadField(waveGroup, {'carrierPhaseModel'}, '');
+if isempty(carrierPhaseModel)
+  carrierPhaseModel = localReadField(modelOpt, {'carrierPhaseMode'}, 'effective');
+end
+carrierPhaseModel = localNormalizeText(carrierPhaseModel, 'relativedelay');
+
+switch carrierPhaseModel
+  case {'relativedelay', 'effective'}
+    waveOpt.carrierPhaseModel = 'relativeDelay';
+    waveOpt.carrierPhaseMode = 'effective';
+  case {'absolutedelay', 'total'}
+    waveOpt.carrierPhaseModel = 'absoluteDelay';
+    waveOpt.carrierPhaseMode = 'total';
+  case 'none'
+    waveOpt.carrierPhaseModel = 'none';
+    waveOpt.carrierPhaseMode = 'none';
+  otherwise
+    error('genMultiSatSnapshots:UnsupportedCarrierPhaseModel', ...
+      'Unsupported carrierPhaseModel: %s.', carrierPhaseModel);
 end
 
-if isstring(modelOpt.carrierPhaseMode)
-  modelOpt.carrierPhaseMode = char(modelOpt.carrierPhaseMode);
+rxLengthMode = localReadField(waveGroup, {'rxLengthMode'}, '');
+if isempty(rxLengthMode)
+  rxLengthMode = localReadField(modelOpt, {'outputLengthMode'}, 'globalExpand');
+end
+rxLengthMode = localNormalizeText(rxLengthMode, 'expand');
+
+switch rxLengthMode
+  case {'expand', 'globalexpand'}
+    waveOpt.rxLengthMode = 'expand';
+    waveOpt.outputLengthMode = 'globalExpand';
+  case 'same'
+    waveOpt.rxLengthMode = 'same';
+    waveOpt.outputLengthMode = 'same';
+  otherwise
+    error('genMultiSatSnapshots:UnsupportedRxLengthMode', ...
+      'Unsupported rxLengthMode: %s.', rxLengthMode);
 end
 
-if ~ischar(modelOpt.carrierPhaseMode)
-  error('genMultiSatSnapshots:InvalidCarrierPhaseMode', ...
-    'modelOpt.carrierPhaseMode must be a character vector or string scalar.');
+waveOpt.filterHalfLen = localReadField(waveGroup, {'filterHalfLen'}, []);
+if isempty(waveOpt.filterHalfLen)
+  waveOpt.filterHalfLen = localReadField(modelOpt, {'filterHalfLen'}, 8);
 end
-
-modelOpt.carrierPhaseMode = lower(strtrim(modelOpt.carrierPhaseMode));
-validCarrierPhaseMode = {'effective', 'total', 'none'};
-if ~ismember(modelOpt.carrierPhaseMode, validCarrierPhaseMode)
-  error('genMultiSatSnapshots:UnsupportedCarrierPhaseMode', ...
-    'Unsupported carrierPhaseMode: %s.', modelOpt.carrierPhaseMode);
-end
-
-if ~isfield(modelOpt, 'outputLengthMode') || isempty(modelOpt.outputLengthMode)
-  modelOpt.outputLengthMode = 'globalExpand';
-end
-
-if isstring(modelOpt.outputLengthMode)
-  modelOpt.outputLengthMode = char(modelOpt.outputLengthMode);
-end
-
-if ~ischar(modelOpt.outputLengthMode)
-  error('genMultiSatSnapshots:InvalidOutputLengthMode', ...
-    'modelOpt.outputLengthMode must be a character vector or string scalar.');
-end
-
-modelOpt.outputLengthMode = lower(strtrim(modelOpt.outputLengthMode));
-validOutputLengthMode = {'globalexpand', 'same'};
-if ~ismember(modelOpt.outputLengthMode, validOutputLengthMode)
-  error('genMultiSatSnapshots:UnsupportedOutputLengthMode', ...
-    'Unsupported outputLengthMode: %s.', modelOpt.outputLengthMode);
-end
-
-if ~isfield(modelOpt, 'filterHalfLen') || isempty(modelOpt.filterHalfLen)
-  modelOpt.filterHalfLen = 8;
-end
-
-if ~isscalar(modelOpt.filterHalfLen) || ~isfinite(modelOpt.filterHalfLen) || ...
-    modelOpt.filterHalfLen <= 0 || mod(modelOpt.filterHalfLen, 1) ~= 0
+if ~isscalar(waveOpt.filterHalfLen) || ~isfinite(waveOpt.filterHalfLen) || ...
+    waveOpt.filterHalfLen <= 0 || mod(waveOpt.filterHalfLen, 1) ~= 0
   error('genMultiSatSnapshots:InvalidFilterHalfLen', ...
-    'modelOpt.filterHalfLen must be a positive integer scalar.');
+    'filterHalfLen must be a positive integer scalar.');
 end
 
-if ~isfield(modelOpt, 'windowType') || isempty(modelOpt.windowType)
-  modelOpt.windowType = 'hann';
+waveOpt.windowType = localReadField(waveGroup, {'windowType'}, []);
+if isempty(waveOpt.windowType)
+  waveOpt.windowType = localReadField(modelOpt, {'windowType'}, 'hann');
 end
-
-if isstring(modelOpt.windowType)
-  modelOpt.windowType = char(modelOpt.windowType);
+if isstring(waveOpt.windowType)
+  waveOpt.windowType = char(waveOpt.windowType);
 end
-
-if ~ischar(modelOpt.windowType)
+if ~ischar(waveOpt.windowType)
   error('genMultiSatSnapshots:InvalidWindowType', ...
-    'modelOpt.windowType must be a character vector or string scalar.');
+    'windowType must be a character vector or string scalar.');
 end
 
-if ~isfield(modelOpt, 'useAccessMask') || isempty(modelOpt.useAccessMask)
-  modelOpt.useAccessMask = true;
+waveOpt.useAccessMask = localReadField(waveGroup, {'useAccessMask'}, []);
+if isempty(waveOpt.useAccessMask)
+  waveOpt.useAccessMask = localReadField(modelOpt, {'useAccessMask'}, true);
+end
+waveOpt.useAccessMask = logical(waveOpt.useAccessMask);
+
+phaseSeqCell = [];
+if isfield(precompGroup, 'phaseSeqCell') && ~isempty(precompGroup.phaseSeqCell)
+  phaseSeqCell = precompGroup.phaseSeqCell;
+elseif isfield(modelOpt, 'phaseSeqCell') && ~isempty(modelOpt.phaseSeqCell)
+  phaseSeqCell = modelOpt.phaseSeqCell;
+elseif isfield(modelOpt, 'dopplerSeqCell') && ~isempty(modelOpt.dopplerSeqCell)
+  phaseSeqCell = modelOpt.dopplerSeqCell;
+end
+waveOpt.phaseSeqCell = phaseSeqCell;
 end
 
-modelOpt.useAccessMask = logical(modelOpt.useAccessMask);
+
+function phaseSeqCell = localParsePhaseSeqCell(phaseSeqCell, numSat, numUser, numRxSnap)
+%LOCALPARSEPHASESEQCELL Parse optional custom phase sequences.
+
+if isempty(phaseSeqCell)
+  return;
+end
+
+if ~iscell(phaseSeqCell) || numel(phaseSeqCell) ~= numSat
+  error('genMultiSatSnapshots:InvalidPhaseSeqCell', ...
+    'phaseSeqCell must be a 1xNs cell array.');
+end
+
+phaseSeqCell = reshape(phaseSeqCell, 1, []);
+for iSat = 1:numSat
+  currentSeq = phaseSeqCell{iSat};
+
+  if ~isnumeric(currentSeq) || ~ismatrix(currentSeq)
+    error('genMultiSatSnapshots:InvalidPhaseSeqEntry', ...
+      'Each phaseSeqCell entry must be a numeric matrix.');
+  end
+
+  if ~isequal(size(currentSeq), [numUser, numRxSnap])
+    error('genMultiSatSnapshots:PhaseSeqSizeMismatch', ...
+      'Each phaseSeqCell entry must have size numUser x numRxSnap.');
+  end
+
+  if any(~isfinite(real(currentSeq(:)))) || any(~isfinite(imag(currentSeq(:))))
+    error('genMultiSatSnapshots:InvalidPhaseSeqValue', ...
+      'Each phaseSeqCell entry must contain finite values.');
+  end
+end
 end
 
 
@@ -504,7 +590,7 @@ switch delayRefMode
   case 'obsstart'
     if isempty(obsStartTime)
       error('genMultiSatSnapshots:MissingObsStartTime', ...
-        'modelOpt.obsStartTime is required when delayRefMode=''obsStart''.');
+        'obsStartTime is required when timeRef=''custom'' or delayRefMode=''obsStart''.');
     end
 
   case 'total'
@@ -534,7 +620,7 @@ minDelay = min(delaySamples(:));
 if minDelay < 0
   error('genMultiSatSnapshots:NegativeEffectiveDelay', ...
     ['Effective delay is negative under the selected global reference. ', ...
-     'Please move obsStartTime earlier or use delayRefMode=''globalMin''.']);
+     'Please move obsStartTime earlier or use timeRef=''minDelay''.']);
 end
 
 delayPad = ceil(maxDelay);
@@ -776,5 +862,56 @@ elseif isvector(covSpec)
 else
   transformMat = sqrtm(covSpec / 2);
   samples = transformMat * base;
+end
+end
+
+
+function value = localReadField(inputStruct, fieldPath, defaultValue)
+%LOCALREADFIELD Read a nested field if it exists.
+
+value = defaultValue;
+currentValue = inputStruct;
+for iField = 1:numel(fieldPath)
+  fieldName = fieldPath{iField};
+  if ~isstruct(currentValue) || ~isfield(currentValue, fieldName)
+    return;
+  end
+  currentValue = currentValue.(fieldName);
+end
+
+if ~isempty(currentValue)
+  value = currentValue;
+end
+end
+
+
+function textOut = localNormalizeText(textIn, defaultValue)
+%LOCALNORMALIZETEXT Normalize text-like input into lower-case char.
+
+if nargin < 2
+  defaultValue = '';
+end
+
+if isempty(textIn)
+  textOut = defaultValue;
+  return;
+end
+
+if isstring(textIn)
+  if ~isscalar(textIn)
+    error('genMultiSatSnapshots:InvalidTextOption', ...
+      'Text options must be character vectors or string scalars.');
+  end
+  textIn = char(textIn);
+end
+
+if ~ischar(textIn)
+  error('genMultiSatSnapshots:InvalidTextOption', ...
+    'Text options must be character vectors or string scalars.');
+end
+
+textOut = lower(strtrim(textIn));
+if isempty(textOut)
+  textOut = defaultValue;
 end
 end

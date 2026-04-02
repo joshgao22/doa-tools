@@ -1,5 +1,5 @@
 function sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, usrIdx, arrayTemplate, ...
-  minUsrElevationDeg, maxSatOffAxisDeg, refType, refArg, refFrameIdx)
+  minUsrElevationDeg, maxSatOffAxisDeg, refType, refArg, refFrameIdx, motionOpt)
 %GENMULTIFRAMESCENE Generate a multi-frame satellite / user geometry sequence.
 % Repeatedly calls genMultiSatScene on a sequence of UTC epochs and packs
 % all frame-dependent geometry into one structure for dynamic simulation and
@@ -13,6 +13,8 @@ function sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, usrIdx, arra
 %    minUsrElevationDeg, maxSatOffAxisDeg, refType, refArg)
 %  sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, usrIdx, arrayTemplate, ...
 %    minUsrElevationDeg, maxSatOffAxisDeg, refType, refArg, refFrameIdx)
+%  sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, usrIdx, arrayTemplate, ...
+%    minUsrElevationDeg, maxSatOffAxisDeg, refType, refArg, refFrameIdx, motionOpt)
 %
 %Inputs:
 %  utcVec             - 1xNf or Nfx1 datetime vector, frame epochs in UTC
@@ -56,6 +58,23 @@ function sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, usrIdx, arra
 %                       frozen local DOA / rotation snapshot
 %                       default: round((numFrame + 1) / 2)
 %
+%  motionOpt          - (optional) user-motion perturbation options in ECI
+%                       coordinates. This is intended for dynamic stress
+%                       tests while keeping the estimator parameterization
+%                       unchanged.
+%                       .enableUsrMotion  - logical flag, default false
+%                       .usrVelEciExtra   - 3x1 or 3xNu extra user velocity
+%                                           in m/s, default 0
+%                       .usrAccEciExtra   - 3x1 or 3xNu extra user acceleration
+%                                           in m/s^2, default 0
+%                       .motionRefFrameIdx
+%                                         - reference frame index defining
+%                                           zero displacement time, default
+%                                           refFrameIdx
+%                       .recomputeAccess  - whether to recompute access and
+%                                           localDoa after motion update,
+%                                           default true
+%
 %Output:
 %  sceneSeq           - structure with fields:
 %                       .utcVec
@@ -69,6 +88,8 @@ function sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, usrIdx, arra
 %                       .usrLla
 %                       .usrPosEci
 %                       .usrVelEci
+%                       .usrPosNominalEci
+%                       .usrVelNominalEci
 %                       .numSat
 %                       .satIdx
 %                       .satPosEci
@@ -85,19 +106,14 @@ function sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, usrIdx, arra
 %                       .ref
 %                       .refPosEci
 %                       .refVelEci
+%                       .userMotion
 %                       .sceneCell
 %
 %  sceneSeq.sceneCell - 1xNf cell array, each entry is the output of
-%                       genMultiSatScene at the corresponding utcVec frame
-%
-%  sceneSeq.access    - access indicators for all frames
-%                       size: NsxNuxNf
-%
-%  sceneSeq.localDoa  - local DOAs for all frames
-%                       - single-user : 2xNsxNf
-%                       - multi-user  : 2xNsxNuxNf
-%
-%  sceneSeq.rotMat    - NfxNs cell array of satellite local-frame rotations
+%                       genMultiSatScene at the corresponding utcVec frame.
+%                       When motionOpt.enableUsrMotion=true, the user state,
+%                       access mask, and localDoa fields are overwritten by
+%                       the motion-perturbed values.
 %
 %Notes:
 %  - This function does not discard frames with blocked links. Access
@@ -123,6 +139,7 @@ arguments
   refType (1,1) string {mustBeMember(refType, ["centroid", "weightedCentroid", "satellite"])} = "centroid"
   refArg = []
   refFrameIdx = []
+  motionOpt (1,1) struct = struct()
 end
 
 % -------------------------------------------------------------------------
@@ -192,12 +209,40 @@ for iFrame = 1:numFrame
 end
 
 % -------------------------------------------------------------------------
+% Optional user-motion perturbation in ECI
+% -------------------------------------------------------------------------
+motionInfo = localParseMotionOpt(motionOpt, numUser, numFrame, refFrameIdx);
+usrPosNominalEci = [];
+usrVelNominalEci = [];
+
+if motionInfo.enableUsrMotion
+  usrPosNominalEci = zeros(3, numUser, numFrame);
+  usrVelNominalEci = zeros(3, numUser, numFrame);
+  motionDtSec = seconds(utcVec - utcVec(motionInfo.motionRefFrameIdx));
+
+  for iFrame = 1:numFrame
+    [sceneCell{iFrame}, usrPosNominalEci(:, :, iFrame), usrVelNominalEci(:, :, iFrame)] = ...
+      localApplyUserMotion(sceneCell{iFrame}, motionDtSec(iFrame), motionInfo, ...
+      minUsrElevationDeg, maxSatOffAxisDeg);
+  end
+
+  sceneRef = sceneCell{refFrameIdx};
+else
+  motionInfo.motionRefFrameIdx = refFrameIdx;
+end
+
+% -------------------------------------------------------------------------
 % Aggregate frame-dependent states
 % -------------------------------------------------------------------------
 satPosEci = zeros(3, numSat, numFrame);
 satVelEci = zeros(3, numSat, numFrame);
 usrPosEci = zeros(3, numUser, numFrame);
 usrVelEci = zeros(3, numUser, numFrame);
+
+if isempty(usrPosNominalEci)
+  usrPosNominalEci = zeros(3, numUser, numFrame);
+  usrVelNominalEci = zeros(3, numUser, numFrame);
+end
 
 access = false(numSat, numUser, numFrame);
 rotMat = cell(numFrame, numSat);
@@ -218,6 +263,18 @@ for iFrame = 1:numFrame
   satVelEci(:, :, iFrame) = sceneTmp.satVelEci;
   usrPosEci(:, :, iFrame) = sceneTmp.usrPosEci;
   usrVelEci(:, :, iFrame) = sceneTmp.usrVelEci;
+
+  if isfield(sceneTmp, 'usrPosNominalEci') && ~isempty(sceneTmp.usrPosNominalEci)
+    usrPosNominalEci(:, :, iFrame) = sceneTmp.usrPosNominalEci;
+  else
+    usrPosNominalEci(:, :, iFrame) = sceneTmp.usrPosEci;
+  end
+
+  if isfield(sceneTmp, 'usrVelNominalEci') && ~isempty(sceneTmp.usrVelNominalEci)
+    usrVelNominalEci(:, :, iFrame) = sceneTmp.usrVelNominalEci;
+  else
+    usrVelNominalEci(:, :, iFrame) = sceneTmp.usrVelEci;
+  end
 
   access(:, :, iFrame) = localExtractAccessMask(sceneTmp.access, numSat, numUser, iFrame);
   rotMat(iFrame, :) = reshape(sceneTmp.rotMat, 1, []);
@@ -255,6 +312,8 @@ sceneSeq.usrIdx = usrIdx;
 sceneSeq.usrLla = sceneRef.usrLla;
 sceneSeq.usrPosEci = usrPosEci;
 sceneSeq.usrVelEci = usrVelEci;
+sceneSeq.usrPosNominalEci = usrPosNominalEci;
+sceneSeq.usrVelNominalEci = usrVelNominalEci;
 
 sceneSeq.numSat = numSat;
 
@@ -283,6 +342,7 @@ sceneSeq.ref = sceneRef.ref;
 sceneSeq.refPosEci = refPosEci;
 sceneSeq.refVelEci = refVelEci;
 
+sceneSeq.userMotion = motionInfo;
 sceneSeq.sceneCell = sceneCell;
 end
 
@@ -380,4 +440,112 @@ if isempty(idxIn)
 else
   idx = idxIn(:).';
 end
+end
+
+function motionInfo = localParseMotionOpt(motionOpt, numUser, numFrame, refFrameIdx)
+%LOCALPARSEMOTIONOPT Parse optional user-motion perturbation options.
+
+motionInfo = struct();
+motionInfo.enableUsrMotion = false;
+motionInfo.usrVelEciExtra = zeros(3, numUser);
+motionInfo.usrAccEciExtra = zeros(3, numUser);
+motionInfo.motionRefFrameIdx = refFrameIdx;
+motionInfo.recomputeAccess = true;
+
+if isempty(fieldnames(motionOpt))
+  return;
+end
+
+if isfield(motionOpt, 'usrVelEciExtra') && ~isempty(motionOpt.usrVelEciExtra)
+  motionInfo.usrVelEciExtra = localExpandMotionState(motionOpt.usrVelEciExtra, numUser, 'usrVelEciExtra');
+end
+
+if isfield(motionOpt, 'usrAccEciExtra') && ~isempty(motionOpt.usrAccEciExtra)
+  motionInfo.usrAccEciExtra = localExpandMotionState(motionOpt.usrAccEciExtra, numUser, 'usrAccEciExtra');
+end
+
+if isfield(motionOpt, 'recomputeAccess') && ~isempty(motionOpt.recomputeAccess)
+  motionInfo.recomputeAccess = logical(motionOpt.recomputeAccess);
+end
+
+if isfield(motionOpt, 'motionRefFrameIdx') && ~isempty(motionOpt.motionRefFrameIdx)
+  motionRefFrameIdx = motionOpt.motionRefFrameIdx;
+  if ~isscalar(motionRefFrameIdx) || ~isnumeric(motionRefFrameIdx) || ...
+      ~isfinite(motionRefFrameIdx) || mod(motionRefFrameIdx, 1) ~= 0 || ...
+      motionRefFrameIdx < 1 || motionRefFrameIdx > numFrame
+    error('genMultiFrameScene:InvalidMotionRefFrameIdx', ...
+      'motionOpt.motionRefFrameIdx must be an integer within [1, numFrame].');
+  end
+  motionInfo.motionRefFrameIdx = motionRefFrameIdx;
+end
+
+if isfield(motionOpt, 'enableUsrMotion') && ~isempty(motionOpt.enableUsrMotion)
+  motionInfo.enableUsrMotion = logical(motionOpt.enableUsrMotion);
+else
+  motionInfo.enableUsrMotion = any(abs(motionInfo.usrVelEciExtra(:)) > 0) || ...
+    any(abs(motionInfo.usrAccEciExtra(:)) > 0);
+end
+end
+
+function stateMat = localExpandMotionState(stateIn, numUser, fieldName)
+%LOCALEXPANDMOTIONSTATE Expand 3x1 motion state to 3xNu if needed.
+
+validateattributes(stateIn, {'numeric'}, {'real', 'finite', 'nonnan'});
+
+if isequal(size(stateIn), [3, 1])
+  stateMat = repmat(stateIn, 1, numUser);
+elseif isequal(size(stateIn), [3, numUser])
+  stateMat = stateIn;
+else
+  error('genMultiFrameScene:InvalidMotionStateSize', ...
+    '%s must have size 3x1 or 3xNu.', fieldName);
+end
+end
+
+function [sceneOut, usrPosNominalEci, usrVelNominalEci] = localApplyUserMotion( ...
+  sceneIn, dtSec, motionInfo, minUsrElevationDeg, maxSatOffAxisDeg)
+%LOCALAPPLYUSERMOTION Apply extra ECI motion to one frame scene.
+
+sceneOut = sceneIn;
+usrPosNominalEci = sceneIn.usrPosEci;
+usrVelNominalEci = sceneIn.usrVelEci;
+
+usrPosEci = usrPosNominalEci + motionInfo.usrVelEciExtra * dtSec + ...
+  0.5 * motionInfo.usrAccEciExtra * (dtSec ^ 2);
+usrVelEci = usrVelNominalEci + motionInfo.usrVelEciExtra + ...
+  motionInfo.usrAccEciExtra * dtSec;
+
+sceneOut.usrPosNominalEci = usrPosNominalEci;
+sceneOut.usrVelNominalEci = usrVelNominalEci;
+sceneOut.usrPosEci = usrPosEci;
+sceneOut.usrVelEci = usrVelEci;
+
+if ~motionInfo.recomputeAccess
+  return;
+end
+
+accessInfo = checkSatAccess(usrPosEci, sceneIn.satPosEci, ...
+  minUsrElevationDeg, maxSatOffAxisDeg);
+sceneOut.accessInfo = accessInfo;
+sceneOut.access = accessInfo.isAvailable;
+
+numSat = sceneIn.numSat;
+numUser = sceneIn.numUser;
+
+if numUser == 1
+  localDoa = zeros(2, numSat);
+else
+  localDoa = zeros(2, numSat, numUser);
+end
+
+for iSat = 1:numSat
+  doaMat = globalToLocalDoa(usrPosEci, sceneIn.satPosEci(:, iSat), sceneIn.rotMat{iSat});
+  if numUser == 1
+    localDoa(:, iSat) = doaMat;
+  else
+    localDoa(:, iSat, :) = reshape(doaMat, 2, 1, numUser);
+  end
+end
+
+sceneOut.localDoa = localDoa;
 end
