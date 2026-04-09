@@ -313,6 +313,17 @@ ref.type = char(refType);
 ref.weight = refWeight;
 ref.posEci = satPosEci * refWeight;
 ref.velEci = satVelEci * refWeight;
+ref.satIdxLocal = nan;
+ref.satIdxGlobal = nan;
+ref.source = char(refType);
+
+if strcmp(refType, "satellite")
+  ref.satIdxLocal = refLocalIdx;
+  if ~isempty(satIdx) && numel(satIdx) >= refLocalIdx
+    ref.satIdxGlobal = satIdx(refLocalIdx);
+  end
+  ref.source = 'satellite';
+end
 end
 
 function refLocalIdx = localResolveReferenceSat(refArg, satIdx, numSat)

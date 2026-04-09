@@ -362,11 +362,69 @@ if canRecompute
     if isfield(sceneSub, 'satVelEci') && ~isempty(sceneSub.satVelEci)
       refSub.velEci = sceneSub.satVelEci * weightSel;
     end
+
+    [refSatIdxLocal, refSatIdxGlobal] = localResolveSubsetRefSat(weightSel, sceneSub);
+    refSub.satIdxLocal = refSatIdxLocal;
+    refSub.satIdxGlobal = refSatIdxGlobal;
     return;
   end
 end
 
 if isfield(refSub, 'weight')
   refSub.weight = [];
+end
+[refSatIdxLocal, refSatIdxGlobal] = localMapOriginalRefSat(refSub, satIdx, sceneSub);
+refSub.satIdxLocal = refSatIdxLocal;
+refSub.satIdxGlobal = refSatIdxGlobal;
+end
+
+function [refSatIdxLocal, refSatIdxGlobal] = localResolveSubsetRefSat(refWeight, sceneSub)
+%LOCALRESOLVESUBSETREFSAT Resolve subset reference-satellite tags.
+
+refSatIdxLocal = nan;
+refSatIdxGlobal = nan;
+refWeight = reshape(refWeight, [], 1);
+strongIdx = find(refWeight > 0.5, 1, 'first');
+if isempty(strongIdx)
+  return;
+end
+
+refSatIdxLocal = strongIdx;
+if isfield(sceneSub, 'satIdx') && ~isempty(sceneSub.satIdx)
+  satIdxVec = reshape(sceneSub.satIdx, [], 1);
+  if numel(satIdxVec) >= strongIdx
+    refSatIdxGlobal = satIdxVec(strongIdx);
+  end
+end
+end
+
+function [refSatIdxLocal, refSatIdxGlobal] = localMapOriginalRefSat(refSub, satIdx, sceneSub)
+%LOCALMAPORIGINALREFSAT Map original reference tags into the subset.
+
+refSatIdxLocal = nan;
+refSatIdxGlobal = nan;
+
+if isfield(refSub, 'satIdxGlobal') && isscalar(refSub.satIdxGlobal) && isfinite(refSub.satIdxGlobal)
+  refSatIdxGlobal = refSub.satIdxGlobal;
+  matchIdx = find(satIdx == refSatIdxGlobal, 1, 'first');
+  if ~isempty(matchIdx)
+    refSatIdxLocal = matchIdx;
+    return;
+  end
+end
+
+if isfield(refSub, 'satIdxLocal') && isscalar(refSub.satIdxLocal) && isfinite(refSub.satIdxLocal)
+  refSatIdxLocalIn = refSub.satIdxLocal;
+  matchIdx = find(satIdx == refSatIdxLocalIn, 1, 'first');
+  if ~isempty(matchIdx)
+    refSatIdxLocal = matchIdx;
+  end
+end
+
+if isfinite(refSatIdxLocal) && isfield(sceneSub, 'satIdx') && ~isempty(sceneSub.satIdx)
+  satIdxVec = reshape(sceneSub.satIdx, [], 1);
+  if numel(satIdxVec) >= refSatIdxLocal
+    refSatIdxGlobal = satIdxVec(refSatIdxLocal);
+  end
 end
 end

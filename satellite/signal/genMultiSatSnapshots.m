@@ -252,7 +252,7 @@ end
 % -------------------------------------------------------------------------
 % Build global receive timeline
 % -------------------------------------------------------------------------
-if strcmp(delayMode, 'waveform') && strcmp(outputLengthMode, 'globalexpand')
+if strcmp(delayMode, 'waveform') && strcmpi(outputLengthMode, 'globalexpand')
   txSigPad = [txSig, zeros(numUser, delayPad, 'like', txSig)];
 else
   txSigPad = txSig;
@@ -583,6 +583,8 @@ end
 function [obsStartTime, tauEff] = localBuildEffectiveDelay(tauGeom, delayRefMode, obsStartTime)
 %LOCALBUILDEFFECTIVEDELAY Build effective delay on a global time axis.
 
+delayRefMode = localNormalizeText(delayRefMode, 'globalmin');
+
 switch delayRefMode
   case 'globalmin'
     obsStartTime = min(tauGeom(:));
@@ -610,7 +612,7 @@ function delayPad = localBuildDelayPad(delaySamples, delayMode, outputLengthMode
 
 delayPad = 0;
 
-if ~strcmp(delayMode, 'waveform') || ~strcmp(outputLengthMode, 'globalexpand')
+if ~strcmp(delayMode, 'waveform') || ~strcmpi(outputLengthMode, 'globalexpand')
   return;
 end
 

@@ -311,14 +311,17 @@ end
 function [paramMode, numSource, numLocalParam] = localGetDoaMeta(doa)
 %LOCALGETDOAMETA Get local DOA mode and parameter count.
 
-if isvector(doa) || size(doa, 1) == 1
+if size(doa, 1) == 2
+  paramMode = 'azel';
+  numSource = size(doa, 2);
+  numLocalParam = 2 * numSource;
+elseif size(doa, 1) == 1
   paramMode = 'theta';
   numSource = numel(doa);
   numLocalParam = numSource;
 else
-  paramMode = 'azel';
-  numSource = size(doa, 2);
-  numLocalParam = 2 * numSource;
+  error('%s:InvalidDoaSizeInternal', ...
+    'Normalized localDoa must be 1xK or 2xK.', mfilename);
 end
 
 if numSource < 1
