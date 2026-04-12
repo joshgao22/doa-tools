@@ -353,19 +353,13 @@ if canRecompute
 
   if weightSum > 0
     weightSel = weightSel(:) / weightSum;
-    refSub.weight = weightSel;
-
-    if isfield(sceneSub, 'satPosEci') && ~isempty(sceneSub.satPosEci)
-      refSub.posEci = sceneSub.satPosEci * weightSel;
+    [refSatIdxLocal, refSatIdxGlobal, sourceTag] = localResolveSubsetRefSat(weightSel, sceneSub);
+    if ~isfinite(refSatIdxLocal)
+      refSub = localBuildDefaultSubsetRef(refSub, sceneSub, "subsetWeightFallback");
+      return;
     end
-
-    if isfield(sceneSub, 'satVelEci') && ~isempty(sceneSub.satVelEci)
-      refSub.velEci = sceneSub.satVelEci * weightSel;
-    end
-
-    [refSatIdxLocal, refSatIdxGlobal] = localResolveSubsetRefSat(weightSel, sceneSub);
-    refSub.satIdxLocal = refSatIdxLocal;
-    refSub.satIdxGlobal = refSatIdxGlobal;
+    refSub = localFinalizeSubsetRef(refSub, sceneSub, refSatIdxLocal, refSatIdxGlobal, ...
+      weightSel, sourceTag);
     return;
   end
 end
@@ -374,19 +368,28 @@ if isfield(refSub, 'weight')
   refSub.weight = [];
 end
 [refSatIdxLocal, refSatIdxGlobal] = localMapOriginalRefSat(refSub, satIdx, sceneSub);
-refSub.satIdxLocal = refSatIdxLocal;
-refSub.satIdxGlobal = refSatIdxGlobal;
+if isfinite(refSatIdxLocal)
+  refSub = localFinalizeSubsetRef(refSub, sceneSub, refSatIdxLocal, refSatIdxGlobal, [], "mappedOriginalRef");
+else
+  refSub = localBuildDefaultSubsetRef(refSub, sceneSub, "subsetDefaultFirstSat");
+end
 end
 
-function [refSatIdxLocal, refSatIdxGlobal] = localResolveSubsetRefSat(refWeight, sceneSub)
+function [refSatIdxLocal, refSatIdxGlobal, sourceTag] = localResolveSubsetRefSat(refWeight, sceneSub)
 %LOCALRESOLVESUBSETREFSAT Resolve subset reference-satellite tags.
 
 refSatIdxLocal = nan;
 refSatIdxGlobal = nan;
+sourceTag = "subsetWeight";
 refWeight = reshape(refWeight, [], 1);
 strongIdx = find(refWeight > 0.5, 1, 'first');
 if isempty(strongIdx)
-  return;
+  [weightMax, weightIdx] = max(refWeight);
+  if ~isfinite(weightMax) || weightMax <= 0
+    return;
+  end
+  strongIdx = weightIdx;
+  sourceTag = "subsetWeightMax";
 end
 
 refSatIdxLocal = strongIdx;
@@ -398,6 +401,44 @@ if isfield(sceneSub, 'satIdx') && ~isempty(sceneSub.satIdx)
 end
 end
 
+function refSub = localFinalizeSubsetRef(refSub, sceneSub, refSatIdxLocal, refSatIdxGlobal, refWeight, sourceTag)
+%LOCALFINALIZESUBSETREF Finalize subset reference tags and state vectors.
+
+if nargin < 5 || isempty(refWeight)
+  refWeight = zeros(sceneSub.numSat, 1);
+  refWeight(refSatIdxLocal) = 1;
+else
+  refWeight = reshape(refWeight, [], 1);
+end
+
+refSub.weight = refWeight;
+refSub.satIdxLocal = refSatIdxLocal;
+refSub.satIdxGlobal = refSatIdxGlobal;
+if isfield(sceneSub, 'satPosEci') && ~isempty(sceneSub.satPosEci)
+  refSub.posEci = sceneSub.satPosEci * refWeight;
+end
+if isfield(sceneSub, 'satVelEci') && ~isempty(sceneSub.satVelEci)
+  refSub.velEci = sceneSub.satVelEci * refWeight;
+end
+refSub.source = char(sourceTag);
+end
+
+function refSub = localBuildDefaultSubsetRef(refSub, sceneSub, sourceTag)
+%LOCALBUILDDEFAULTSUBSETREF Build one self-consistent subset-local reference.
+
+if sceneSub.numSat < 1
+  return;
+end
+
+if isfield(sceneSub, 'satIdx') && ~isempty(sceneSub.satIdx)
+  satIdxVec = reshape(sceneSub.satIdx, [], 1);
+  refSatIdxGlobal = satIdxVec(1);
+else
+  refSatIdxGlobal = nan;
+end
+refSub = localFinalizeSubsetRef(refSub, sceneSub, 1, refSatIdxGlobal, [], sourceTag);
+end
+
 function [refSatIdxLocal, refSatIdxGlobal] = localMapOriginalRefSat(refSub, satIdx, sceneSub)
 %LOCALMAPORIGINALREFSAT Map original reference tags into the subset.
 
@@ -406,7 +447,12 @@ refSatIdxGlobal = nan;
 
 if isfield(refSub, 'satIdxGlobal') && isscalar(refSub.satIdxGlobal) && isfinite(refSub.satIdxGlobal)
   refSatIdxGlobal = refSub.satIdxGlobal;
-  matchIdx = find(satIdx == refSatIdxGlobal, 1, 'first');
+  sceneSubSatIdx = reshape(localGetFieldOrDefault(sceneSub, 'satIdx', []), [], 1);
+  if ~isempty(sceneSubSatIdx)
+    matchIdx = find(sceneSubSatIdx == refSatIdxGlobal, 1, 'first');
+  else
+    matchIdx = find(satIdx == refSatIdxGlobal, 1, 'first');
+  end
   if ~isempty(matchIdx)
     refSatIdxLocal = matchIdx;
     return;
@@ -426,5 +472,18 @@ if isfinite(refSatIdxLocal) && isfield(sceneSub, 'satIdx') && ~isempty(sceneSub.
   if numel(satIdxVec) >= refSatIdxLocal
     refSatIdxGlobal = satIdxVec(refSatIdxLocal);
   end
+end
+end
+function fieldValue = localGetFieldOrDefault(dataStruct, fieldName, defaultValue)
+%LOCALGETFIELDORDEFAULT Get one struct field with a default fallback.
+
+fieldValue = defaultValue;
+if ~isstruct(dataStruct) || ~isfield(dataStruct, fieldName)
+  return;
+end
+
+fieldValue = dataStruct.(fieldName);
+if isempty(fieldValue)
+  fieldValue = defaultValue;
 end
 end

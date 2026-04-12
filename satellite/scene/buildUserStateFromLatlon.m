@@ -21,6 +21,10 @@ function [userPosEci, userVelEci, aux] = buildUserStateFromLatlon(latlon, stateR
 %                   motion series fields matching genMultiFrameScene output
 %                3) datetime scalar/vector, in which case no extra motion
 %                   perturbation is applied.
+%                4) scalar datenum, 1x6 UTC datevec, or Nx6 UTC datevec,
+%                   in which case no extra motion perturbation is applied.
+%                4) scalar datenum, 1x6 UTC datevec, or Nx6 UTC datevec,
+%                   in which case no extra motion perturbation is applied.
 %
 %Outputs:
 %  userPosEci - 3xN candidate ECI positions.
@@ -79,9 +83,16 @@ if isa(stateRef, 'datetime')
   return;
 end
 
+if isnumeric(stateRef) && ~isempty(stateRef)
+  utcData = stateRef;
+  stateTag = "numericUtc";
+  return;
+end
+
 if ~isstruct(stateRef)
   error('buildUserStateFromLatlon:InvalidStateRef', ...
-    'stateRef must be a datetime or a scene/sceneSeq-like struct.');
+    ['stateRef must be datetime, scalar datenum, a 1x6/Nx6 UTC datevec, ', ...
+     'or a scene/sceneSeq-like struct.']);
 end
 
 if isfield(stateRef, 'utcVec') && ~isempty(stateRef.utcVec)

@@ -1,28 +1,28 @@
-%[text] ## Development check for the formal MF route under the selected static pair
-%[text] This script follows the same case-building pattern as
-%[text] `doaDopplerStatDualSatUraEci` and then extends it to the dynamic
-%[text] multi-frame CP model:
-%[text]   1) Build SS-SF and MS-SF baselines on the reference frame.
-%[text]   2) Keep the static ablation and sat2-weight sweep as a transition
-%[text]      diagnostic before entering the dynamic model.
-%[text]   3) Use MS-SF-DoA as the coarse global DoA initializer.
-%[text]   4) Run SS-MF / MS-MF continuous-phase refinement with local DoA
-%[text]      boxes and compare them against the static baselines.
+% Development check for the formal MF route under the selected static pair
+% This script follows the same case-building pattern as
+% `doaDopplerStatDualSatUraEci` and then extends it to the dynamic
+% multi-frame CP model:
+%   1) Build SS-SF and MS-SF baselines on the reference frame.
+%   2) Keep the static ablation and sat2-weight sweep as a transition
+%      diagnostic before entering the dynamic model.
+%   3) Use MS-SF-DoA as the coarse global DoA initializer.
+%   4) Run SS-MF / MS-MF continuous-phase refinement with local DoA
+%      boxes and compare them against the static baselines.
 clear(); close all; clc;
-%%
-%[text] ## Parameters
+
+%% Parameters
 numUsr = 1;
 numFrame = 10;
 frameIntvlSec = 1 / 750;
 refFrameIdx = ceil(numFrame / 2);
 
-sampleRate = 122.88e6;
-symbolRate = 3.84e6;
+sampleRate = 512e6;
+symbolRate = 128e6;
 osf = sampleRate / symbolRate;
-numSym = 32;
-carrierFreq = 18e9;
+numSym = 512;
+carrierFreq = 11.7e9;
 wavelen = 299792458 / carrierFreq;
-rng(5253);
+rng(253);
 
 elemSpace = wavelen / 2;
 numElem = [4 4];
@@ -38,7 +38,7 @@ utcRef = datetime([2026, 03, 18, 17, 08, 0], ...
   'TimeZone', 'UTC', ...
   'Format', 'yyyy-MM-dd HH:mm:ss.SSSSSS');
 utcVec = utcRef + seconds(((1:numFrame) - refFrameIdx) * frameIntvlSec);
-tle = tleread(localResolveTlePath("starlink_pair_4154_1165_20260318_170800.tle"));
+tle = tleread(resolveTestDataPath("starlink_pair_4154_1165_20260318_170800.tle", "tle"));
 arrUpa = createUpa(numElem, elemSpace);
 
 gridSize = [50 50];
@@ -46,7 +46,7 @@ searchMarginDeg = 5;
 searchRange = [usrLla(1, 1) - searchMarginDeg, usrLla(1, 1) + searchMarginDeg; ...
                usrLla(2, 1) - searchMarginDeg, usrLla(2, 1) + searchMarginDeg];
 
-fdRange = [0, 3e5];
+fdRange = [-1e5, 0];
 fdRateRange = [-1e4, 0];
 optVerbose = false;
 weightSweepAlpha = [0, 0.25, 0.5, 1];
@@ -55,13 +55,13 @@ if numUsr ~= 1
   error('doaDopplerDynDualSatUraEci:OnlySingleUserSupported', ...
     'This script currently supports one user only.');
 end
-%%
-%[text] ## Select Two Visible Satellites And The Reference Satellite
+
+%% Select Two Visible Satellites And The Reference Satellite
 [~, satAccessRef] = findVisibleSatFromTle(utcRef, tle, usrLla);
 [satIdx, satPickAux] = pickVisibleSatByElevation(satAccessRef, 2, 1, "available");
-refSatIdxGlobal = satIdx(2);
-%%
-%[text] ## Multi-frame scene with satellite reference
+refSatIdxGlobal = satIdx(1);
+
+%% Multi-frame scene with satellite reference
 sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, [], arrUpa, ...
   15, 55, "satellite", refSatIdxGlobal, refFrameIdx);
 refFrameIdx = sceneSeq.refFrameIdx;
@@ -95,6 +95,9 @@ truth.fdRateTrueHzPerSec = truth.fdRateFit;
 truth.fdSatTrueHz = reshape(truth.fdSatSeries(:, refFrameIdx), [], 1);
 truth.deltaFdTrueHz = reshape(truth.deltaFdSeries(:, refFrameIdx), [], 1);
 truth.localDoaRef = reshape(sceneRef.localDoa(:, refSatIdxLocal), 2, 1);
+fdRange = expandRangeToTruth(fdRange, [truth.fdRefFit; truth.fdSatTrueHz(:)], 0.1, 2e4);
+fdRateTruthCand = [truth.fdRateFit; truth.fdRateFit + reshape(localGetFieldOrDefault(truth, 'deltaFdRate', []), [], 1)];
+fdRateRange = expandRangeToTruth(fdRateRange, fdRateTruthCand, 0.1, 5e2);
 
 if truth.fdRefFit < fdRange(1) || truth.fdRefFit > fdRange(2)
   warning('doaDopplerDynDualSatUraEci:FdRefRangeMiss', ...
@@ -109,15 +112,15 @@ end
 
 steerDiag = buildSteeringDriftDiag(sceneSeq, refFrameIdx, truth.selectedSatIdxGlobal);
 fdDiag = buildDeltaFdFitDiag(truth);
-%%
-%[text] ## Pilot waveform
+
+%% Pilot waveform
 [pilotSym, ~] = genPilotSymbol(numUsr, numSym, 'pn', pwrSource);
 pulseOpt = struct();
 pulseOpt.rolloff = 0.25;
 pulseOpt.span = 8;
 [pilotWave, waveInfo] = genPilotWaveform(pilotSym, symbolRate, osf, 'rrc', pulseOpt);
-%%
-%[text] ## Multi-frame snapshots
+
+%% Multi-frame snapshots
 snapOpt = struct();
 snapOpt.spatial.model = 'dynamic';
 snapOpt.spatial.refFrameIdx = sceneSeq.refFrameIdx;
@@ -134,8 +137,8 @@ pathGainCell = repmat({ones(sceneSeq.numSat, sceneSeq.numUser)}, 1, sceneSeq.num
   sceneSeq, pilotWave, carrierFreq, waveInfo.sampleRate, ...
   pwrNoise, pathGainCell, snapOpt);
 rxSigRef = rxSigCell{sceneSeq.refFrameIdx};
-%%
-%[text] ## Single-satellite and multi-satellite views
+
+%% Single-satellite and multi-satellite views
 sceneSeqRefOnly = selectSatSceneSeq(sceneSeq, refSatIdxLocal);
 sceneRefOnly = sceneSeqRefOnly.sceneCell{sceneSeqRefOnly.refFrameIdx};
 rxSigMfRefOnly = selectRxSigBySat(rxSigCell, refSatIdxLocal, 'multiFrame');
@@ -149,8 +152,8 @@ viewOtherOnly = buildDoaDopplerEstView(sceneOtherOnly, rxSigOtherOnly, ...
 
 viewMs = buildDoaDopplerEstView(sceneRef, rxSigCell, ...
   gridSize, searchRange, E, struct('sceneSeq', sceneSeq));
-%%
-%[text] ## Common estimator options
+
+%% Common estimator options
 doaOnlyOpt = struct();
 doaOnlyOpt.useLogObjective = true;
 
@@ -167,49 +170,29 @@ dynBaseOpt.steeringRefFrameIdx = sceneSeq.refFrameIdx;
 dynBaseOpt.debugEnable = true;
 dynBaseOpt.debugStoreEvalTrace = false;
 dynBaseOpt.debugMaxEvalTrace = 120;
-%%
-%[text] ## DoA initializers
-caseRefDoa = runDoaOnlyCase("SS-SF-DoA", "single", viewRefOnly, wavelen, pilotWave, optVerbose, doaOnlyOpt);
-caseMsDoa = runDoaOnlyCase("MS-SF-DoA", "multi",  viewMs, wavelen, pilotWave, optVerbose, doaOnlyOpt);
-caseOtherDoa = runDoaOnlyCase("SS-SF-DoA-sat2Only", "single", viewOtherOnly, wavelen, pilotWave, optVerbose, doaOnlyOpt);
 
-staticRefOpt = staticBaseOpt;
-staticRefOpt.initDoaParam = caseRefDoa.estResult.doaParamEst(:);
+caseBundle = buildDoaDopplerStaticTransitionBundle( ...
+  viewRefOnly, viewOtherOnly, viewMs, wavelen, pilotWave, ...
+  carrierFreq, waveInfo.sampleRate, fdRange, truth, ...
+  otherSatIdxGlobal, optVerbose, doaOnlyOpt, staticBaseOpt, ...
+  weightSweepAlpha, [0.01; 0.01]);
 
-staticOtherOpt = staticBaseOpt;
-staticOtherOpt.initDoaParam = caseOtherDoa.estResult.doaParamEst(:);
+caseRefDoa = caseBundle.caseRefDoa;
+caseMsDoa = caseBundle.caseMsDoa;
+caseOtherDoa = caseBundle.caseOtherDoa;
+staticRefOpt = caseBundle.staticRefOpt;
+staticOtherOpt = caseBundle.staticOtherOpt;
+staticMsOpt = caseBundle.staticMsOpt;
+caseStaticRefOnly = caseBundle.caseStaticRefOnly;
+caseStaticRefAbl = caseBundle.caseStaticRefAbl;
+caseStaticOtherOnly = caseBundle.caseStaticOtherOnly;
+caseStaticMs = caseBundle.caseStaticMs;
+weightCase = caseBundle.weightCase;
+bestStaticMsCase = caseBundle.bestStaticMsCase;
 
-staticMsOpt = staticBaseOpt;
-staticMsOpt.initDoaParam = caseMsDoa.estResult.doaParamEst(:);
-staticMsOpt.initDoaHalfWidth = [0.01; 0.01];
-%%
-%[text] ## Static baseline, ablation, and weight sweep
-caseStaticRefOnly = runStaticDoaDopplerCase("SS-SF-Static", "single", ...
-  viewRefOnly, pilotWave, carrierFreq, waveInfo.sampleRate, fdRange, optVerbose, staticRefOpt);
-caseStaticRefAbl = caseStaticRefOnly;
-caseStaticRefAbl.displayName = "MS-SF-Static-sat1Only";
-caseStaticRefAbl.satMode = "multi";
-caseStaticOtherOnly = runStaticDoaDopplerCase("MS-SF-Static-sat2Only", "multi", ...
-  viewOtherOnly, pilotWave, carrierFreq, waveInfo.sampleRate, fdRange, optVerbose, staticOtherOpt);
-caseStaticMs = runStaticDoaDopplerCase("MS-SF-Static", "multi", ...
-  viewMs, pilotWave, carrierFreq, waveInfo.sampleRate, fdRange, optVerbose, staticMsOpt);
-
-weightCase = repmat(buildDoaDopplerCaseResult("", "multi", "single", ...
-  "doa-doppler", "static", struct()), 1, numel(weightSweepAlpha));
-for iCase = 1:numel(weightSweepAlpha)
-  alpha = weightSweepAlpha(iCase);
-  currentOpt = staticMsOpt;
-  currentOpt.satWeight = [1; alpha];
-  weightCase(iCase) = runStaticDoaDopplerCase( ...
-    sprintf('MS-SF-Static-W%.2f', alpha), "multi", viewMs, ...
-    pilotWave, carrierFreq, waveInfo.sampleRate, fdRange, optVerbose, currentOpt);
-end
-
-bestStaticMsCase = localSelectBestStaticSeedCase(caseStaticMs, weightCase, truth);
-initParamStaticRef = localBuildDynamicInitParamFromCase(caseStaticRefOnly, true, truth.fdRateFit);
-initParamStaticMs = localBuildDynamicInitParamFromCase(bestStaticMsCase, true, truth.fdRateFit);
-%%
-%[text] ## Dynamic CP cases
+initParamStaticRef = buildDynamicInitParamFromCase(caseStaticRefOnly, true, truth.fdRateFit);
+initParamStaticMs = buildDynamicInitParamFromCase(bestStaticMsCase, true, truth.fdRateFit);
+%% Dynamic CP cases
 
 % Use the single-frame static estimates as the dynamic coarse state. This
 % mirrors the intended pipeline more closely than restarting MF directly
@@ -242,25 +225,27 @@ caseDynRefKnown = runDynamicDoaDopplerCase("SS-MF-CP-K", "single", ...
   viewRefOnly, truth, pilotWave, carrierFreq, waveInfo.sampleRate, ...
   fdRange, fdRateRange, optVerbose, dynRefKnownOpt, true, debugTruthRef, initParamStaticRef);
 
-initParamRefUnknown = localBuildDynamicInitParamFromCase(caseDynRefKnown, false, caseDynRefKnown.estResult.fdRateEst);
-if ~isempty(initParamRefUnknown)
-  dynRefUnknownOpt.initDoaParam = caseDynRefKnown.estResult.doaParamEst(:);
-end
+initParamRefUnknownCpK = buildDynamicInitParamFromCase(caseDynRefKnown, false, caseDynRefKnown.estResult.fdRateEst);
+initParamRefUnknownStatic = buildDynamicInitParamFromCase(caseStaticRefOnly, false, truth.fdRateFit);
+refUnknownCand = buildUnknownInitCandidateSet( ...
+  caseDynRefKnown, caseStaticRefOnly, initParamRefUnknownCpK, initParamRefUnknownStatic, ...
+  dynRefUnknownOpt.initDoaHalfWidth, dynRefKnownOpt.initDoaHalfWidth);
 caseDynRefUnknown = runDynamicDoaDopplerCase("SS-MF-CP-U", "single", ...
   viewRefOnly, truth, pilotWave, carrierFreq, waveInfo.sampleRate, ...
-  fdRange, fdRateRange, optVerbose, dynRefUnknownOpt, false, debugTruthRef, initParamRefUnknown);
+  fdRange, fdRateRange, optVerbose, dynRefUnknownOpt, false, debugTruthRef, refUnknownCand);
 
 caseDynMsKnown = runDynamicDoaDopplerCase("MS-MF-CP-K", "multi", ...
   viewMs, truth, pilotWave, carrierFreq, waveInfo.sampleRate, ...
   fdRange, fdRateRange, optVerbose, dynMsKnownOpt, true, debugTruthMs, initParamStaticMs);
 
-initParamMsUnknown = localBuildDynamicInitParamFromCase(caseDynMsKnown, false, caseDynMsKnown.estResult.fdRateEst);
-if ~isempty(initParamMsUnknown)
-  dynMsUnknownOpt.initDoaParam = caseDynMsKnown.estResult.doaParamEst(:);
-end
+initParamMsUnknownCpK = buildDynamicInitParamFromCase(caseDynMsKnown, false, caseDynMsKnown.estResult.fdRateEst);
+initParamMsUnknownStatic = buildDynamicInitParamFromCase(bestStaticMsCase, false, truth.fdRateFit);
+msUnknownCand = buildUnknownInitCandidateSet( ...
+  caseDynMsKnown, bestStaticMsCase, initParamMsUnknownCpK, initParamMsUnknownStatic, ...
+  dynMsUnknownOpt.initDoaHalfWidth, staticMsOpt.initDoaHalfWidth);
 caseDynMsUnknown = runDynamicDoaDopplerCase("MS-MF-CP-U", "multi", ...
   viewMs, truth, pilotWave, carrierFreq, waveInfo.sampleRate, ...
-  fdRange, fdRateRange, optVerbose, dynMsUnknownOpt, false, debugTruthMs, initParamMsUnknown);
+  fdRange, fdRateRange, optVerbose, dynMsUnknownOpt, false, debugTruthMs, msUnknownCand);
 
 baseCase = [ ...
   caseRefDoa, ...
@@ -281,8 +266,9 @@ dynBlockTable = dynSummary.blockTable;
 dynLocalStateTable = dynSummary.localStateTable;
 dynTruthStateTable = dynSummary.truthStateTable;
 dynSatOrderTable = dynSummary.satOrderTable;
-%%
-%[text] ## CRB calculation
+dynMultiStartTable = summarizeDynamicMultiStart(baseCase, truth);
+
+%% CRB calculation
 crbSfOpt = struct();
 crbSfOpt.doaType = 'latlon';
 [crbSfRef, auxCrbSfRef] = localTryBuildStaticCrb( ...
@@ -327,15 +313,15 @@ crbSummary = localBuildDynamicCrbSummary(truth, ...
   crbSfRef, auxCrbSfRef, crbSfMs, auxCrbSfMs, ...
   crbMfRefKnown, auxCrbMfRefKnown, crbMfMsKnown, auxCrbMfMsKnown, ...
   crbMfRefUnknown, auxCrbMfRefUnknown, crbMfMsUnknown, auxCrbMfMsUnknown);
-%%
-%[text] ## Summaries
+
+%% Summaries
 estTable = buildDoaDopplerSummaryTable(caseResult, truth, struct('mode', 'dynamic'));
 
 ablationTruth = [ ...
-  localBuildCaseTruth(truth.latlonTrueDeg, truth.fdSatTrueHz(refSatIdxLocal)), ...
-  localBuildCaseTruth(truth.latlonTrueDeg, truth.fdSatTrueHz(otherSatIdxLocal))];
-ablationTable = localBuildCaseSummaryTable([caseStaticRefAbl, caseStaticOtherOnly], ablationTruth);
-weightTable = localBuildWeightSweepTable(weightSweepAlpha, weightCase, truth);
+  buildDoaDopplerCaseTruthFromScene(truth, sceneRefOnly), ...
+  buildDoaDopplerCaseTruthFromScene(truth, sceneOtherOnly)];
+ablationTable = buildDoaDopplerCaseSummaryTable([caseStaticRefAbl, caseStaticOtherOnly], ablationTruth);
+weightTable = buildDoaDopplerWeightSweepTable(weightSweepAlpha, weightCase, truth);
 
 fprintf('\n========== Selected satellites ==========%s', newline);
 disp(table((1:sceneSeq.numSat).', truth.selectedSatIdxGlobal(:), truth.usrElevationDeg(:), ...
@@ -387,6 +373,11 @@ disp(dynTruthStateTable);
 fprintf('\n========== Dynamic satellite-order summary ==========%s', newline);
 disp(dynSatOrderTable);
 
+if ~isempty(dynMultiStartTable)
+  fprintf('\n========== Dynamic multi-start summary ==========%s', newline);
+  disp(dynMultiStartTable);
+end
+
 fprintf('\n========== Dynamic CRB summary ==========%s', newline);
 disp(crbSummary);
 
@@ -395,47 +386,13 @@ if any(badMask)
   warning('doaDopplerDynDualSatUraEci:EstimatorUnresolved', ...
     'Some estimators are not resolved:\n%s', evalc('disp(estTable(badMask, :))'));
 end
-%%
-%[text] ## Plots
+
+%% Plots
 plotDoaDopplerComparison(sceneSeq.timeOffsetSec, truth, baseCase);
 plotDoaDopplerGeometryComparison(truth.latlonTrueDeg, baseCase);
 localPlotWeightSweep(weightTable);
-%%
-%[text] ## Minimal debug dump
-debug = struct();
-debug.createdAt = datestr(now, 30);
 
-debug.config = struct();
-debug.config.numFrame = sceneSeq.numFrame;
-debug.config.refFrameIdx = sceneSeq.refFrameIdx;
-debug.config.snrDb = snrDb;
-debug.config.fdRange = fdRange(:);
-debug.config.fdRateRange = fdRateRange(:);
-debug.config.weightSweepAlpha = weightSweepAlpha(:);
-debug.config.steeringMode = dynBaseOpt.steeringMode;
-debug.config.phaseMode = dynBaseOpt.phaseMode;
-debug.config.initFdCount = dynBaseOpt.initFdCount;
-
-debug.truth = truth;
-debug.steerDiag = steerDiag;
-debug.fdDiagRef = fdDiag.refTable;
-debug.fdDiagDelta = fdDiag.deltaTable;
-debug.estTable = estTable;
-debug.ablationTable = ablationTable;
-debug.weightTable = weightTable;
-debug.dynDiagTable = dynDiagTable;
-debug.dynObjTable = dynObjTable;
-debug.dynSatTable = dynSatTable;
-debug.dynLocalStateTable = dynLocalStateTable;
-debug.dynTruthStateTable = dynTruthStateTable;
-debug.dynSatOrderTable = dynSatOrderTable;
-debug.crbSummary = crbSummary;
-
-save('doaDebug_min.mat', 'debug');
-fprintf('Saved minimal debug file: %s\n', fullfile(pwd, 'doaDebug_min.mat'));
-
-%%
-
+%% Local functions
 function [crb, aux] = localTryBuildStaticCrb(scene, pilotWave, carrierFreq, sampleRate, ...
   doaParam, fdRefHz, numSource, noiseVar, crbOpt)
 %LOCALTRYBUILDSTATICCRB Build one static CRB with graceful fallback.
@@ -452,7 +409,6 @@ catch ME
 end
 end
 
-
 function [crb, aux] = localTryBuildDynamicCrb(sceneSeq, pilotWave, carrierFreq, sampleRate, ...
   doaParam, fdRefHz, fdRateHzPerSec, pathGain, noiseVar, crbOpt)
 %LOCALTRYBUILDDYNAMICCRB Build one dynamic CRB with graceful fallback.
@@ -468,41 +424,6 @@ catch ME
   aux.errorMessage = string(ME.message);
 end
 end
-
-
-function caseTruth = localBuildCaseTruth(latlonTrueDeg, fdRefTrueHz)
-%LOCALBUILDCASETRUTH Build a compact truth struct for one case.
-
-caseTruth = struct();
-caseTruth.latlonTrueDeg = latlonTrueDeg(:);
-caseTruth.fdRefTrueHz = fdRefTrueHz;
-end
-
-
-function summaryTable = localBuildCaseSummaryTable(caseList, truthList)
-%LOCALBUILDCASESUMMARYTABLE Build one summary table with per-case truth.
-
-caseCell = num2cell(caseList);
-truthCell = num2cell(truthList);
-infoCell = cell(1, numel(caseCell));
-for iCase = 1:numel(caseCell)
-  infoCell{iCase} = summarizeDoaDopplerCase(caseCell{iCase}, truthCell{iCase});
-end
-summaryTable = struct2table([infoCell{:}], 'AsArray', true);
-end
-
-
-function weightTable = localBuildWeightSweepTable(alphaList, caseList, truth)
-%LOCALBUILDWEIGHTSWEEPTABLE Build one compact weight-sweep summary table.
-
-summaryTable = localBuildCaseSummaryTable(caseList, repmat(localBuildCaseTruth( ...
-  truth.latlonTrueDeg, truth.fdRefTrueHz), 1, numel(caseList)));
-weightTable = table(alphaList(:), summaryTable.displayName, summaryTable.angleErrDeg, ...
-  summaryTable.fdRefErrHz, summaryTable.runTimeMs, summaryTable.isResolved, ...
-  'VariableNames', {'alphaSat2', 'displayName', 'angleErrDeg', ...
-  'fdRefErrHz', 'runTimeMs', 'isResolved'});
-end
-
 
 function crbTable = localBuildDynamicCrbSummary(truth, ...
   crbSfRef, auxCrbSfRef, crbSfMs, auxCrbSfMs, ...
@@ -540,7 +461,6 @@ crbTable = table(caseName, satMode, frameMode, phaseMode, fdRateMode, ...
   'fdRateMode', 'angleCrbStdDeg', 'fdRefCrbStdHz'});
 end
 
-
 function localPlotWeightSweep(weightTable)
 %LOCALPLOTWEIGHTSWEEP Plot one compact sat2-weight sweep summary.
 
@@ -552,120 +472,6 @@ xlabel('sat2 weight \alpha');
 ylabel('Angle error (deg)');
 title('MS-SF-Static angle error under sat2 weighting');
 end
-
-
-
-function bestCase = localSelectBestStaticSeedCase(baseCase, weightCase, truth)
-%LOCALSELECTBESTSTATICSEEDCASE Choose the most reliable static MS seed.
-% Dynamic MF should start from the best resolved static MS estimate rather
-% than always from the equal-weight case. This keeps the MF refinement in
-% the same basin already verified by the SF diagnostic sweep.
-
-candidateCase = [baseCase, weightCase];
-bestScore = inf;
-bestCase = baseCase;
-for iCase = 1:numel(candidateCase)
-  currentCase = candidateCase(iCase);
-  if ~localCaseResolved(currentCase)
-    continue;
-  end
-  estResult = currentCase.estResult;
-  angleErrDeg = calcLatlonAngleError(estResult.doaParamEst(:), truth.latlonTrueDeg(:));
-  fdErrHz = abs(estResult.fdRefEst - truth.fdRefFit);
-  currentScore = [angleErrDeg, fdErrHz];
-  if localLexicoLess(currentScore, bestScore)
-    bestScore = currentScore;
-    bestCase = currentCase;
-  end
-end
-end
-
-
-function initParam = localBuildDynamicInitParamFromCase(caseInfo, isKnownRate, fdRateSeed)
-%LOCALBUILDDYNAMICINITPARAMFROMCASE Build one MF initializer from an SF case.
-
-initParam = [];
-if ~isstruct(caseInfo) || ~isfield(caseInfo, 'estResult') || isempty(caseInfo.estResult)
-  return;
-end
-estResult = caseInfo.estResult;
-if ~localCaseResolved(caseInfo) || ~isfield(estResult, 'doaParamEst') || ...
-    ~isfield(estResult, 'fdRefEst')
-  return;
-end
-
-doaParam = reshape(estResult.doaParamEst, [], 1);
-fdRef = estResult.fdRefEst;
-if ~isnumeric(doaParam) || numel(doaParam) ~= 2 || any(~isfinite(doaParam)) || ...
-    ~isscalar(fdRef) || ~isfinite(fdRef)
-  return;
-end
-
-if isKnownRate
-  initParam = [doaParam; fdRef];
-  return;
-end
-
-if nargin < 3 || isempty(fdRateSeed) || ~isscalar(fdRateSeed) || ~isfinite(fdRateSeed)
-  if isfield(estResult, 'fdRateEst') && isscalar(estResult.fdRateEst) && isfinite(estResult.fdRateEst)
-    fdRateSeed = estResult.fdRateEst;
-  else
-    return;
-  end
-end
-initParam = [doaParam; fdRef; fdRateSeed];
-end
-
-
-function isResolved = localCaseResolved(caseInfo)
-%LOCALCASERESOLVED Return true when one case contains a usable estimate.
-
-isResolved = false;
-if ~isstruct(caseInfo) || ~isfield(caseInfo, 'estResult') || isempty(caseInfo.estResult)
-  return;
-end
-estResult = caseInfo.estResult;
-if isfield(estResult, 'isResolved') && ~isempty(estResult.isResolved)
-  isResolved = logical(estResult.isResolved);
-else
-  isResolved = true;
-end
-if ~isResolved
-  return;
-end
-if ~isfield(estResult, 'doaParamEst') || numel(estResult.doaParamEst) ~= 2 || ...
-    any(~isfinite(estResult.doaParamEst(:)))
-  isResolved = false;
-  return;
-end
-if ~isfield(estResult, 'fdRefEst') || ~isscalar(estResult.fdRefEst) || ~isfinite(estResult.fdRefEst)
-  isResolved = false;
-end
-end
-
-
-function isLess = localLexicoLess(scoreNow, scoreBest)
-%LOCALLEXICOLESS Lexicographic compare for [angleErr, fdErr] pairs.
-
-if isempty(scoreBest) || any(~isfinite(scoreBest))
-  isLess = all(isfinite(scoreNow));
-  return;
-end
-if any(~isfinite(scoreNow))
-  isLess = false;
-  return;
-end
-if scoreNow(1) < scoreBest(1) - 1e-12
-  isLess = true;
-  return;
-end
-if scoreNow(1) > scoreBest(1) + 1e-12
-  isLess = false;
-  return;
-end
-isLess = scoreNow(2) < scoreBest(2);
-end
-
 
 function debugTruth = localBuildTruthDebugForView(view, truth)
 %LOCALBUILDTRUTHDEBUGFORVIEW Build compact truth probes for one scene view.
@@ -695,7 +501,6 @@ else
 end
 end
 
-
 function fdLocalTrue = localBuildTruthFdLocalForView(sceneRef, truth)
 %LOCALBUILDTRUTHFDLOCALFORVIEW Build view-aligned true local Doppler series.
 
@@ -721,7 +526,6 @@ numCopy = min(numSat, size(truth.fdSatSeries, 1));
 fdLocalTrue(1:numCopy, :) = truth.fdSatSeries(1:numCopy, :);
 end
 
-
 function truthLocalDoa = localExtractSceneLocalDoa(sceneSeq)
 %LOCALEXTRACTSCENELOCALDOA Extract 2xNsxNf truth local DoA array.
 
@@ -744,7 +548,6 @@ end
 error('doaDopplerDynDualSatUraEci:InvalidLocalDoaSize', ...
   'sceneSeq.localDoa must have size 2xNsxNf or 2xNsxNuxNf.');
 end
-
 
 function fieldValue = localGetFieldOrDefault(dataStruct, fieldName, defaultValue)
 %LOCALGETFIELDORDEFAULT Read one field or property with a default value.
@@ -779,24 +582,3 @@ catch
 end
 end
 
-
-function tlePath = localResolveTlePath(fileName)
-%LOCALRESOLVETLEPATH Resolve one TLE file from common test locations.
-
-candidateList = { ...
-  fullfile('/tle', fileName), ...
-  fullfile('tle', fileName), ...
-  fullfile('test', 'data', 'tle', fileName), ...
-  fullfile('..', 'data', 'tle', fileName), ...
-  fullfile('/mnt/data/doa-tools/test/data/tle', fileName)};
-
-for iPath = 1:numel(candidateList)
-  if exist(candidateList{iPath}, 'file')
-    tlePath = candidateList{iPath};
-    return;
-  end
-end
-
-error('doaDopplerDynDualSatUraEci:TleFileNotFound', ...
-  'Unable to locate the TLE file "%s".', fileName);
-end

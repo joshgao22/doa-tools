@@ -118,11 +118,19 @@ for iFrame = 1:numFrame
 end
 
 % -------------------------------------------------------------------------
-% Fit reference Doppler trajectory: fdRef(t) ~= fdRefFit + fdRateFit * t
+% Fit reference and per-satellite Doppler trajectories
 % -------------------------------------------------------------------------
 [fdRefFit, fdRateFit] = localFitFdLine(timeOffsetSec, fdRefSeries);
 fdRefFitSeries = fdRefFit + fdRateFit * timeOffsetSec;
 fdRefResidual = fdRefSeries - fdRefFitSeries;
+
+fdSatFit = zeros(numSat, 1);
+fdRateSatFit = zeros(numSat, 1);
+for iSat = 1:numSat
+  [fdSatFit(iSat), fdRateSatFit(iSat)] = localFitFdLine(timeOffsetSec, fdSatSeries(iSat, :));
+end
+deltaFdFit = fdSatFit - fdRefFit;
+deltaFdRate = fdRateSatFit - fdRateFit;
 
 % -------------------------------------------------------------------------
 % Window-level summaries
@@ -149,6 +157,10 @@ truth.fdRefFit = fdRefFit;
 truth.fdRateFit = fdRateFit;
 truth.fdRefFitSeries = fdRefFitSeries;
 truth.fdRefResidual = fdRefResidual;
+truth.fdSatFitHz = fdSatFit;
+truth.fdRateSatTrueHzPerSec = fdRateSatFit;
+truth.deltaFdFit = deltaFdFit;
+truth.deltaFdRate = deltaFdRate;
 truth.deltaFdWin = deltaFdWin;
 
 % Backward-compatible aliases for existing temporary scripts.

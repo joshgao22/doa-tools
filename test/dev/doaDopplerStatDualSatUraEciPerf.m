@@ -1,15 +1,8 @@
 % DOADOPPLERSTATDUALSATURAECIPERF
 % Static single-frame performance sweep for one fixed dual-satellite pair.
-% The script follows the same reference-satellite parameterization used by
-% doaDopplerStatDualSatUraEci and compares
-%   1) SS-SF-DoA
-%   2) MS-SF-DoA
-%   3) SS-SF-Static
-%   4) MS-SF-Static
-% together with the static multi-satellite weight sweep
-%   alphaSat2 in {0, 0.25, 0.5, 1}.
-% The performance curves are reported by angle RMSE, reference-Doppler
-% RMSE, and estimator resolve rate.
+% The script now reuses the shared dev/common helpers so that the static
+% performance path stays aligned with the main dev scripts while keeping
+% Monte Carlo bookkeeping local to this perf entry.
 clear(); close all; clc;
 
 %% Parameters
@@ -34,7 +27,7 @@ truthLatlon = usrLla(1:2, 1);
 utc = datetime([2026, 03, 18, 17, 08, 0], ...
   'TimeZone', 'UTC', ...
   'Format', 'yyyy-MM-dd HH:mm:ss.SSSSSS');
-tle = tleread(localResolveTlePath("starlink_pair_4154_1165_20260318_170800.tle"));
+tle = tleread(resolveTestDataPath("starlink_pair_4154_1165_20260318_170800.tle", "tle"));
 arrUpa = createUpa(numElem, elemSpace);
 
 gridSize = [50 50];
@@ -43,7 +36,7 @@ searchRange = [truthLatlon(1) - searchMarginDeg, truthLatlon(1) + searchMarginDe
                truthLatlon(2) - searchMarginDeg, truthLatlon(2) + searchMarginDeg];
 
 fdRange = [-2e5, 0];
-weightSweepAlpha = [0, 0.25, 0.5, 1];
+weightSweepAlpha = [0; 0.25; 0.5; 1];
 optVerbose = false;
 
 snrDb = -20:3:10;
@@ -83,6 +76,7 @@ truth.deltaFdTrueHz = reshape(truthDopplerState.deltaFdRefFrame, [], 1);
 truth.refWeight = scene.ref.weight(:);
 truth.refStateSource = string(refState.source);
 truth.pickAux = satPickAux;
+fdRange = expandRangeToTruth(fdRange, [truth.fdRefTrueHz; truth.fdSatTrueHz(:)], 0.1, 2e4);
 
 sceneRefOnly = selectSatScene(scene, refSatIdxLocal);
 sceneOtherOnly = selectSatScene(scene, otherSatIdxLocal);
@@ -93,8 +87,10 @@ viewMsTemplate = buildDoaDopplerEstView(scene, [], gridSize, searchRange, E);
 
 truthLocalDoaSingle = reshape(sceneRefOnly.localDoa(:, 1), 2, 1);
 truthLocalDoaCell = localBuildLocalDoaCell(scene);
-localDoaJacCell = localBuildLatlonToLocalDoaJac( ...
-  scene, utc, tle, usrLla, arrUpa, satIdx, refSatIdxGlobal, 15, 55);
+% Note: do not build an array-only DoA CRB here. For this script, the
+% meaningful theoretical baseline is the pilot/static DoA-Doppler CRB,
+% because the estimated global DoA is coupled with reference-link Doppler
+% in the actual signal model.
 
 %% Pilot waveform and snapshot model
 [pilotSym, ~] = genPilotSymbol(numUsr, numSym, 'pn', pwrSource);
@@ -120,8 +116,8 @@ idxSsStat = 3;
 idxMsStat = 4;
 idxWeightStart = 5;
 
-doAOnlyOpt = struct();
-doAOnlyOpt.useLogObjective = true;
+doaOnlyOpt = struct();
+doaOnlyOpt.useLogObjective = true;
 
 staticOptBase = struct();
 staticOptBase.useLogObjective = true;
@@ -156,49 +152,26 @@ for iSnr = 1:numParam
       steeringInfo, pilotWave, linkParam, carrierFreq, waveInfo.sampleRate, ...
       pwrNoise, pathGain, snapOpt);
 
-    rxSigRefOnly = selectRxSigBySat(rxSig, refSatIdxLocal, 'singleFrame');
-    rxSigOtherOnly = selectRxSigBySat(rxSig, otherSatIdxLocal, 'singleFrame');
-
     viewRef = viewRefTemplate;
-    viewRef.rxSigSf = rxSigRefOnly;
+    viewRef.rxSigSf = selectRxSigBySat(rxSig, refSatIdxLocal, 'singleFrame');
+
     viewOther = viewOtherTemplate;
-    viewOther.rxSigSf = rxSigOtherOnly;
+    viewOther.rxSigSf = selectRxSigBySat(rxSig, otherSatIdxLocal, 'singleFrame');
+
     viewMs = viewMsTemplate;
     viewMs.rxSigSf = rxSig;
 
-    caseRefDoa = runDoaOnlyCase(caseName(idxSsDoa), "single", ...
-      viewRef, wavelen, pilotWave, optVerbose, doAOnlyOpt);
-    caseMsDoa = runDoaOnlyCase(caseName(idxMsDoa), "multi", ...
-      viewMs, wavelen, pilotWave, optVerbose, doAOnlyOpt);
+    caseBundle = buildDoaDopplerStaticTransitionBundle( ...
+      viewRef, viewOther, viewMs, wavelen, pilotWave, carrierFreq, ...
+      waveInfo.sampleRate, fdRange, optVerbose, truth, otherSatIdxGlobal, ...
+      doaOnlyOpt, staticOptBase, weightSweepAlpha, [0.01; 0.01]);
 
-    staticRefOpt = staticOptBase;
-    staticRefOpt.initDoaParam = caseRefDoa.estResult.doaParamEst(:);
-
-    staticMsOpt = staticOptBase;
-    staticMsOpt.initDoaParam = caseMsDoa.estResult.doaParamEst(:);
-    staticMsOpt.initDoaHalfWidth = [0.01; 0.01];
-
-    caseSsStat = runStaticDoaDopplerCase(caseName(idxSsStat), "single", ...
-      viewRef, pilotWave, carrierFreq, waveInfo.sampleRate, fdRange, optVerbose, staticRefOpt);
-    caseMsStat = runStaticDoaDopplerCase(caseName(idxMsStat), "multi", ...
-      viewMs, pilotWave, carrierFreq, waveInfo.sampleRate, fdRange, optVerbose, staticMsOpt);
-
-    weightCase = repmat(caseMsStat, 1, numel(weightSweepAlpha));
-    for iAlpha = 1:numel(weightSweepAlpha)
-      alpha = weightSweepAlpha(iAlpha);
-      if abs(alpha - 1) < eps
-        weightCase(iAlpha).displayName = caseName(idxWeightStart + iAlpha - 1);
-        continue;
-      end
-
-      currentOpt = staticMsOpt;
-      currentOpt.satWeight = [1; alpha];
-      weightCase(iAlpha) = runStaticDoaDopplerCase( ...
-        caseName(idxWeightStart + iAlpha - 1), "multi", ...
-        viewMs, pilotWave, carrierFreq, waveInfo.sampleRate, fdRange, optVerbose, currentOpt);
-    end
-
-    caseList = [caseRefDoa, caseMsDoa, caseSsStat, caseMsStat, weightCase];
+    caseList = [ ...
+      caseBundle.caseRefDoa, ...
+      caseBundle.caseMsDoa, ...
+      caseBundle.caseStaticRefOnly, ...
+      caseBundle.caseStaticMs, ...
+      caseBundle.weightCase];
     truthFdList = [NaN, NaN, truth.fdSatTrueHz(refSatIdxLocal), truth.fdRefTrueHz, ...
       repmat(truth.fdRefTrueHz, 1, numel(weightSweepAlpha))];
 
@@ -256,19 +229,13 @@ caseSummaryTable = localBuildCaseSummaryTable(caseName, snrDb(snrSelectIdx), ...
   resolveRate(snrSelectIdx, :), p95AngleDeg(snrSelectIdx, :), p95FdHz(snrSelectIdx, :));
 
 %% CRB curves
-crbDoaSingleOpt = struct();
-crbDoaSingleOpt.localDoaJac = localDoaJacCell{refSatIdxLocal};
-crbDoaSingleOpt.paramName = ["lat", "lon"];
-
-crbDoaJointOpt = struct();
-crbDoaJointOpt.localDoaJac = localDoaJacCell;
-crbDoaJointOpt.paramName = ["lat", "lon"];
-
 crbDdOpt = struct();
 crbDdOpt.doaType = 'latlon';
 
-crbDoaOnlySingleDeg = zeros(numParam, 1);
-crbDoaOnlyJointDeg = zeros(numParam, 1);
+% Use the pilot/static DoA-Doppler CRB as the meaningful baseline for both
+% the DoA-only and static estimators. An array-only DoA CRB from crbDetDoa
+% is too optimistic here because it omits the reference-link Doppler
+% nuisance that is present in the actual single-frame signal model.
 crbDdSingleDeg = zeros(numParam, 1);
 crbDdJointDeg = zeros(numParam, 1);
 crbDdSingleFd = zeros(numParam, 1);
@@ -277,23 +244,21 @@ crbDdJointFd = zeros(numParam, 1);
 for iSnr = 1:numParam
   pwrNoise = pwrSource / (10^(snrDb(iSnr) / 10));
 
-  [crbDoaSingle, ~] = crbDetDoa(sceneRefOnly.array{1}, wavelen, ...
-    truthLocalDoaSingle, pwrSource, pwrNoise, numSnap, crbDoaSingleOpt);
-  [crbDoaJoint, ~] = crbDetDoa(scene.array, wavelen, truthLocalDoaCell, ...
-    pwrSource, pwrNoise, numSnap, crbDoaJointOpt);
-
   [crbDdSingle, ~] = crbPilotSfDoaDoppler(sceneRefOnly, pilotWave, ...
     carrierFreq, waveInfo.sampleRate, truthLatlon, truth.fdRefTrueHz, 1, pwrNoise, crbDdOpt);
   [crbDdJoint, ~] = crbPilotSfDoaDoppler(scene, pilotWave, ...
     carrierFreq, waveInfo.sampleRate, truthLatlon, truth.fdRefTrueHz, 1, pwrNoise, crbDdOpt);
 
-  crbDoaOnlySingleDeg(iSnr) = projectCrbToAngleMetric(crbDoaSingle, truthLatlon, 'latlon');
-  crbDoaOnlyJointDeg(iSnr) = projectCrbToAngleMetric(crbDoaJoint, truthLatlon, 'latlon');
   crbDdSingleDeg(iSnr) = projectCrbToAngleMetric(crbDdSingle(1:2, 1:2), truthLatlon, 'latlon');
   crbDdJointDeg(iSnr) = projectCrbToAngleMetric(crbDdJoint(1:2, 1:2), truthLatlon, 'latlon');
   crbDdSingleFd(iSnr) = sqrt(crbDdSingle(3, 3));
   crbDdJointFd(iSnr) = sqrt(crbDdJoint(3, 3));
 end
+
+% Reuse the pilot/static CRB curves when plotting the DoA-only cases as a
+% conservative and model-consistent lower bound in the same signal model.
+crbDoaOnlySingleDeg = crbDdSingleDeg;
+crbDoaOnlyJointDeg = crbDdJointDeg;
 
 %% Summary tables
 fprintf('\n========== Weight-sweep best summary ==========%s', newline);
@@ -324,8 +289,8 @@ legend({ ...
   'SS-SF-Static', ...
   'MS-SF-Static', ...
   'MS-SF-Static-W0.25', ...
-  'SS-SF-DoA CRB', ...
-  'MS-SF-DoA CRB', ...
+  'SS/MF-consistent DoA lower bound (single)', ...
+  'SS/MF-consistent DoA lower bound (joint)', ...
   'SS-SF-Static CRB', ...
   'MS-SF-Static CRB'}, ...
   'Location', 'southwest');
@@ -372,129 +337,109 @@ legend(compose('alpha = %.2f', weightSweepAlpha), 'Location', 'southwest');
 %% Optional snapshot save
 saveExpSnapshot("doaDopplerStatDualSatUraEciPerf");
 
-%% Local function
+%% Local functions
 function [angleErrDeg, fdErrHz, isResolved] = localExtractCaseMetric(caseInfo, truthLatlon, truthFdHz)
-%LOCALEXTRACTCASEMETRIC Extract one compact metric tuple from a case result.
+%LOCALEXTRACTCASEMETRIC Extract one compact metric triple from one case.
 
-estResult = getDoaDopplerFieldOrDefault(caseInfo, 'estResult', struct());
+angleErrDeg = NaN;
+fdErrHz = NaN;
+isResolved = false;
+
+if ~isfield(caseInfo, 'estResult') || isempty(caseInfo.estResult)
+  return;
+end
+
+estResult = caseInfo.estResult;
 latlonEst = getDoaDopplerLatlonEst(estResult);
-[angleErrDeg, ~, ~] = calcLatlonAngleError(latlonEst, truthLatlon);
+if isfinite(latlonEst(1)) && isfinite(latlonEst(2))
+  angleErrDeg = calcLatlonAngleError(latlonEst, truthLatlon);
+end
 
 fdRefEst = getDoaDopplerFieldOrDefault(estResult, 'fdRefEst', NaN);
-if isfinite(truthFdHz) && isfinite(fdRefEst)
-  fdErrHz = fdRefEst - truthFdHz;
-else
-  fdErrHz = NaN;
+if isscalar(fdRefEst) && isfinite(fdRefEst) && isfinite(truthFdHz)
+  fdErrHz = abs(fdRefEst - truthFdHz);
 end
 
-isResolved = logical(getDoaDopplerFieldOrDefault(estResult, 'isResolved', false));
+if isfield(estResult, 'isResolved') && ~isempty(estResult.isResolved)
+  isResolved = logical(estResult.isResolved);
+else
+  isResolved = isfinite(angleErrDeg);
 end
+end
+
 
 function summaryTable = localBuildWeightSummaryTable(snrDb, weightAlpha, rmseAngleDeg, rmseFdHz, resolveRate)
-%LOCALBUILDWEIGHTSUMMARYTABLE Build one compact best-weight table per SNR.
+%LOCALBUILDWEIGHTSUMMARYTABLE Build one compact summary for the sat-weight sweep.
 
-numSnr = numel(snrDb);
-bestAlphaAngle = nan(numSnr, 1);
-bestAngleRmseDeg = nan(numSnr, 1);
-bestAlphaFd = nan(numSnr, 1);
-bestFdRmseHz = nan(numSnr, 1);
-bestResolveRate = nan(numSnr, 1);
-
-for iSnr = 1:numSnr
-  [bestAngleRmseDeg(iSnr), idxAngle] = min(rmseAngleDeg(iSnr, :), [], 'omitnan');
-  if ~isempty(idxAngle) && isfinite(bestAngleRmseDeg(iSnr))
-    bestAlphaAngle(iSnr) = weightAlpha(idxAngle);
-    bestResolveRate(iSnr) = resolveRate(iSnr, idxAngle);
-  end
-
-  [bestFdRmseHz(iSnr), idxFd] = min(rmseFdHz(iSnr, :), [], 'omitnan');
-  if ~isempty(idxFd) && isfinite(bestFdRmseHz(iSnr))
-    bestAlphaFd(iSnr) = weightAlpha(idxFd);
+numWeight = numel(weightAlpha);
+[bestAngleDeg, bestIdx] = min(rmseAngleDeg, [], 2, 'omitnan');
+bestFdHz = nan(size(bestAngleDeg));
+bestResolve = nan(size(bestAngleDeg));
+for iRow = 1:numel(bestIdx)
+  idx = bestIdx(iRow);
+  if isfinite(idx) && idx >= 1 && idx <= numWeight
+    bestFdHz(iRow) = rmseFdHz(iRow, idx);
+    bestResolve(iRow) = resolveRate(iRow, idx);
   end
 end
-
-summaryTable = table(snrDb(:), bestAlphaAngle, bestAngleRmseDeg, ...
-  bestAlphaFd, bestFdRmseHz, bestResolveRate, ...
-  'VariableNames', {'snrDb', 'bestAlphaAngle', 'bestAngleRmseDeg', ...
-  'bestAlphaFd', 'bestFdRmseHz', 'bestResolveRate'});
+summaryTable = table(snrDb(:), weightAlpha(bestIdx(:)), bestAngleDeg(:), bestFdHz(:), ...
+  bestResolve(:), 'VariableNames', {'snrDb', 'bestAlphaSat2', 'bestAngleRmseDeg', ...
+  'bestFdRmseHz', 'bestResolveRate'});
 end
+
 
 function summaryTable = localBuildCaseSummaryTable(caseName, snrDb, rmseAngleDeg, rmseFdHz, resolveRate, p95AngleDeg, p95FdHz)
-%LOCALBUILDCASESUMMARYTABLE Build one case summary row per estimator.
+%LOCALBUILDCASESUMMARYTABLE Build one compact case summary row per estimator.
 
-summaryTable = table(caseName(:), repmat(snrDb, numel(caseName), 1), ...
-  reshape(rmseAngleDeg, [], 1), reshape(rmseFdHz, [], 1), ...
-  reshape(resolveRate, [], 1), reshape(p95AngleDeg, [], 1), ...
-  reshape(p95FdHz, [], 1), ...
-  'VariableNames', {'displayName', 'snrDb', 'angleRmseDeg', ...
-  'fdRefRmseHz', 'resolveRate', 'angleP95Deg', 'fdRefP95Hz'});
+summaryTable = table(caseName(:), repmat(snrDb, numel(caseName), 1), rmseAngleDeg(:), ...
+  rmseFdHz(:), resolveRate(:), p95AngleDeg(:), p95FdHz(:), ...
+  'VariableNames', {'displayName', 'snrDb', 'angleRmseDeg', 'fdRmseHz', ...
+  'resolveRate', 'angleP95Deg', 'fdP95Hz'});
 end
 
-function doaGridCell = localBuildDoaGridCell(sceneRef, gridSize, searchRange, E)
-%LOCALBUILDDOAGRIDCELL Build one lat-lon search grid per selected satellite.
-
-numSat = sceneRef.numSat;
-doaGridCell = cell(1, numSat);
-for iSat = 1:numSat
-  doaGridCell{iSat} = genDoaGrid("latlon", 2, gridSize, searchRange, ...
-    'eci', datevec(sceneRef.utc), sceneRef.satPosEci(:, iSat), ...
-    sceneRef.rotMat{iSat}, E);
-end
-end
 
 function localDoaCell = localBuildLocalDoaCell(scene)
-%LOCALBUILDLOCALDOACELL Convert scene.localDoa into a 1xL cell array.
+%LOCALBUILDLOCALDOACELL Collect truth local DoA for CRB evaluation.
 
-numSat = numel(scene.array);
+numSat = scene.numSat;
 localDoaCell = cell(1, numSat);
 for iSat = 1:numSat
-  localDoaCell{iSat} = reshape(scene.localDoa(:, iSat), 2, 1);
+  localDoaCell{iSat} = reshape(scene.localDoa(:, iSat), 2, []);
 end
 end
+
 
 function jacCell = localBuildLatlonToLocalDoaJac(scene, utc, tle, usrLla, arrUpa, ...
-  satIdxSel, refSatIdxGlobal, minUsrElevationDeg, maxSatOffAxisDeg)
-%LOCALBUILDLATLONTOLOCALDOAJAC Build numerical Jacobians for multi-array CRB.
+  satIdx, refSatIdxGlobal, minElevDeg, maxElevDeg)
+%LOCALBUILDLATLONTOLOCALDOAJAC Build local Jacobians for static DoA CRB.
+% The Jacobian is with respect to global lat/lon in degrees so that it is
+% consistent with paramName=["lat","lon"] and projectCrbToAngleMetric(...,'latlon').
 
-numSat = numel(scene.array);
-baseLocalDoa = scene.localDoa;
-deltaDeg = 1e-6;
-
+numSat = scene.numSat;
 jacCell = cell(1, numSat);
+truthLatlon = usrLla(1:2, 1);
+stepDeg = 1e-4;
+
 for iSat = 1:numSat
-  jacCell{iSat} = zeros(2, 2);
-end
+  jacMat = zeros(2, 2);
+  for iDim = 1:2
+    latlonPlus = truthLatlon;
+    latlonMinus = truthLatlon;
+    latlonPlus(iDim) = latlonPlus(iDim) + stepDeg;
+    latlonMinus(iDim) = latlonMinus(iDim) - stepDeg;
 
-for iParam = 1:2
-  usrPert = usrLla;
-  usrPert(iParam, 1) = usrPert(iParam, 1) + deltaDeg;
-  scenePert = genMultiSatScene( ...
-    utc, tle, usrPert, satIdxSel, [], arrUpa, ...
-    minUsrElevationDeg, maxSatOffAxisDeg, "satellite", refSatIdxGlobal);
-  deltaLocalDoa = (scenePert.localDoa - baseLocalDoa) / deltaDeg;
+    usrLlaPlus = [latlonPlus; usrLla(3, 1)];
+    usrLlaMinus = [latlonMinus; usrLla(3, 1)];
 
-  for iSat = 1:numSat
-    jacCell{iSat}(:, iParam) = reshape(deltaLocalDoa(:, iSat), 2, 1);
+    scenePlus = genMultiSatScene(utc, tle, usrLlaPlus, satIdx, [], arrUpa, ...
+      minElevDeg, maxElevDeg, "satellite", refSatIdxGlobal);
+    sceneMinus = genMultiSatScene(utc, tle, usrLlaMinus, satIdx, [], arrUpa, ...
+      minElevDeg, maxElevDeg, "satellite", refSatIdxGlobal);
+
+    doaPlus = scenePlus.localDoa(:, iSat);
+    doaMinus = sceneMinus.localDoa(:, iSat);
+    jacMat(:, iDim) = (doaPlus - doaMinus) / (2 * stepDeg);
   end
+  jacCell{iSat} = jacMat;
 end
-end
-
-function tlePath = localResolveTlePath(fileName)
-%LOCALRESOLVETLEPATH Resolve one TLE file from common test locations.
-
-candidateList = { ...
-  fullfile('/tle', fileName), ...
-  fullfile('tle', fileName), ...
-  fullfile('test', 'data', 'tle', fileName), ...
-  fullfile('..', 'data', 'tle', fileName)};
-
-for iPath = 1:numel(candidateList)
-  if exist(candidateList{iPath}, 'file')
-    tlePath = candidateList{iPath};
-    return;
-  end
-end
-
-error('doaDopplerStatDualSatUraEciPerf:TleFileNotFound', ...
-  'Unable to locate the TLE file "%s".', fileName);
 end

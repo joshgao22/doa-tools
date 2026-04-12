@@ -135,13 +135,28 @@ end
 
 
 function satIdxGlobal = localResolveGlobalSatIdx(scene, refSatIdxLocal)
-%LOCALRESOLVEGLOBALSATIDX Resolve the global index when scene.satIdx exists.
+%LOCALRESOLVEGLOBALSATIDX Resolve the global satellite index when available.
 
 satIdxGlobal = NaN;
-if isfield(scene, 'satIdx') && ~isempty(scene.satIdx)
+
+if isstruct(scene) && isfield(scene, 'satIdx') && ~isempty(scene.satIdx)
   satIdxVec = reshape(scene.satIdx, [], 1);
   if numel(satIdxVec) >= refSatIdxLocal
     satIdxGlobal = satIdxVec(refSatIdxLocal);
+    return;
+  end
+end
+
+if isstruct(scene) && isfield(scene, 'ref') && isstruct(scene.ref) && ...
+    isfield(scene.ref, 'satIdxLocal') && isfield(scene.ref, 'satIdxGlobal')
+  refSatIdxLocalScene = scene.ref.satIdxLocal;
+  refSatIdxGlobalScene = scene.ref.satIdxGlobal;
+  if isscalar(refSatIdxLocalScene) && isnumeric(refSatIdxLocalScene) && ...
+      isfinite(refSatIdxLocalScene) && mod(refSatIdxLocalScene, 1) == 0 && ...
+      isscalar(refSatIdxGlobalScene) && isnumeric(refSatIdxGlobalScene) && ...
+      isfinite(refSatIdxGlobalScene) && mod(refSatIdxGlobalScene, 1) == 0 && ...
+      round(refSatIdxLocalScene) == refSatIdxLocal
+    satIdxGlobal = refSatIdxGlobalScene;
   end
 end
 end

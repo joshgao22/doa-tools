@@ -214,6 +214,7 @@ scene.usrPosEci = usrPosEci;
 scene.usrVelEci = usrVelEci;
 
 scene.numSat = numSat;
+scene.satIdx = satIdx;
 scene.satPosEci = satPosEci;
 scene.satVelEci = satVelEci;
 scene.access = access;

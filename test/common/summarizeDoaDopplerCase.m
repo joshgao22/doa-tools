@@ -5,15 +5,8 @@ estResult = getDoaDopplerFieldOrDefault(caseInfo, 'estResult', struct());
 latlonEst = getDoaDopplerLatlonEst(estResult);
 [angleErrDeg, latErrDeg, lonErrDeg] = calcLatlonAngleError(latlonEst, truth.latlonTrueDeg);
 
-truthFdRef = getDoaDopplerFieldOrDefault(truth, 'fdRefFit', NaN);
-if ~isfinite(truthFdRef)
-  truthFdRef = getDoaDopplerFieldOrDefault(truth, 'fdRefTrueHz', NaN);
-end
-
-truthFdRate = getDoaDopplerFieldOrDefault(truth, 'fdRateFit', NaN);
-if ~isfinite(truthFdRate)
-  truthFdRate = getDoaDopplerFieldOrDefault(truth, 'fdRateTrueHzPerSec', NaN);
-end
+truthFdRef = localResolveTruthFdRef(truth);
+truthFdRate = localResolveTruthFdRate(truth);
 
 fdRefEst = getDoaDopplerFieldOrDefault(estResult, 'fdRefEst', NaN);
 fdRateEst = getDoaDopplerFieldOrDefault(estResult, 'fdRateEst', NaN);
@@ -82,5 +75,39 @@ end
 fdLineEst = fdRefEst + fdRateEst * truthTime;
 if numel(fdLineEst) == numel(truthFdLine)
   fdLineRmseHz = sqrt(mean((fdLineEst(:) - truthFdLine(:)).^2));
+end
+end
+
+
+function truthFdRef = localResolveTruthFdRef(truth)
+%LOCALRESOLVETRUTHFDREF Resolve reference-Doppler truth with subset awareness.
+% Prefer subset-specific reference metadata when present so single-satellite
+% ablation cases do not accidentally compare against the full-scene ref.
+
+truthFdRef = getDoaDopplerFieldOrDefault(truth, 'fdRefTrueHz', NaN);
+
+refSatIdxGlobal = getDoaDopplerFieldOrDefault(truth, 'refSatIdxGlobal', NaN);
+truthSatIdx = reshape(getDoaDopplerFieldOrDefault(truth, 'selectedSatIdxGlobal', []), [], 1);
+truthFdSat = reshape(getDoaDopplerFieldOrDefault(truth, 'fdSatTrueHz', []), [], 1);
+if isfinite(refSatIdxGlobal) && ~isempty(truthSatIdx) && ~isempty(truthFdSat)
+  matchIdx = find(truthSatIdx == refSatIdxGlobal, 1, 'first');
+  if ~isempty(matchIdx) && numel(truthFdSat) >= matchIdx && isfinite(truthFdSat(matchIdx))
+    truthFdRef = truthFdSat(matchIdx);
+    return;
+  end
+end
+
+if ~isfinite(truthFdRef)
+  truthFdRef = getDoaDopplerFieldOrDefault(truth, 'fdRefFit', NaN);
+end
+end
+
+
+function truthFdRate = localResolveTruthFdRate(truth)
+%LOCALRESOLVETRUTHFDRATE Resolve reference-rate truth with fallback.
+
+truthFdRate = getDoaDopplerFieldOrDefault(truth, 'fdRateTrueHzPerSec', NaN);
+if ~isfinite(truthFdRate)
+  truthFdRate = getDoaDopplerFieldOrDefault(truth, 'fdRateFit', NaN);
 end
 end
