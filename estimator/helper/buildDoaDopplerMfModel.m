@@ -99,6 +99,9 @@ end
 if ~isfield(modelOpt, 'debugMaxEvalTrace') || isempty(modelOpt.debugMaxEvalTrace)
   modelOpt.debugMaxEvalTrace = 400;
 end
+if ~isfield(modelOpt, 'disableUnknownWarmAnchor') || isempty(modelOpt.disableUnknownWarmAnchor)
+  modelOpt.disableUnknownWarmAnchor = false;
+end
 
 if ~isscalar(modelOpt.lightSpeed) || ~isfinite(modelOpt.lightSpeed) || modelOpt.lightSpeed <= 0
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidLightSpeed', ...
@@ -157,6 +160,10 @@ if ~isscalar(modelOpt.debugMaxEvalTrace) || modelOpt.debugMaxEvalTrace <= 0 || .
     mod(modelOpt.debugMaxEvalTrace, 1) ~= 0
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidDebugMaxEvalTrace', ...
     'modelOpt.debugMaxEvalTrace must be a positive integer scalar.');
+end
+if ~isscalar(modelOpt.disableUnknownWarmAnchor) || ~islogical(modelOpt.disableUnknownWarmAnchor)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidDisableUnknownWarmAnchor', ...
+    'modelOpt.disableUnknownWarmAnchor must be a logical scalar.');
 end
 if ~modelOpt.debugEnable
   modelOpt.debugStoreEvalTrace = false;
@@ -348,6 +355,7 @@ model.debugEnable = modelOpt.debugEnable;
 model.debugTruth = modelOpt.debugTruth;
 model.debugStoreEvalTrace = modelOpt.debugStoreEvalTrace;
 model.debugMaxEvalTrace = modelOpt.debugMaxEvalTrace;
+model.disableUnknownWarmAnchor = logical(modelOpt.disableUnknownWarmAnchor);
 [doaLbCache, doaUbCache] = localBuildDoaBounds(model);
 model.doaLb = doaLbCache;
 model.doaUb = doaUbCache;

@@ -49,6 +49,15 @@ end
 if ~isfield(modelOpt, 'evalOnly') || isempty(modelOpt.evalOnly)
   modelOpt.evalOnly = false;
 end
+if ~isfield(modelOpt, 'useScaledSolver') || isempty(modelOpt.useScaledSolver)
+  modelOpt.useScaledSolver = true;
+end
+if ~isfield(modelOpt, 'enableDoaAnchorFallback') || isempty(modelOpt.enableDoaAnchorFallback)
+  modelOpt.enableDoaAnchorFallback = true;
+end
+if ~isfield(modelOpt, 'doaAnchorFallbackObjTol') || isempty(modelOpt.doaAnchorFallbackObjTol)
+  modelOpt.doaAnchorFallbackObjTol = 2.0;
+end
 
 if ~isscalar(modelOpt.lightSpeed) || ~isfinite(modelOpt.lightSpeed) || modelOpt.lightSpeed <= 0
   error('estimatorDoaDopplerMlePilotSfOpt:InvalidLightSpeed', ...
@@ -90,6 +99,11 @@ end
 if ~isscalar(modelOpt.evalOnly) || (~islogical(modelOpt.evalOnly) && ~ismember(modelOpt.evalOnly, [0, 1]))
   error('estimatorDoaDopplerMlePilotSfOpt:InvalidEvalOnly', ...
     'modelOpt.evalOnly must be a logical scalar.');
+end
+if ~isscalar(modelOpt.useScaledSolver) || ...
+    (~islogical(modelOpt.useScaledSolver) && ~ismember(modelOpt.useScaledSolver, [0, 1]))
+  error('estimatorDoaDopplerMlePilotSfOpt:InvalidScaledSolver', ...
+    'modelOpt.useScaledSolver must be a logical scalar.');
 end
 modelOpt.evalOnly = logical(modelOpt.evalOnly);
 end
@@ -172,6 +186,9 @@ model.initDoaParam = modelOpt.initDoaParam;
 model.initDoaHalfWidth = reshape(modelOpt.initDoaHalfWidth, [], 1);
 model.satWeight = localParseSatWeight(modelOpt.satWeight, numSat);
 model.evalOnly = logical(modelOpt.evalOnly);
+model.useScaledSolver = logical(modelOpt.useScaledSolver);
+model.enableDoaAnchorFallback = logical(modelOpt.enableDoaAnchorFallback);
+model.doaAnchorFallbackObjTol = double(modelOpt.doaAnchorFallbackObjTol);
 model.optimOpt = modelOpt.optimOpt;
 [doaLbCache, doaUbCache] = localBuildDoaBounds(model);
 model.doaLb = doaLbCache;

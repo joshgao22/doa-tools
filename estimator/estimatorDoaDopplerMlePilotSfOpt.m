@@ -63,16 +63,105 @@ if model.evalOnly
   exitflag = 99;
   optimInfo = localBuildEvalOnlyOptimInfo(runTimeSec, model);
 else
-  [optVar, fval, exitflag, output] = fmincon( ...
-    objFun, initParam, [], [], [], [], lb, ub, [], baseOptimOpt);
+  if model.useScaledSolver
+    [solveFun, z0, lbSolve, ubSolve, optScale, optCenter] = localBuildScaledProblem(model, initParam, lb, ub);
+    [optVarScaled, fval, exitflag, output] = fmincon( ...
+      solveFun, z0, [], [], [], [], lbSolve, ubSolve, [], baseOptimOpt);
+    optVar = localRecoverScaledOptVar(model, optVarScaled, optScale, optCenter, lb, ub);
+  else
+    [optVar, fval, exitflag, output] = fmincon( ...
+      objFun, initParam, [], [], [], [], lb, ub, [], baseOptimOpt);
+  end
   runTimeSec = toc(runTimer);
   optVar = localSortOptVar(model, optVar);
   [~, pathGain, noiseVar, estAux] = evalDoaDopplerSfProfileLike(model, optVar);
   optimInfo = localBuildOptimInfo(output, exitflag, runTimeSec, baseOptimOpt, model);
+
+  freeCand = localBuildSolveCandidate('freeJoint', optVar, fval, pathGain, noiseVar, estAux, exitflag, output);
+  if localShouldTryDoaAnchorFallback(model)
+    fixedCand = localSolveFixedDoaAnchorCandidate(model);
+    [selectedCand, optimInfo] = localSelectDoaAnchorCandidate(model, freeCand, fixedCand, optimInfo);
+    optVar = selectedCand.optVar;
+    fval = selectedCand.fval;
+    pathGain = selectedCand.pathGain;
+    noiseVar = selectedCand.noiseVar;
+    estAux = selectedCand.estAux;
+    exitflag = max(exitflag, selectedCand.exitflag);
+  end
 end
 
 estResult = localBuildEstResult(model, estAux, pathGain, noiseVar, ...
   initParam, optVar, fval, exitflag, optimInfo);
+end
+
+
+function tf = localShouldTryDoaAnchorFallback(model)
+%LOCALSHOULDTRYDOAANCHORFALLBACK Return true when one fixed-DoA fallback is useful.
+
+tf = logical(localGetStructField(model, 'enableDoaAnchorFallback', false));
+if ~tf
+  return;
+end
+tf = tf && model.numSat > 1 && model.numSource == 1 && ...
+  ~isempty(localGetStructField(model, 'initDoaParam', [])) && ...
+  any(model.satWeight(2:end) > 0);
+if ~tf
+  return;
+end
+
+% When the caller already supplies one explicit local DoA box, the static
+% solver is expected to refine DoA inside that box rather than freeze it at
+% the DoA-only anchor. Reusing the fixed-DoA fallback in that regime can
+% collapse all positive sat-weight cases to the same anchor DoA while fdRef
+% still moves, which is exactly the bad branch we want to avoid.
+doaHalfWidth = localGetStructField(model, 'initDoaHalfWidth', []);
+tf = isempty(doaHalfWidth) || ~any(doaHalfWidth(:) > 0);
+end
+
+
+function cand = localSolveFixedDoaAnchorCandidate(model)
+%LOCALSOLVEFIXEDDOAANCHORCANDIDATE Solve one fdRef-only candidate at the anchor DoA.
+
+anchorDoa = reshape(model.initDoaParam, 2, []);
+objFun = @(fdRef) evalDoaDopplerSfProfileLike(model, [anchorDoa(:); fdRef]);
+[fdRefBest, fvalBest] = fminbnd(objFun, model.fdRange(1), model.fdRange(2));
+optVarBest = localSortOptVar(model, [anchorDoa(:); fdRefBest]);
+[~, pathGainBest, noiseVarBest, estAuxBest] = evalDoaDopplerSfProfileLike(model, optVarBest);
+cand = localBuildSolveCandidate('fixedDoaAnchor', optVarBest, fvalBest, ...
+  pathGainBest, noiseVarBest, estAuxBest, 99, struct());
+end
+
+
+function cand = localBuildSolveCandidate(tag, optVar, fval, pathGain, noiseVar, estAux, exitflag, output)
+%LOCALBUILDSOLVECANDIDATE Pack one solve candidate for later selection.
+
+cand = struct();
+cand.tag = string(tag);
+cand.optVar = optVar(:);
+cand.fval = fval;
+cand.pathGain = pathGain;
+cand.noiseVar = noiseVar;
+cand.estAux = estAux;
+cand.exitflag = exitflag;
+cand.output = output;
+end
+
+
+function [selectedCand, optimInfo] = localSelectDoaAnchorCandidate(model, freeCand, fixedCand, optimInfo)
+%LOCALSELECTDOAANCHORCANDIDATE Pick between free-joint and fixed-DoA anchor candidates.
+
+selectedCand = freeCand;
+objGap = fixedCand.fval - freeCand.fval;
+objTol = max(0, localGetStructField(model, 'doaAnchorFallbackObjTol', 0));
+if isfinite(objGap) && (objGap <= objTol)
+  selectedCand = fixedCand;
+end
+
+optimInfo.selectedCandidateTag = char(selectedCand.tag);
+optimInfo.freeJointFval = freeCand.fval;
+optimInfo.fixedDoaAnchorFval = fixedCand.fval;
+optimInfo.doaAnchorObjGap = objGap;
+optimInfo.doaAnchorObjTol = objTol;
 end
 
 
@@ -206,6 +295,12 @@ optimInfo.numVar = 3 * model.numSource;
 optimInfo.display = 'off';
 optimInfo.modelType = 'sfStatic';
 optimInfo.solver = 'none';
+optimInfo.useScaledSolver = logical(localGetStructField(model, 'useScaledSolver', false));
+optimInfo.selectedCandidateTag = 'evalOnly';
+optimInfo.freeJointFval = NaN;
+optimInfo.fixedDoaAnchorFval = NaN;
+optimInfo.doaAnchorObjGap = NaN;
+optimInfo.doaAnchorObjTol = localGetStructField(model, 'doaAnchorFallbackObjTol', NaN);
 end
 
 
@@ -229,7 +324,53 @@ optimInfo.numVar = 3 * model.numSource;
 optimInfo.display = localGetStructField(optimOpt, 'Display', '');
 optimInfo.modelType = 'sfStatic';
 optimInfo.solver = 'fmincon';
+optimInfo.useScaledSolver = logical(localGetStructField(model, 'useScaledSolver', false));
+optimInfo.selectedCandidateTag = 'freeJoint';
+optimInfo.freeJointFval = NaN;
+optimInfo.fixedDoaAnchorFval = NaN;
+optimInfo.doaAnchorObjGap = NaN;
+optimInfo.doaAnchorObjTol = localGetStructField(model, 'doaAnchorFallbackObjTol', NaN);
 end
+
+function [solveFun, z0, lbScaled, ubScaled, varScale, varCenter] = localBuildScaledProblem(model, initParam, lb, ub)
+%LOCALBUILDSCALEDPROBLEM Build a centered and scaled optimization wrapper.
+% The SF static solver mixes DoA variables and fdRef variables whose native
+% magnitudes differ by several orders. A small scaling wrapper keeps the
+% fmincon search numerically balanced without changing the underlying
+% likelihood or variable semantics.
+
+varCenter = initParam(:);
+varScale = localBuildOptVarScale(model, lb, ub);
+z0 = zeros(size(varCenter));
+lbScaled = (lb(:) - varCenter) ./ varScale;
+ubScaled = (ub(:) - varCenter) ./ varScale;
+solveFun = @(zVar) evalDoaDopplerSfProfileLike(model, ...
+  localRecoverScaledOptVar(model, zVar, varScale, varCenter, lb, ub));
+end
+
+
+function varScale = localBuildOptVarScale(model, lb, ub)
+%LOCALBUILDOPTVARSCALE Build per-variable solver scales from bound spans.
+
+lb = lb(:);
+ub = ub(:);
+span = abs(ub - lb);
+numDoaVar = 2 * model.numSource;
+varScale = ones(size(span));
+varScale(1:numDoaVar) = max(span(1:numDoaVar), 1e-3);
+varScale(numDoaVar + 1:end) = max(span(numDoaVar + 1:end), 1);
+varScale(~isfinite(varScale) | varScale <= 0) = 1;
+end
+
+
+function optVar = localRecoverScaledOptVar(model, zVar, varScale, varCenter, lb, ub)
+%LOCALRECOVERSCALEDOPTVAR Recover one physical optimization vector.
+
+optVar = varCenter(:) + varScale(:) .* zVar(:);
+optVar = min(max(optVar, lb(:)), ub(:));
+optVar = localSortOptVar(model, optVar);
+end
+
 
 
 function fieldValue = localGetStructField(dataStruct, fieldName, defaultValue)

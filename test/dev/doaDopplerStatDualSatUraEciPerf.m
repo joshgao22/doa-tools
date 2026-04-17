@@ -1,19 +1,27 @@
 % DOADOPPLERSTATDUALSATURAECIPERF
-% Static single-frame performance sweep for one fixed dual-satellite pair.
-% The script now reuses the shared dev/common helpers so that the static
-% performance path stays aligned with the main dev scripts while keeping
-% Monte Carlo bookkeeping local to this perf entry.
+% Static single-frame Monte Carlo performance sweep for one fixed dual-satellite
+% pair. The estimation flow mirrors doaDopplerStatDualSatUraEci: same shared
+% static transition bundle, same sat2-weight ablation, and the same SF static
+% estimator behavior including the current DoA-anchor fallback path.
+%
+% Parallelization policy:
+% - The Monte Carlo outer task grid (SNR x repeat) is evaluated with parfor.
+% - The per-SNR CRB sweep is also evaluated with parfor.
+% - Lightweight summary/plot loops remain serial to avoid parfor overhead.
+% - Each Monte Carlo task uses a deterministic task-wise RNG seed so the perf
+%   run remains reproducible under parfor scheduling.
 clear(); close all; clc;
 
 %% Parameters
 numUsr = 1;
-numSym = 32;
-sampleRate = 122.88e6;
-symbolRate = 3.84e6;
+numSym = 512;
+sampleRate = 512e6;
+symbolRate = 128e6;
 osf = sampleRate / symbolRate;
-carrierFreq = 18e9;
+carrierFreq = 11.7e9;
 wavelen = 299792458 / carrierFreq;
-rng(253);
+baseSeed = 253;
+rng(baseSeed);
 
 elemSpace = wavelen / 2;
 numElem = [4 4];
@@ -35,13 +43,19 @@ searchMarginDeg = 5;
 searchRange = [truthLatlon(1) - searchMarginDeg, truthLatlon(1) + searchMarginDeg; ...
                truthLatlon(2) - searchMarginDeg, truthLatlon(2) + searchMarginDeg];
 
-fdRange = [-2e5, 0];
+fdRange = [-2e5, 2e5];
+enableWeightSweep = false;
 weightSweepAlpha = [0; 0.25; 0.5; 1];
+if ~enableWeightSweep
+  weightSweepAlpha = zeros(0, 1);
+end
+staticMsHalfWidth = [0.002; 0.002];
 optVerbose = false;
 
-snrDb = -20:3:10;
+snrDb = -20:2:15;
 numParam = numel(snrDb);
-numRepeat = 200;
+numRepeat = 2000;
+pwrNoiseList = pwrSource ./ (10.^(snrDb(:) / 10));
 
 %% Select satellites and build the reference scene
 [~, satAccess] = findVisibleSatFromTle(utc, tle, usrLla);
@@ -85,12 +99,10 @@ viewRefTemplate = buildDoaDopplerEstView(sceneRefOnly, [], gridSize, searchRange
 viewOtherTemplate = buildDoaDopplerEstView(sceneOtherOnly, [], gridSize, searchRange, E);
 viewMsTemplate = buildDoaDopplerEstView(scene, [], gridSize, searchRange, E);
 
-truthLocalDoaSingle = reshape(sceneRefOnly.localDoa(:, 1), 2, 1);
-truthLocalDoaCell = localBuildLocalDoaCell(scene);
 % Note: do not build an array-only DoA CRB here. For this script, the
 % meaningful theoretical baseline is the pilot/static DoA-Doppler CRB,
 % because the estimated global DoA is coupled with reference-link Doppler
-% in the actual signal model.
+% in the actual single-frame signal model.
 
 %% Pilot waveform and snapshot model
 [pilotSym, ~] = genPilotSymbol(numUsr, numSym, 'pn', pwrSource);
@@ -107,14 +119,17 @@ snapOpt.wave.carrierPhaseModel = 'none';
 pathGain = ones(scene.numSat, scene.numUser);
 
 %% Common estimator options
-caseName = ["SS-SF-DoA", "MS-SF-DoA", "SS-SF-Static", "MS-SF-Static", ...
-  "MS-SF-Static-W0.00", "MS-SF-Static-W0.25", "MS-SF-Static-W0.50", "MS-SF-Static-W1.00"];
-numCase = numel(caseName);
+caseName = ["SS-SF-DoA", "MS-SF-DoA", "SS-SF-Static", "MS-SF-Static"];
 idxSsDoa = 1;
 idxMsDoa = 2;
 idxSsStat = 3;
 idxMsStat = 4;
-idxWeightStart = 5;
+idxWeightStart = [];
+if enableWeightSweep
+  idxWeightStart = numel(caseName) + 1;
+  caseName = [caseName, compose('MS-SF-Static-W%.2f', weightSweepAlpha.')];
+end
+numCase = numel(caseName);
 
 doaOnlyOpt = struct();
 doaOnlyOpt.useLogObjective = true;
@@ -134,66 +149,49 @@ disp(table(truth.latlonTrueDeg(1), truth.latlonTrueDeg(2), truth.fdRefTrueHz, ..
   'VariableNames', {'latTrueDeg', 'lonTrueDeg', 'fdRefTrueHz', ...
   'refSatIdxLocal', 'refSatIdxGlobal', 'otherSatIdxLocal', 'otherSatIdxGlobal'}));
 
-%% Monte Carlo loop
+%% Monte Carlo loop (parallel over the full SNR x repeat task grid)
 angleErrDeg = nan(numRepeat, numParam, numCase);
 fdErrHz = nan(numRepeat, numParam, numCase);
 isResolved = false(numRepeat, numParam, numCase);
-progressbar('reset', numParam);
 
-for iSnr = 1:numParam
-  pwrNoise = pwrSource / (10^(snrDb(iSnr) / 10));
+[repeatGrid, snrGrid] = ndgrid(1:numRepeat, 1:numParam);
+repeatTaskIdx = repeatGrid(:);
+snrTaskIdx = snrGrid(:);
+numTask = numel(repeatTaskIdx);
 
-  angleErrCur = nan(numRepeat, numCase);
-  fdErrCur = nan(numRepeat, numCase);
-  isResolvedCur = false(numRepeat, numCase);
+angleErrTask = nan(numTask, numCase);
+fdErrTask = nan(numTask, numCase);
+isResolvedTask = false(numTask, numCase);
 
-  parfor iRepeat = 1:numRepeat
-    [rxSig, ~, ~, ~, ~] = genMultiSatSnapshots( ...
-      steeringInfo, pilotWave, linkParam, carrierFreq, waveInfo.sampleRate, ...
-      pwrNoise, pathGain, snapOpt);
+numProgressStep = numTask + numParam;
+progressbar('reset', numProgressStep);
+mcProgressQueue = parallel.pool.DataQueue;
+afterEach(mcProgressQueue, @(~) progressbar('advance'));
 
-    viewRef = viewRefTemplate;
-    viewRef.rxSigSf = selectRxSigBySat(rxSig, refSatIdxLocal, 'singleFrame');
+fprintf('\nRunning Monte Carlo task grid with parfor: %d SNR x %d repeats = %d tasks.%s', ...
+  numParam, numRepeat, numTask, newline);
 
-    viewOther = viewOtherTemplate;
-    viewOther.rxSigSf = selectRxSigBySat(rxSig, otherSatIdxLocal, 'singleFrame');
+parfor iTask = 1:numTask
+  iSnr = snrTaskIdx(iTask);
+  taskSeed = baseSeed + iTask - 1;
+  [angleVec, fdVec, resolvedVec] = localRunMonteCarloTask( ...
+    taskSeed, pwrNoiseList(iSnr), steeringInfo, pilotWave, linkParam, carrierFreq, ...
+    waveInfo.sampleRate, pathGain, snapOpt, viewRefTemplate, viewOtherTemplate, ...
+    viewMsTemplate, refSatIdxLocal, otherSatIdxLocal, wavelen, fdRange, ...
+    optVerbose, truth, otherSatIdxGlobal, doaOnlyOpt, staticOptBase, ...
+    weightSweepAlpha, staticMsHalfWidth, numCase);
 
-    viewMs = viewMsTemplate;
-    viewMs.rxSigSf = rxSig;
-
-    caseBundle = buildDoaDopplerStaticTransitionBundle( ...
-      viewRef, viewOther, viewMs, wavelen, pilotWave, carrierFreq, ...
-      waveInfo.sampleRate, fdRange, optVerbose, truth, otherSatIdxGlobal, ...
-      doaOnlyOpt, staticOptBase, weightSweepAlpha, [0.01; 0.01]);
-
-    caseList = [ ...
-      caseBundle.caseRefDoa, ...
-      caseBundle.caseMsDoa, ...
-      caseBundle.caseStaticRefOnly, ...
-      caseBundle.caseStaticMs, ...
-      caseBundle.weightCase];
-    truthFdList = [NaN, NaN, truth.fdSatTrueHz(refSatIdxLocal), truth.fdRefTrueHz, ...
-      repmat(truth.fdRefTrueHz, 1, numel(weightSweepAlpha))];
-
-    angleVec = nan(1, numCase);
-    fdVec = nan(1, numCase);
-    resolvedVec = false(1, numCase);
-    for iCase = 1:numCase
-      [angleVec(iCase), fdVec(iCase), resolvedVec(iCase)] = localExtractCaseMetric( ...
-        caseList(iCase), truth.latlonTrueDeg, truthFdList(iCase));
-    end
-
-    angleErrCur(iRepeat, :) = angleVec;
-    fdErrCur(iRepeat, :) = fdVec;
-    isResolvedCur(iRepeat, :) = resolvedVec;
-  end
-
-  angleErrDeg(:, iSnr, :) = angleErrCur;
-  fdErrHz(:, iSnr, :) = fdErrCur;
-  isResolved(:, iSnr, :) = isResolvedCur;
-  progressbar('advance');
+  angleErrTask(iTask, :) = angleVec;
+  fdErrTask(iTask, :) = fdVec;
+  isResolvedTask(iTask, :) = resolvedVec;
+  send(mcProgressQueue, iTask);
 end
-progressbar('end');
+
+for iCase = 1:numCase
+  angleErrDeg(:, :, iCase) = reshape(angleErrTask(:, iCase), numRepeat, numParam);
+  fdErrHz(:, :, iCase) = reshape(fdErrTask(:, iCase), numRepeat, numParam);
+  isResolved(:, :, iCase) = reshape(isResolvedTask(:, iCase), numRepeat, numParam);
+end
 
 %% Monte Carlo summaries
 rmseAngleDeg = nan(numParam, numCase);
@@ -219,16 +217,19 @@ for iCase = 1:numCase
   end
 end
 
-weightSummary = localBuildWeightSummaryTable(snrDb, weightSweepAlpha, ...
-  rmseAngleDeg(:, idxWeightStart:end), rmseFdHz(:, idxWeightStart:end), ...
-  resolveRate(:, idxWeightStart:end));
+weightSummary = table();
+if enableWeightSweep
+  weightSummary = localBuildWeightSummaryTable(snrDb, weightSweepAlpha, ...
+    rmseAngleDeg(:, idxWeightStart:end), rmseFdHz(:, idxWeightStart:end), ...
+    resolveRate(:, idxWeightStart:end));
+end
 
 snrSelectIdx = numParam;
 caseSummaryTable = localBuildCaseSummaryTable(caseName, snrDb(snrSelectIdx), ...
   rmseAngleDeg(snrSelectIdx, :), rmseFdHz(snrSelectIdx, :), ...
   resolveRate(snrSelectIdx, :), p95AngleDeg(snrSelectIdx, :), p95FdHz(snrSelectIdx, :));
 
-%% CRB curves
+%% CRB curves (parallel over SNR)
 crbDdOpt = struct();
 crbDdOpt.doaType = 'latlon';
 
@@ -241,8 +242,11 @@ crbDdJointDeg = zeros(numParam, 1);
 crbDdSingleFd = zeros(numParam, 1);
 crbDdJointFd = zeros(numParam, 1);
 
-for iSnr = 1:numParam
-  pwrNoise = pwrSource / (10^(snrDb(iSnr) / 10));
+fprintf('Running CRB SNR sweep with parfor: %d points.%s', numParam, newline);
+crbProgressQueue = parallel.pool.DataQueue;
+afterEach(crbProgressQueue, @(~) progressbar('advance'));
+parfor iSnr = 1:numParam
+  pwrNoise = pwrNoiseList(iSnr);
 
   [crbDdSingle, ~] = crbPilotSfDoaDoppler(sceneRefOnly, pilotWave, ...
     carrierFreq, waveInfo.sampleRate, truthLatlon, truth.fdRefTrueHz, 1, pwrNoise, crbDdOpt);
@@ -253,7 +257,9 @@ for iSnr = 1:numParam
   crbDdJointDeg(iSnr) = projectCrbToAngleMetric(crbDdJoint(1:2, 1:2), truthLatlon, 'latlon');
   crbDdSingleFd(iSnr) = sqrt(crbDdSingle(3, 3));
   crbDdJointFd(iSnr) = sqrt(crbDdJoint(3, 3));
+  send(crbProgressQueue, iSnr);
 end
+progressbar('end');
 
 % Reuse the pilot/static CRB curves when plotting the DoA-only cases as a
 % conservative and model-consistent lower bound in the same signal model.
@@ -261,8 +267,10 @@ crbDoaOnlySingleDeg = crbDdSingleDeg;
 crbDoaOnlyJointDeg = crbDdJointDeg;
 
 %% Summary tables
-fprintf('\n========== Weight-sweep best summary ==========%s', newline);
-disp(weightSummary);
+if enableWeightSweep
+  fprintf('\n========== Weight-sweep best summary ==========%s', newline);
+  disp(weightSummary);
+end
 
 fprintf('\n========== Case summary at highest SNR ==========%s', newline);
 disp(caseSummaryTable);
@@ -274,7 +282,6 @@ semilogy(snrDb, rmseAngleDeg(:, idxSsDoa), '-o', ...
   snrDb, rmseAngleDeg(:, idxMsDoa), '-s', ...
   snrDb, rmseAngleDeg(:, idxSsStat), '--o', ...
   snrDb, rmseAngleDeg(:, idxMsStat), '--s', ...
-  snrDb, rmseAngleDeg(:, idxWeightStart + 1), '--d', ...
   snrDb, crbDoaOnlySingleDeg, '-.', ...
   snrDb, crbDoaOnlyJointDeg, ':', ...
   snrDb, crbDdSingleDeg, '-.x', ...
@@ -288,7 +295,6 @@ legend({ ...
   'MS-SF-DoA', ...
   'SS-SF-Static', ...
   'MS-SF-Static', ...
-  'MS-SF-Static-W0.25', ...
   'SS/MF-consistent DoA lower bound (single)', ...
   'SS/MF-consistent DoA lower bound (joint)', ...
   'SS-SF-Static CRB', ...
@@ -298,7 +304,6 @@ legend({ ...
 subplot(1, 2, 2);
 semilogy(snrDb, rmseFdHz(:, idxSsStat), '--o', ...
   snrDb, rmseFdHz(:, idxMsStat), '--s', ...
-  snrDb, rmseFdHz(:, idxWeightStart + 1), '--d', ...
   snrDb, crbDdSingleFd, '-.x', ...
   snrDb, crbDdJointFd, ':x');
 grid on;
@@ -308,36 +313,83 @@ title('Static SF Reference Doppler Error');
 legend({ ...
   'SS-SF-Static', ...
   'MS-SF-Static', ...
-  'MS-SF-Static-W0.25', ...
   'SS-SF-Static CRB', ...
   'MS-SF-Static CRB'}, ...
   'Location', 'southwest');
 
 figure();
-subplot(1, 2, 1);
 plot(snrDb, resolveRate(:, idxSsStat), '-o', ...
-  snrDb, resolveRate(:, idxMsStat), '-s', ...
-  snrDb, resolveRate(:, idxWeightStart + 1), '-d');
+  snrDb, resolveRate(:, idxMsStat), '-s');
 grid on;
 ylim([0, 1.05]);
 xlabel('SNR (dB)');
 ylabel('Resolve rate');
 title('Static estimator resolve rate');
-legend({'SS-SF-Static', 'MS-SF-Static', 'MS-SF-Static-W0.25'}, ...
+legend({'SS-SF-Static', 'MS-SF-Static'}, ...
   'Location', 'southeast');
 
-subplot(1, 2, 2);
-plot(snrDb, rmseAngleDeg(:, idxWeightStart:end), '-o');
-grid on;
-xlabel('SNR (dB)');
-ylabel('Angle RMSE (deg)');
-title('Static multi-satellite weight sweep');
-legend(compose('alpha = %.2f', weightSweepAlpha), 'Location', 'southwest');
+if enableWeightSweep
+  figure();
+  plot(snrDb, rmseAngleDeg(:, idxWeightStart:end), '-o');
+  grid on;
+  xlabel('SNR (dB)');
+  ylabel('Angle RMSE (deg)');
+  title('Static multi-satellite weight sweep');
+  legend(compose('alpha = %.2f', weightSweepAlpha), 'Location', 'southwest');
+end
 
 %% Optional snapshot save
 saveExpSnapshot("doaDopplerStatDualSatUraEciPerf");
 
 %% Local functions
+function [angleVec, fdVec, resolvedVec] = localRunMonteCarloTask( ...
+  taskSeed, pwrNoise, steeringInfo, pilotWave, linkParam, carrierFreq, sampleRate, ...
+  pathGain, snapOpt, viewRefTemplate, viewOtherTemplate, viewMsTemplate, ...
+  refSatIdxLocal, otherSatIdxLocal, wavelen, fdRange, optVerbose, truth, ...
+  otherSatIdxGlobal, doaOnlyOpt, staticOptBase, weightSweepAlpha, ...
+  staticMsHalfWidth, numCase)
+%LOCALRUNMONTECARLOTASK Run one independent SNR-repeat Monte Carlo task.
+
+rng(taskSeed, 'twister');
+[rxSig, ~, ~, ~, ~] = genMultiSatSnapshots( ...
+  steeringInfo, pilotWave, linkParam, carrierFreq, sampleRate, ...
+  pwrNoise, pathGain, snapOpt);
+
+viewRef = viewRefTemplate;
+viewRef.rxSigSf = selectRxSigBySat(rxSig, refSatIdxLocal, 'singleFrame');
+
+viewOther = viewOtherTemplate;
+viewOther.rxSigSf = selectRxSigBySat(rxSig, otherSatIdxLocal, 'singleFrame');
+
+viewMs = viewMsTemplate;
+viewMs.rxSigSf = rxSig;
+
+caseBundle = buildDoaDopplerStaticTransitionBundle( ...
+  viewRef, viewOther, viewMs, wavelen, pilotWave, carrierFreq, ...
+  sampleRate, fdRange, truth, otherSatIdxGlobal, optVerbose, ...
+  doaOnlyOpt, staticOptBase, weightSweepAlpha, staticMsHalfWidth);
+
+caseList = [ ...
+  caseBundle.caseRefDoa, ...
+  caseBundle.caseMsDoa, ...
+  caseBundle.caseStaticRefOnly, ...
+  caseBundle.caseStaticMs];
+truthFdList = [NaN, NaN, truth.fdSatTrueHz(refSatIdxLocal), truth.fdRefTrueHz];
+if ~isempty(caseBundle.weightCase)
+  caseList = [caseList, caseBundle.weightCase];
+  truthFdList = [truthFdList, repmat(truth.fdRefTrueHz, 1, numel(caseBundle.weightCase))];
+end
+
+angleVec = nan(1, numCase);
+fdVec = nan(1, numCase);
+resolvedVec = false(1, numCase);
+for iCase = 1:numCase
+  [angleVec(iCase), fdVec(iCase), resolvedVec(iCase)] = localExtractCaseMetric( ...
+    caseList(iCase), truth.latlonTrueDeg, truthFdList(iCase));
+end
+end
+
+
 function [angleErrDeg, fdErrHz, isResolved] = localExtractCaseMetric(caseInfo, truthLatlon, truthFdHz)
 %LOCALEXTRACTCASEMETRIC Extract one compact metric triple from one case.
 
@@ -395,51 +447,4 @@ summaryTable = table(caseName(:), repmat(snrDb, numel(caseName), 1), rmseAngleDe
   rmseFdHz(:), resolveRate(:), p95AngleDeg(:), p95FdHz(:), ...
   'VariableNames', {'displayName', 'snrDb', 'angleRmseDeg', 'fdRmseHz', ...
   'resolveRate', 'angleP95Deg', 'fdP95Hz'});
-end
-
-
-function localDoaCell = localBuildLocalDoaCell(scene)
-%LOCALBUILDLOCALDOACELL Collect truth local DoA for CRB evaluation.
-
-numSat = scene.numSat;
-localDoaCell = cell(1, numSat);
-for iSat = 1:numSat
-  localDoaCell{iSat} = reshape(scene.localDoa(:, iSat), 2, []);
-end
-end
-
-
-function jacCell = localBuildLatlonToLocalDoaJac(scene, utc, tle, usrLla, arrUpa, ...
-  satIdx, refSatIdxGlobal, minElevDeg, maxElevDeg)
-%LOCALBUILDLATLONTOLOCALDOAJAC Build local Jacobians for static DoA CRB.
-% The Jacobian is with respect to global lat/lon in degrees so that it is
-% consistent with paramName=["lat","lon"] and projectCrbToAngleMetric(...,'latlon').
-
-numSat = scene.numSat;
-jacCell = cell(1, numSat);
-truthLatlon = usrLla(1:2, 1);
-stepDeg = 1e-4;
-
-for iSat = 1:numSat
-  jacMat = zeros(2, 2);
-  for iDim = 1:2
-    latlonPlus = truthLatlon;
-    latlonMinus = truthLatlon;
-    latlonPlus(iDim) = latlonPlus(iDim) + stepDeg;
-    latlonMinus(iDim) = latlonMinus(iDim) - stepDeg;
-
-    usrLlaPlus = [latlonPlus; usrLla(3, 1)];
-    usrLlaMinus = [latlonMinus; usrLla(3, 1)];
-
-    scenePlus = genMultiSatScene(utc, tle, usrLlaPlus, satIdx, [], arrUpa, ...
-      minElevDeg, maxElevDeg, "satellite", refSatIdxGlobal);
-    sceneMinus = genMultiSatScene(utc, tle, usrLlaMinus, satIdx, [], arrUpa, ...
-      minElevDeg, maxElevDeg, "satellite", refSatIdxGlobal);
-
-    doaPlus = scenePlus.localDoa(:, iSat);
-    doaMinus = sceneMinus.localDoa(:, iSat);
-    jacMat(:, iDim) = (doaPlus - doaMinus) / (2 * stepDeg);
-  end
-  jacCell{iSat} = jacMat;
-end
 end

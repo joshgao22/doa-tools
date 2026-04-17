@@ -314,7 +314,8 @@ for iFd = 1:numel(fdGrid)
   hyp.fd = doaState.deltaFd + reshape(fdCand, 1, []);
   [~, noiseVar, residualNorm] = localEstimateGainAndNoise(model, hyp);
   if model.useLogObjective
-    objNow = sum((model.numElement * model.numSample) .* log(max(noiseVar, eps)));
+    countPerSat = model.numElement(:) * model.numSample;
+    objNow = sum(model.satWeight(:) .* countPerSat .* log(max(noiseVar(:), eps)));
   else
     objNow = residualNorm;
   end

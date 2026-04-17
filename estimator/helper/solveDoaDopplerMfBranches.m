@@ -40,7 +40,11 @@ if strcmp(model.fdRateMode, 'known')
     solveUse = solveEmbed;
   end
 elseif strcmp(model.fdRateMode, 'unknown')
-  solveCand = localRunUnknownMainFromWarmAnchor(model, initParam, lb, ub, baseOptimOpt);
+  if isfield(model, 'disableUnknownWarmAnchor') && logical(model.disableUnknownWarmAnchor)
+    solveCand = struct([]);
+  else
+    solveCand = localRunUnknownMainFromWarmAnchor(model, initParam, lb, ub, baseOptimOpt);
+  end
   if ~isempty(solveCand)
     candidateObjective = solveCand.fval;
     candidateExitflag = solveCand.exitflag;
@@ -113,9 +117,10 @@ function solveCand = localRunUnknownMainFromWarmAnchor(model, initParam, lb, ub,
 % Keep the active CP-U logic compact: first hold fdRate at the current seed
 % long enough to pull DoA into the better continuous-phase basin, then
 % release the full unknown branch again while recentering the internal DoA
-% floor around that warm anchor. The older local fdRate continuation
-% candidates are left below only as legacy rollback helpers and are not used
-% by the default mainline anymore.
+% floor around that warm anchor. To avoid getting numerically stuck at the
+% fixed-rate warm point, probe a compact local set of fdRate release seeds
+% around the current anchor, but still report the whole path as the single
+% mainWarmAnchor branch.
 
 solveCand = struct([]);
 if ~strcmp(model.fdRateMode, 'unknown')
@@ -144,20 +149,53 @@ if numDoa >= 1 && numel(lbAnchor) >= numDoa && numel(ubAnchor) >= numDoa
   ubAnchor(1:numDoa) = doaUbAnchor;
 end
 
-solveRelease = localRunOptimization(model, warmInit, lbAnchor, ubAnchor, [], [], baseOptimOpt);
-solveRelease.runTimeSec = solveWarm.runTimeSec + solveRelease.runTimeSec;
-solveRelease.output = localMergeOptimOutput(solveWarm.output, solveRelease.output);
-solveRelease.solveVariant = "mainWarmAnchor";
-solveRelease.warmStart = struct( ...
-  'fdRateFixed', fdRateSeed, ...
-  'warmFval', solveWarm.fval, ...
-  'warmExitflag', solveWarm.exitflag, ...
-  'warmIsResolved', solveWarm.isResolved, ...
-  'warmVariant', "mainWarmFixedFdRate");
-solveCand = solveRelease;
+fdRateReleaseSeed = localBuildUnknownFdRateWarmStartSet(model, fdRateSeed);
+if isempty(fdRateReleaseSeed)
+  fdRateReleaseSeed = fdRateSeed;
+end
+fdRateReleaseSeed = reshape(fdRateReleaseSeed, 1, []);
+
+solveBest = struct([]);
+totalRunTimeSec = solveWarm.runTimeSec;
+for iSeed = 1:numel(fdRateReleaseSeed)
+  initRelease = warmInit;
+  initRelease(end) = fdRateReleaseSeed(iSeed);
+
+  [lbLocal, ubLocal, releaseHalfWidth] = localBuildUnknownFdRateReleaseBounds( ...
+    model, lbAnchor, ubAnchor, fdRateReleaseSeed(iSeed), fdRateReleaseSeed);
+  solveLocal = localRunOptimization(model, initRelease, lbLocal, ubLocal, [], [], baseOptimOpt);
+  solveFull = localRunOptimization(model, solveLocal.optVar(:), lbAnchor, ubAnchor, [], [], baseOptimOpt);
+
+  totalRunTimeSec = totalRunTimeSec + solveLocal.runTimeSec + solveFull.runTimeSec;
+  solveFull.output = localMergeOptimOutput(solveLocal.output, solveFull.output);
+  solveFull.warmStart = struct( ...
+    'fdRateFixed', fdRateSeed, ...
+    'warmFval', solveWarm.fval, ...
+    'warmExitflag', solveWarm.exitflag, ...
+    'warmIsResolved', solveWarm.isResolved, ...
+    'warmVariant', "mainWarmFixedFdRate", ...
+    'releaseSeedFdRate', fdRateReleaseSeed(iSeed), ...
+    'releaseHalfWidth', releaseHalfWidth, ...
+    'releaseLb', lbLocal(end), ...
+    'releaseUb', ubLocal(end));
+
+  if isempty(solveBest) || localPreferSolveResult(solveFull, solveBest)
+    solveBest = solveFull;
+  end
 end
 
-function solveCand = localRunUnknownContinuationCandidates(model, initParam, lb, ub, baseOptimOpt)
+if isempty(solveBest)
+  return;
+end
+
+solveBest.runTimeSec = totalRunTimeSec;
+solveBest.output = localMergeOptimOutput(solveWarm.output, solveBest.output);
+solveBest.solveVariant = "mainWarmAnchor";
+solveBest.warmStart.fdRateReleaseSeedList = fdRateReleaseSeed(:);
+solveCand = solveBest;
+end
+
+function solveCand = localRunUnknownLegacyWarmAnchors(model, initParam, lb, ub, baseOptimOpt)
 %LOCALRUNUNKNOWNCONTINUATIONCANDIDATES Build robust CP-U continuation starts.
 % The unknown-rate branch is more sensitive to noise because fdRate couples
 % with the continuous-phase trajectory. For the multi-satellite continuous
@@ -199,13 +237,13 @@ for iCand = 1:numel(fdRateCand)
   solveRelease = localRunOptimization(model, warmInit, lbLocal, ubLocal, [], [], baseOptimOpt);
   solveRelease.runTimeSec = solveWarm.runTimeSec + solveRelease.runTimeSec;
   solveRelease.output = localMergeOptimOutput(solveWarm.output, solveRelease.output);
-  solveRelease.solveVariant = sprintf('unknownWarmLocal_fdRate%.6g', rateVal);
+  solveRelease.solveVariant = sprintf('legacyWarmAnchor_fdRate%.6g', rateVal);
   solveRelease.warmStart = struct( ...
     'fdRateFixed', rateVal, ...
     'warmFval', solveWarm.fval, ...
     'warmExitflag', solveWarm.exitflag, ...
     'warmIsResolved', solveWarm.isResolved, ...
-    'warmVariant', sprintf('unknownWarmFixed_fdRate%.6g', rateVal), ...
+    'warmVariant', sprintf('legacyWarmFixed_fdRate%.6g', rateVal), ...
     'releaseHalfWidth', releaseHalfWidth, ...
     'releaseLb', lbLocal(end), ...
     'releaseUb', ubLocal(end));
