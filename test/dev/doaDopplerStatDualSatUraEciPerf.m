@@ -52,9 +52,9 @@ end
 staticMsHalfWidth = [0.002; 0.002];
 optVerbose = false;
 
-snrDb = -20:2:15;
+snrDb = -20:3:10;
 numParam = numel(snrDb);
-numRepeat = 2000;
+numRepeat = 20;
 pwrNoiseList = pwrSource ./ (10.^(snrDb(:) / 10));
 
 %% Select satellites and build the reference scene
@@ -159,32 +159,81 @@ repeatTaskIdx = repeatGrid(:);
 snrTaskIdx = snrGrid(:);
 numTask = numel(repeatTaskIdx);
 
-angleErrTask = nan(numTask, numCase);
-fdErrTask = nan(numTask, numCase);
-isResolvedTask = false(numTask, numCase);
+taskGrid = repmat(struct('taskIndex', 0, 'snrIndex', 0, 'repeatIndex', 0, 'taskSeed', 0), numTask, 1);
+for iTask = 1:numTask
+  taskGrid(iTask).taskIndex = iTask;
+  taskGrid(iTask).snrIndex = snrTaskIdx(iTask);
+  taskGrid(iTask).repeatIndex = repeatTaskIdx(iTask);
+  taskGrid(iTask).taskSeed = baseSeed + iTask - 1;
+end
+
+sharedData = struct();
+sharedData.pwrNoiseList = pwrNoiseList;
+sharedData.steeringInfo = steeringInfo;
+sharedData.pilotWave = pilotWave;
+sharedData.linkParam = linkParam;
+sharedData.carrierFreq = carrierFreq;
+sharedData.sampleRate = waveInfo.sampleRate;
+sharedData.pathGain = pathGain;
+sharedData.snapOpt = snapOpt;
+sharedData.viewRefTemplate = viewRefTemplate;
+sharedData.viewOtherTemplate = viewOtherTemplate;
+sharedData.viewMsTemplate = viewMsTemplate;
+sharedData.refSatIdxLocal = refSatIdxLocal;
+sharedData.otherSatIdxLocal = otherSatIdxLocal;
+sharedData.wavelen = wavelen;
+sharedData.fdRange = fdRange;
+sharedData.optVerbose = optVerbose;
+sharedData.truth = truth;
+sharedData.otherSatIdxGlobal = otherSatIdxGlobal;
+sharedData.doaOnlyOpt = doaOnlyOpt;
+sharedData.staticOptBase = staticOptBase;
+sharedData.weightSweepAlpha = weightSweepAlpha;
+sharedData.staticMsHalfWidth = staticMsHalfWidth;
+sharedData.numCase = numCase;
+
+repoRoot = localGetRepoRoot();
+checkpointMeta = struct();
+checkpointMeta.snrDb = snrDb(:).';
+checkpointMeta.numRepeat = numRepeat;
+checkpointMeta.numCase = numCase;
+checkpointMeta.baseSeed = baseSeed;
+checkpointMeta.selectedSatIdxGlobal = truth.selectedSatIdxGlobal(:).';
+checkpointMeta.fdRange = fdRange;
+checkpointMeta.caseName = caseName(:).';
+checkpointMeta.enableWeightSweep = enableWeightSweep;
+
+checkpointOpt = struct();
+checkpointOpt.runName = "doaDopplerStatDualSatUraEciPerf";
+checkpointOpt.runKey = localBuildCheckpointRunKey(baseSeed, snrDb, numRepeat, numCase, truth.selectedSatIdxGlobal);
+checkpointOpt.outputRoot = fullfile(repoRoot, "out", "checkpoint_tmp");
+checkpointOpt.useParfor = true;
+checkpointOpt.resume = true;
+checkpointOpt.meta = checkpointMeta;
 
 numProgressStep = numTask + numParam;
 progressbar('reset', numProgressStep);
-mcProgressQueue = parallel.pool.DataQueue;
-afterEach(mcProgressQueue, @(~) progressbar('advance'));
+checkpointOpt.progressFcn = @(step) progressbar('advance', step);
 
-fprintf('\nRunning Monte Carlo task grid with parfor: %d SNR x %d repeats = %d tasks.%s', ...
+fprintf('\nRunning Monte Carlo task grid with checkpoint runner: %d SNR x %d repeats = %d tasks.%s', ...
   numParam, numRepeat, numTask, newline);
+runState = runPerfTaskGridWithCheckpoint(taskGrid, sharedData, @localPerfTaskRunner, checkpointOpt);
+if ~runState.isComplete
+  error('doaDopplerStatDualSatUraEciPerf:CheckpointIncomplete', ...
+    'Checkpoint runner returned an incomplete task grid.');
+end
 
-parfor iTask = 1:numTask
-  iSnr = snrTaskIdx(iTask);
-  taskSeed = baseSeed + iTask - 1;
-  [angleVec, fdVec, resolvedVec] = localRunMonteCarloTask( ...
-    taskSeed, pwrNoiseList(iSnr), steeringInfo, pilotWave, linkParam, carrierFreq, ...
-    waveInfo.sampleRate, pathGain, snapOpt, viewRefTemplate, viewOtherTemplate, ...
-    viewMsTemplate, refSatIdxLocal, otherSatIdxLocal, wavelen, fdRange, ...
-    optVerbose, truth, otherSatIdxGlobal, doaOnlyOpt, staticOptBase, ...
-    weightSweepAlpha, staticMsHalfWidth, numCase);
-
-  angleErrTask(iTask, :) = angleVec;
-  fdErrTask(iTask, :) = fdVec;
-  isResolvedTask(iTask, :) = resolvedVec;
-  send(mcProgressQueue, iTask);
+angleErrTask = nan(numTask, numCase);
+fdErrTask = nan(numTask, numCase);
+isResolvedTask = false(numTask, numCase);
+for iTask = 1:numTask
+  taskOut = runState.resultCell{iTask};
+  if isempty(taskOut)
+    continue;
+  end
+  angleErrTask(iTask, :) = taskOut.angleVec;
+  fdErrTask(iTask, :) = taskOut.fdVec;
+  isResolvedTask(iTask, :) = taskOut.resolvedVec;
 end
 
 for iCase = 1:numCase
@@ -339,9 +388,55 @@ if enableWeightSweep
 end
 
 %% Optional snapshot save
+checkpointRunDir = runState.runDir;
+clear sharedData taskGrid checkpointMeta checkpointOpt runState;
 saveExpSnapshot("doaDopplerStatDualSatUraEciPerf");
+if isfolder(checkpointRunDir)
+  rmdir(checkpointRunDir, 's');
+end
 
 %% Local functions
+function taskOut = localPerfTaskRunner(taskInfo, sharedData)
+%LOCALPERFTASKRUNNER Thin adapter from one outer task to one MC result struct.
+
+[angleVec, fdVec, resolvedVec] = localRunMonteCarloTask( ...
+  taskInfo.taskSeed, sharedData.pwrNoiseList(taskInfo.snrIndex), ...
+  sharedData.steeringInfo, sharedData.pilotWave, sharedData.linkParam, ...
+  sharedData.carrierFreq, sharedData.sampleRate, sharedData.pathGain, ...
+  sharedData.snapOpt, sharedData.viewRefTemplate, sharedData.viewOtherTemplate, ...
+  sharedData.viewMsTemplate, sharedData.refSatIdxLocal, sharedData.otherSatIdxLocal, ...
+  sharedData.wavelen, sharedData.fdRange, sharedData.optVerbose, ...
+  sharedData.truth, sharedData.otherSatIdxGlobal, sharedData.doaOnlyOpt, ...
+  sharedData.staticOptBase, sharedData.weightSweepAlpha, ...
+  sharedData.staticMsHalfWidth, sharedData.numCase);
+
+taskOut = struct();
+taskOut.angleVec = angleVec;
+taskOut.fdVec = fdVec;
+taskOut.resolvedVec = resolvedVec;
+end
+
+
+function repoRoot = localGetRepoRoot()
+%LOCALGETREPOROOT Return the repository root for temporary checkpoint output.
+
+scriptDir = fileparts(mfilename('fullpath'));
+repoRoot = fileparts(fileparts(scriptDir));
+end
+
+
+function runKey = localBuildCheckpointRunKey(baseSeed, snrDb, numRepeat, numCase, selectedSatIdxGlobal)
+%LOCALBUILDCHECKPOINTRUNKEY Build one stable checkpoint directory key.
+
+satToken = sprintf('sat%d', selectedSatIdxGlobal(1));
+for iSat = 2:numel(selectedSatIdxGlobal)
+  satToken = sprintf('%s_%d', satToken, selectedSatIdxGlobal(iSat));
+end
+runKey = string(sprintf('seed%d_%s_snr%dto%d_n%d_rep%d_case%d', ...
+  baseSeed, satToken, snrDb(1), snrDb(end), numel(snrDb), numRepeat, numCase));
+end
+
+
 function [angleVec, fdVec, resolvedVec] = localRunMonteCarloTask( ...
   taskSeed, pwrNoise, steeringInfo, pilotWave, linkParam, carrierFreq, sampleRate, ...
   pathGain, snapOpt, viewRefTemplate, viewOtherTemplate, viewMsTemplate, ...
