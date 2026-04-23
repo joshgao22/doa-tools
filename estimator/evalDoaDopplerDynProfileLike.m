@@ -56,6 +56,36 @@ function [obj, prof, aux] = evalDoaDopplerDynProfileLike(model, hyp)
 %                    .phaseRefine     : whether to refine the common phase
 %                                       with fminbnd
 %                                       default: true
+%                    .continuousPhaseConsistencyWeight
+%                                     : nonnegative weight for the shared
+%                                       cross-frame continuous-phase bonus
+%                                       used only in continuous mode
+%                                       default: 0
+%                    .continuousPhaseCollapsePenaltyWeight
+%                                     : nonnegative weight for penalizing
+%                                       support collapse onto only a few
+%                                       surviving frames in continuous mode
+%                                       default: 0
+%                    .continuousPhaseNegativeProjectionPenaltyWeight
+%                                     : nonnegative weight for penalizing
+%                                       large negative shared-phase
+%                                       projections in continuous mode
+%                                       default: 0
+%                    .continuousPhaseNonRefFitFloorWeight
+%                                     : nonnegative weight for penalizing
+%                                       multi-satellite solutions whose
+%                                       non-reference explained-energy floor
+%                                       collapses far below the reference
+%                                       satellite level in continuous mode
+%                                       default: 0
+%                    .continuousPhaseNonRefSupportFloorWeight
+%                                     : nonnegative weight for penalizing
+%                                       multi-satellite solutions whose
+%                                       non-reference shared-phase support
+%                                       floor collapses far below the
+%                                       reference satellite level in
+%                                       continuous mode
+%                                       default: 0
 %                    .fdAliasStepHz    : optional Doppler ambiguity step in
 %                                       Hz. When empty, a uniform frame-step
 %                                       based value is inferred from
@@ -118,6 +148,40 @@ function [obj, prof, aux] = evalDoaDopplerDynProfileLike(model, hyp)
 %                    .fdAliasIndex    : Ns x 1 integer ambiguity indices
 %                    .fdAliasShiftHz  : Ns x 1 applied ambiguity shifts in Hz
 %                    .fdRateSat       : Ns x 1 Doppler rates in Hz/s
+%                    .effectiveFrameSupportSat
+%                                     : Ns x 1 effective shared-phase frame
+%                                       support count in continuous mode
+%                    .effectiveFrameSupportRatioSat
+%                                     : Ns x 1 normalized effective support
+%                    .activeFrameSupportRatioSat
+%                                     : Ns x 1 ratio of materially active
+%                                       shared-phase frames
+%                    .dominantFrameRatioSat
+%                                     : Ns x 1 largest per-frame fit share
+%                    .positiveAlignmentRatioSat
+%                                     : Ns x 1 ratio of positive shared-phase
+%                                       projection mass
+%                    .negativeProjectionRatioSat
+%                                     : Ns x 1 ratio of negative shared-phase
+%                                       projection energy
+%                    .collapsedFrameCountSat
+%                                     : Ns x 1 number of frames clipped by
+%                                       the shared-phase nonnegative profile
+%                    .satFitRatio     : Ns x 1 per-satellite explained-energy
+%                                       ratios
+%                    .refFitRatio     : reference-satellite fit ratio
+%                    .nonRefFitRatioFloor
+%                                     : smallest non-reference fit ratio
+%                    .refSupportRatio : reference-satellite shared-phase
+%                                       support ratio
+%                    .nonRefSupportRatioFloor
+%                                     : smallest non-reference support ratio
+%                    .nonRefFitFloorPenalty
+%                                     : global CP penalty against ref-only
+%                                       fit dominance
+%                    .nonRefSupportFloorPenalty
+%                                     : global CP penalty against non-ref
+%                                       support collapse
 %                    .localDoaArrUsed : 2xNsxNf steering angles used for
 %                                       likelihood evaluation
 %
@@ -137,6 +201,20 @@ function [obj, prof, aux] = evalDoaDopplerDynProfileLike(model, hyp)
 %                    .fdAliasShiftHz
 %                    .countPerBlock
 %                    .blockNorm2
+%                    .effectiveFrameSupportSat
+%                    .effectiveFrameSupportRatioSat
+%                    .activeFrameSupportRatioSat
+%                    .dominantFrameRatioSat
+%                    .positiveAlignmentRatioSat
+%                    .negativeProjectionRatioSat
+%                    .collapsedFrameCountSat
+%                    .satFitRatio
+%                    .refFitRatio
+%                    .nonRefFitRatioFloor
+%                    .refSupportRatio
+%                    .nonRefSupportRatioFloor
+%                    .nonRefFitFloorPenalty
+%                    .nonRefSupportFloorPenalty
 %
 %Notes:
 %  - This function assumes one source.
@@ -165,6 +243,7 @@ else
   else
     obj = prof.residualNorm;
   end
+  obj = obj + localGetStructField(prof, 'additionalObjectivePenalty', 0);
 end
 
 if nargout < 3
@@ -200,6 +279,20 @@ aux.fdAliasIndex = prof.fdAliasIndex;
 aux.fdAliasShiftHz = prof.fdAliasShiftHz;
 aux.countPerBlock = prof.countPerBlock;
 aux.blockNorm2 = prof.blockNorm2;
+aux.effectiveFrameSupportSat = prof.effectiveFrameSupportSat;
+aux.effectiveFrameSupportRatioSat = prof.effectiveFrameSupportRatioSat;
+aux.negativeProjectionRatioSat = prof.negativeProjectionRatioSat;
+aux.activeFrameSupportRatioSat = prof.activeFrameSupportRatioSat;
+aux.dominantFrameRatioSat = prof.dominantFrameRatioSat;
+aux.positiveAlignmentRatioSat = prof.positiveAlignmentRatioSat;
+aux.collapsedFrameCountSat = prof.collapsedFrameCountSat;
+aux.supportBonusSat = prof.supportBonusSat;
+aux.collapsePenaltySat = prof.collapsePenaltySat;
+aux.negativePenaltySat = prof.negativePenaltySat;
+aux.consistencyScoreSat = prof.consistencyScoreSat;
+aux.consistencyNormSat = prof.consistencyNormSat;
+aux.refConsistencyNorm = prof.refConsistencyNorm;
+aux.nonRefConsistencyRatioFloor = prof.nonRefConsistencyRatioFloor;
 end
 
 
@@ -285,6 +378,21 @@ end
 if ~isfield(model, 'phaseRefine') || isempty(model.phaseRefine)
   model.phaseRefine = true;
 end
+if ~isfield(model, 'continuousPhaseConsistencyWeight') || isempty(model.continuousPhaseConsistencyWeight)
+  model.continuousPhaseConsistencyWeight = 0;
+end
+if ~isfield(model, 'continuousPhaseCollapsePenaltyWeight') || isempty(model.continuousPhaseCollapsePenaltyWeight)
+  model.continuousPhaseCollapsePenaltyWeight = 0;
+end
+if ~isfield(model, 'continuousPhaseNegativeProjectionPenaltyWeight') || isempty(model.continuousPhaseNegativeProjectionPenaltyWeight)
+  model.continuousPhaseNegativeProjectionPenaltyWeight = 0;
+end
+if ~isfield(model, 'continuousPhaseNonRefFitFloorWeight') || isempty(model.continuousPhaseNonRefFitFloorWeight)
+  model.continuousPhaseNonRefFitFloorWeight = 0;
+end
+if ~isfield(model, 'continuousPhaseNonRefSupportFloorWeight') || isempty(model.continuousPhaseNonRefSupportFloorWeight)
+  model.continuousPhaseNonRefSupportFloorWeight = 0;
+end
 if ~isfield(model, 'fdAliasStepHz') || isempty(model.fdAliasStepHz)
   model.fdAliasStepHz = localInferFdAliasStep(model.timeOffsetSec);
 end
@@ -302,6 +410,39 @@ end
 if ~isscalar(model.phaseRefine) || ~islogical(model.phaseRefine)
   error('evalDoaDopplerDynProfileLike:InvalidPhaseRefine', ...
     'model.phaseRefine must be a logical scalar.');
+end
+if ~isscalar(model.continuousPhaseConsistencyWeight) || ...
+    ~isfinite(model.continuousPhaseConsistencyWeight) || ...
+    model.continuousPhaseConsistencyWeight < 0
+  error('evalDoaDopplerDynProfileLike:InvalidContinuousPhaseConsistencyWeight', ...
+    'model.continuousPhaseConsistencyWeight must be a nonnegative finite scalar.');
+end
+if ~isscalar(model.continuousPhaseCollapsePenaltyWeight) || ...
+    ~isfinite(model.continuousPhaseCollapsePenaltyWeight) || ...
+    model.continuousPhaseCollapsePenaltyWeight < 0
+  error('evalDoaDopplerDynProfileLike:InvalidContinuousPhaseCollapsePenaltyWeight', ...
+    'model.continuousPhaseCollapsePenaltyWeight must be a nonnegative finite scalar.');
+end
+if ~isscalar(model.continuousPhaseNegativeProjectionPenaltyWeight) || ...
+    ~isfinite(model.continuousPhaseNegativeProjectionPenaltyWeight) || ...
+    model.continuousPhaseNegativeProjectionPenaltyWeight < 0
+  error('evalDoaDopplerDynProfileLike:InvalidContinuousPhaseNegativeProjectionPenaltyWeight', ...
+    ['model.continuousPhaseNegativeProjectionPenaltyWeight must be a ', ...
+     'nonnegative finite scalar.']);
+end
+if ~isscalar(model.continuousPhaseNonRefFitFloorWeight) || ...
+    ~isfinite(model.continuousPhaseNonRefFitFloorWeight) || ...
+    model.continuousPhaseNonRefFitFloorWeight < 0
+  error('evalDoaDopplerDynProfileLike:InvalidContinuousPhaseNonRefFitFloorWeight', ...
+    ['model.continuousPhaseNonRefFitFloorWeight must be a ', ...
+     'nonnegative finite scalar.']);
+end
+if ~isscalar(model.continuousPhaseNonRefSupportFloorWeight) || ...
+    ~isfinite(model.continuousPhaseNonRefSupportFloorWeight) || ...
+    model.continuousPhaseNonRefSupportFloorWeight < 0
+  error('evalDoaDopplerDynProfileLike:InvalidContinuousPhaseNonRefSupportFloorWeight', ...
+    ['model.continuousPhaseNonRefSupportFloorWeight must be a ', ...
+     'nonnegative finite scalar.']);
 end
 if ~(isscalar(model.enableFdAliasUnwrap) && islogical(model.enableFdAliasUnwrap))
   error('evalDoaDopplerDynProfileLike:InvalidEnableFdAliasUnwrap', ...
@@ -592,6 +733,29 @@ prof.deltaFdRateEval = deltaFdRate;
 prof.residualSat = nan(model.numSat, 1);
 prof.fitValueSat = nan(model.numSat, 1);
 prof.objectiveSat = nan(model.numSat, 1);
+prof.effectiveFrameSupportSat = nan(model.numSat, 1);
+prof.effectiveFrameSupportRatioSat = nan(model.numSat, 1);
+prof.negativeProjectionRatioSat = nan(model.numSat, 1);
+prof.activeFrameSupportRatioSat = nan(model.numSat, 1);
+prof.dominantFrameRatioSat = nan(model.numSat, 1);
+prof.positiveAlignmentRatioSat = nan(model.numSat, 1);
+prof.collapsedFrameCountSat = nan(model.numSat, 1);
+prof.supportBonusSat = nan(model.numSat, 1);
+prof.collapsePenaltySat = nan(model.numSat, 1);
+prof.negativePenaltySat = nan(model.numSat, 1);
+prof.consistencyScoreSat = nan(model.numSat, 1);
+prof.consistencyNormSat = nan(model.numSat, 1);
+prof.satFitRatio = nan(model.numSat, 1);
+prof.refFitRatio = nan;
+prof.nonRefFitRatioFloor = nan;
+prof.refSupportRatio = nan;
+prof.nonRefSupportRatioFloor = nan;
+prof.refConsistencyNorm = nan;
+prof.nonRefConsistencyRatioFloor = nan;
+prof.maxNonRefNegativeProjectionRatio = nan;
+prof.nonRefFitFloorPenalty = 0;
+prof.nonRefSupportFloorPenalty = 0;
+prof.additionalObjectivePenalty = 0;
 prof.localDoaArrUsed = localDoaArrUsed;
 
 for iSat = 1:model.numSat
@@ -607,7 +771,7 @@ for iSat = 1:model.numSat
 
   switch model.phaseMode
     case 'continuous'
-      [phaseSat, scoreVec] = localEstimateCommonPhase(zVec, etaVec, model);
+      [phaseSat, scoreVec, consistencyScore, consistencyDiag] = localEstimateCommonPhase(zVec, etaVec, model);
       projVec = real(exp(-1j * phaseSat) .* zVec);
       projPos = max(projVec, 0);
       ampVec = projPos ./ etaVec;
@@ -615,8 +779,28 @@ for iSat = 1:model.numSat
 
       prof.phaseSatEst(iSat) = phaseSat;
       prof.framePhaseEst(iSat, validFrameIdx) = phaseSat;
+      prof.effectiveFrameSupportSat(iSat) = consistencyDiag.effectiveFrameSupport;
+      prof.effectiveFrameSupportRatioSat(iSat) = consistencyDiag.effectiveFrameSupportRatio;
+      prof.negativeProjectionRatioSat(iSat) = consistencyDiag.negativeProjectionRatio;
+      prof.activeFrameSupportRatioSat(iSat) = consistencyDiag.activeFrameSupportRatio;
+      prof.dominantFrameRatioSat(iSat) = consistencyDiag.dominantFrameRatio;
+      prof.positiveAlignmentRatioSat(iSat) = consistencyDiag.positiveAlignmentRatio;
+      prof.collapsedFrameCountSat(iSat) = consistencyDiag.collapsedFrameCount;
+      prof.supportBonusSat(iSat) = consistencyDiag.supportBonus;
+      prof.collapsePenaltySat(iSat) = consistencyDiag.collapsePenalty;
+      prof.negativePenaltySat(iSat) = consistencyDiag.negativePenalty;
+      prof.consistencyScoreSat(iSat) = consistencyDiag.consistencyScore;
 
     case {'relaxed', 'independent'}
+      consistencyScore = 0;
+      consistencyDiag = localBuildEmptyConsistencyDiag(numel(zVec));
+      prof.activeFrameSupportRatioSat(iSat) = consistencyDiag.activeFrameSupportRatio;
+      prof.dominantFrameRatioSat(iSat) = consistencyDiag.dominantFrameRatio;
+      prof.positiveAlignmentRatioSat(iSat) = consistencyDiag.positiveAlignmentRatio;
+      prof.supportBonusSat(iSat) = consistencyDiag.supportBonus;
+      prof.collapsePenaltySat(iSat) = consistencyDiag.collapsePenalty;
+      prof.negativePenaltySat(iSat) = consistencyDiag.negativePenalty;
+      prof.consistencyScoreSat(iSat) = consistencyDiag.consistencyScore;
       scoreVec = (abs(zVec) .^ 2) ./ etaVec;
       gainVec = zVec ./ etaVec;
       ampVec = abs(gainVec);
@@ -630,8 +814,9 @@ for iSat = 1:model.numSat
         'Unsupported phase mode: %s.', model.phaseMode);
   end
 
-  fitValueSat = real(sum(scoreVec));
-  residualSat = max(real(sum(blockNorm2 - scoreVec)), 0);
+  rawFitValueSat = real(sum(scoreVec));
+  fitValueSat = max(real(rawFitValueSat + consistencyScore), 0);
+  residualSat = max(real(sum(blockNorm2) - fitValueSat), 0);
   countSat = sum(countVec);
 
   prof.pathGainEst(iSat, validFrameIdx) = gainVec.';
@@ -640,6 +825,14 @@ for iSat = 1:model.numSat
   prof.countPerSat(iSat) = countSat;
   prof.fitValueSat(iSat) = fitValueSat;
   prof.residualSat(iSat) = residualSat;
+
+  satEnergy = sum(blockNorm2);
+  if isfinite(satEnergy) && satEnergy > 0
+    prof.satFitRatio(iSat) = max(min(fitValueSat / satEnergy, 1), 0);
+  end
+  if isfinite(rawFitValueSat) && rawFitValueSat > 0 && isfinite(fitValueSat)
+    prof.consistencyNormSat(iSat) = min(max(fitValueSat / rawFitValueSat, 0), 1);
+  end
 
   if countSat > 0
     prof.noiseVarEst(iSat) = max(residualSat / countSat, eps);
@@ -663,6 +856,158 @@ if any(validSat)
 else
   prof.objective = inf;
 end
+
+[prof.nonRefFitFloorPenalty, prof.nonRefSupportFloorPenalty, prof.additionalObjectivePenalty, ...
+  prof.refFitRatio, prof.nonRefFitRatioFloor, prof.refSupportRatio, ...
+  prof.nonRefSupportRatioFloor, prof.refConsistencyNorm, ...
+  prof.nonRefConsistencyRatioFloor, prof.maxNonRefNegativeProjectionRatio] = ...
+  localBuildNonRefFloorPenalty(model, prof);
+prof.objective = prof.objective + prof.additionalObjectivePenalty;
+end
+
+
+function [fitPenalty, supportPenalty, objectivePenalty, refFitRatio, ...
+  nonRefFitFloor, refSupportRatio, nonRefSupportFloor, refConsistencyNorm, ...
+  nonRefConsistencyRatioFloor, maxNonRefNegativeRatio] = ...
+  localBuildNonRefFloorPenalty(model, prof)
+%LOCALBUILDNONREFFLOORPENALTY Penalize CP solutions that collapse onto ref-only support.
+% Wrong-tooth CP candidates can still look attractive when the reference
+% satellite explains most energy while the non-reference satellites survive
+% only through a much weaker support floor. Build one compact truth-free
+% penalty from the final profiled per-satellite diagnostics so the main
+% objective distinguishes those ref-dominant branches more clearly.
+
+fitPenalty = 0;
+supportPenalty = 0;
+objectivePenalty = 0;
+refFitRatio = nan;
+nonRefFitFloor = nan;
+refSupportRatio = nan;
+nonRefSupportFloor = nan;
+refConsistencyNorm = nan;
+nonRefConsistencyRatioFloor = nan;
+maxNonRefNegativeRatio = nan;
+
+if ~strcmp(model.phaseMode, 'continuous') || model.numSat <= 1
+  return;
+end
+refSatIdxLocal = localGetStructField(prof, 'refSatIdxLocal', NaN);
+if ~(isscalar(refSatIdxLocal) && isfinite(refSatIdxLocal) && ...
+    refSatIdxLocal >= 1 && refSatIdxLocal <= model.numSat)
+  return;
+end
+
+fitRatioSat = reshape(localGetStructField(prof, 'satFitRatio', nan(model.numSat, 1)), [], 1);
+supportRatioSat = reshape(localGetStructField(prof, 'effectiveFrameSupportRatioSat', nan(model.numSat, 1)), [], 1);
+activeSupportRatioSat = reshape(localGetStructField(prof, 'activeFrameSupportRatioSat', nan(model.numSat, 1)), [], 1);
+activeMask = isfinite(activeSupportRatioSat);
+supportRatioSat(activeMask) = min(supportRatioSat(activeMask), activeSupportRatioSat(activeMask));
+negativeRatioSat = reshape(localGetStructField(prof, 'negativeProjectionRatioSat', nan(model.numSat, 1)), [], 1);
+consistencyNormSat = reshape(localGetStructField(prof, 'consistencyNormSat', nan(model.numSat, 1)), [], 1);
+fitValueSat = reshape(localGetStructField(prof, 'fitValueSat', nan(model.numSat, 1)), [], 1);
+blockNorm2Mat = localGetStructField(prof, 'blockNorm2', []);
+
+if isempty(blockNorm2Mat)
+  satEnergy = nan(model.numSat, 1);
+else
+  satEnergy = sum(blockNorm2Mat, 2, 'omitnan');
+  satEnergy = reshape(satEnergy, [], 1);
+end
+
+refFitRatio = localSanitizeUnitInterval(fitRatioSat(refSatIdxLocal), nan);
+refSupportRatio = localSanitizeUnitInterval(supportRatioSat(refSatIdxLocal), nan);
+refConsistencyNorm = localSanitizeNonnegative(consistencyNormSat(refSatIdxLocal), nan);
+nonRefMask = true(model.numSat, 1);
+nonRefMask(refSatIdxLocal) = false;
+nonRefFitFloor = localFiniteReducer(fitRatioSat(nonRefMask), @min, nan);
+nonRefSupportFloor = localFiniteReducer(supportRatioSat(nonRefMask), @min, nan);
+nonRefConsistencyFloor = localFiniteReducer(consistencyNormSat(nonRefMask), @min, nan);
+if isfinite(refConsistencyNorm) && refConsistencyNorm > 0 && isfinite(nonRefConsistencyFloor)
+  nonRefConsistencyRatioFloor = min(max(nonRefConsistencyFloor / refConsistencyNorm, 0), 1);
+end
+maxNonRefNegativeRatio = localFiniteReducer(negativeRatioSat(nonRefMask), @max, nan);
+
+fitGap = 0;
+if isfinite(refFitRatio) && isfinite(nonRefFitFloor)
+  fitGap = max(refFitRatio - nonRefFitFloor, 0);
+end
+supportGap = 0;
+if isfinite(refSupportRatio) && isfinite(nonRefSupportFloor)
+  supportGap = max(refSupportRatio - nonRefSupportFloor, 0);
+end
+
+fitWeight = localGetStructField(model, 'continuousPhaseNonRefFitFloorWeight', 0);
+supportWeight = localGetStructField(model, 'continuousPhaseNonRefSupportFloorWeight', 0);
+if ~(isfinite(fitWeight) && fitWeight >= 0)
+  fitWeight = 0;
+end
+if ~(isfinite(supportWeight) && supportWeight >= 0)
+  supportWeight = 0;
+end
+if fitWeight == 0 && supportWeight == 0
+  return;
+end
+
+energyScale = localFiniteReducer(satEnergy(isfinite(fitValueSat) & isfinite(satEnergy) & satEnergy > 0), @mean, nan);
+countScale = localFiniteReducer(localGetStructField(prof, 'countPerSat', zeros(model.numSat, 1)), @sum, 0);
+if model.useLogObjective
+  penaltyScale = max(countScale, 1);
+else
+  penaltyScale = max(energyScale, 1);
+end
+if ~(isfinite(penaltyScale) && penaltyScale > 0)
+  penaltyScale = 1;
+end
+
+fitPenalty = fitWeight * penaltyScale * fitGap .^ 2;
+supportPenalty = supportWeight * penaltyScale * supportGap .^ 2;
+objectivePenalty = fitPenalty + supportPenalty;
+end
+
+
+function value = localSanitizeUnitInterval(valueIn, defaultValue)
+%LOCALSANITIZEUNITINTERVAL Clip one scalar metric to [0, 1].
+
+value = defaultValue;
+if isempty(valueIn)
+  return;
+end
+valueIn = valueIn(1);
+if ~isfinite(valueIn)
+  return;
+end
+value = min(max(real(valueIn), 0), 1);
+end
+
+
+function value = localSanitizeNonnegative(valueIn, defaultValue)
+%LOCALSANITIZENONNEGATIVE Clip one scalar metric to [0, inf).
+
+value = defaultValue;
+if isempty(valueIn)
+  return;
+end
+valueIn = valueIn(1);
+if ~isfinite(valueIn)
+  return;
+end
+value = max(real(valueIn), 0);
+end
+
+
+function value = localFiniteReducer(valueVec, reducer, defaultValue)
+%LOCALFINITEREDUCER Reduce one finite-valued vector with fallback.
+
+value = defaultValue;
+if isempty(valueVec)
+  return;
+end
+valueVec = reshape(valueVec, [], 1);
+valueVec = valueVec(isfinite(valueVec));
+if isempty(valueVec)
+  return;
+end
+value = reducer(valueVec);
 end
 
 
@@ -708,7 +1053,7 @@ deltaVal = valueVec - refVal;
 end
 
 
-function [phaseSat, scoreVec] = localEstimateCommonPhase(zVec, etaVec, model)
+function [phaseSat, scoreVec, consistencyScore, consistencyDiag] = localEstimateCommonPhase(zVec, etaVec, model)
 %LOCALESTIMATECOMMONPHASE Estimate the shared satellite phase.
 
 if numel(zVec) == 1
@@ -716,7 +1061,7 @@ if numel(zVec) == 1
 else
   coarsePhase = linspace(-pi, pi, model.phaseGridCount + 1);
   coarsePhase(end) = [];
-  coarseScore = localEvalCommonPhaseScore(coarsePhase, zVec, etaVec);
+  coarseScore = localEvalCommonPhaseScore(coarsePhase, zVec, etaVec, model);
   [~, bestIdx] = max(coarseScore);
   phaseSat = coarsePhase(bestIdx);
 
@@ -724,11 +1069,11 @@ else
     searchHalfWidth = 2 * pi / model.phaseGridCount;
     searchLeft = phaseSat - searchHalfWidth;
     searchRight = phaseSat + searchHalfWidth;
-    refineFun = @(x) -localEvalCommonPhaseScore(x, zVec, etaVec);
+    refineFun = @(x) -localEvalCommonPhaseScore(x, zVec, etaVec, model);
     phaseRefined = fminbnd(refineFun, searchLeft, searchRight);
 
     if isfinite(phaseRefined)
-      refinedScore = localEvalCommonPhaseScore(phaseRefined, zVec, etaVec);
+      refinedScore = localEvalCommonPhaseScore(phaseRefined, zVec, etaVec, model);
       if refinedScore >= coarseScore(bestIdx)
         phaseSat = phaseRefined;
       end
@@ -739,14 +1084,15 @@ end
 phaseSat = localWrapToPi(phaseSat);
 scoreVec = localEvalCommonPhaseTerm(phaseSat, zVec, etaVec);
 scoreVec = scoreVec(:);
+[consistencyScore, consistencyDiag] = localEvalCommonPhaseConsistency(phaseSat, zVec, etaVec, model);
 end
 
 
-function score = localEvalCommonPhaseScore(phaseVal, zVec, etaVec)
+function score = localEvalCommonPhaseScore(phaseVal, zVec, etaVec, model)
 %LOCALEVALCOMMONPHASESCORE Evaluate the common-phase profile objective.
 
 scoreTerm = localEvalCommonPhaseTerm(phaseVal, zVec, etaVec);
-score = sum(scoreTerm, 2);
+score = sum(scoreTerm, 2) + localEvalCommonPhaseConsistency(phaseVal, zVec, etaVec, model);
 end
 
 
@@ -758,6 +1104,140 @@ rotProj = bsxfun(@times, exp(-1j * phaseVal), reshape(zVec, 1, []));
 rotProj = real(rotProj);
 rotProj(rotProj < 0) = 0;
 scoreTerm = bsxfun(@rdivide, rotProj .^ 2, reshape(etaVec, 1, []));
+end
+
+
+
+function [consistencyScore, detail] = localEvalCommonPhaseConsistency(phaseVal, zVec, etaVec, model)
+%LOCALEVALCOMMONPHASECONSISTENCY Add one stronger CP tying term.
+% The formal per-frame nonnegative-amplitude profile can zero out frames
+% that disagree with the shared phase, which leaves a strong 1/T_f comb in
+% hard multi-frame cases. Keep the original cross-frame coherence bonus,
+% but also penalize two wrong-tooth signatures:
+%   1) support collapse onto only a few surviving frames; and
+%   2) large negative shared-phase projections that are being clipped away.
+
+if ~isfield(model, 'continuousPhaseConsistencyWeight') || ...
+    isempty(model.continuousPhaseConsistencyWeight)
+  bonusWeight = 0;
+else
+  bonusWeight = model.continuousPhaseConsistencyWeight;
+end
+if ~isfield(model, 'continuousPhaseCollapsePenaltyWeight') || ...
+    isempty(model.continuousPhaseCollapsePenaltyWeight)
+  collapseWeight = 0;
+else
+  collapseWeight = model.continuousPhaseCollapsePenaltyWeight;
+end
+if ~isfield(model, 'continuousPhaseNegativeProjectionPenaltyWeight') || ...
+    isempty(model.continuousPhaseNegativeProjectionPenaltyWeight)
+  negativeWeight = 0;
+else
+  negativeWeight = model.continuousPhaseNegativeProjectionPenaltyWeight;
+end
+
+phaseVal = phaseVal(:);
+numFrame = numel(etaVec);
+if ~(isfinite(bonusWeight) && bonusWeight >= 0 && ...
+    isfinite(collapseWeight) && collapseWeight >= 0 && ...
+    isfinite(negativeWeight) && negativeWeight >= 0) || ...
+    (bonusWeight == 0 && collapseWeight == 0 && negativeWeight == 0)
+  consistencyScore = zeros(numel(phaseVal), 1);
+  if numel(phaseVal) == 1
+    detail = localBuildEmptyConsistencyDiag(numFrame);
+  else
+    detail = struct();
+  end
+  return;
+end
+
+phaseVal = phaseVal(:);
+rotVec = bsxfun(@times, exp(-1j * phaseVal), reshape(zVec, 1, []));
+projRaw = real(rotVec);
+projPos = max(projRaw, 0);
+projNeg = max(-projRaw, 0);
+etaRow = reshape(etaVec, 1, []);
+etaSqrt = sqrt(max(etaRow, eps));
+scoreRaw = projPos .^ 2 ./ max(etaRow, eps);
+fitBase = sum(scoreRaw, 2);
+
+sharedDenom = max(sum(etaRow, 2), eps);
+coherentBase = abs(sum(rotVec, 2)) .^ 2 ./ sharedDenom;
+penaltyBase = max(fitBase, coherentBase);
+
+projNorm = projPos ./ etaSqrt;
+effSupport = (sum(projNorm, 2) .^ 2) ./ max(sum(projNorm .^ 2, 2), eps);
+effSupport = min(max(effSupport, 0), numFrame);
+effSupportRatio = effSupport / max(numFrame, 1);
+
+scorePeak = max(scoreRaw, [], 2);
+activeMask = scoreRaw > bsxfun(@times, 0.05, scorePeak);
+activeFrameCount = sum(activeMask, 2);
+activeFrameSupportRatio = activeFrameCount / max(numFrame, 1);
+
+dominantFrameRatio = max(scoreRaw, [], 2) ./ max(fitBase, eps);
+dominantFrameRatio = min(max(dominantFrameRatio, 0), 1);
+
+absProjSum = max(sum(abs(projRaw), 2), eps);
+positiveAlignmentRatio = sum(projPos, 2) ./ absProjSum;
+positiveAlignmentRatio = min(max(positiveAlignmentRatio, 0), 1);
+
+negDenom = max(sum(abs(rotVec) .^ 2, 2), eps);
+negativeRatio = sum(projNeg .^ 2, 2) ./ negDenom;
+negativeRatio = min(max(negativeRatio, 0), 1);
+
+supportRatio = min(effSupportRatio, activeFrameSupportRatio);
+collapseMass = max(1 - supportRatio, 0) + max(dominantFrameRatio - 1 / max(numFrame, 1), 0);
+negativeMass = 0.5 * negativeRatio + 0.5 * (1 - positiveAlignmentRatio);
+
+supportBonus = bonusWeight * supportRatio .* coherentBase;
+collapsePenalty = collapseWeight * collapseMass .* penaltyBase;
+negativePenalty = negativeWeight * negativeMass .* penaltyBase;
+consistencyScore = supportBonus - collapsePenalty - negativePenalty;
+
+if numel(phaseVal) == 1
+  detail = struct();
+  detail.effectiveFrameSupport = effSupport;
+  detail.effectiveFrameSupportRatio = effSupportRatio;
+  detail.activeFrameSupportRatio = activeFrameSupportRatio;
+  detail.dominantFrameRatio = dominantFrameRatio;
+  detail.positiveAlignmentRatio = positiveAlignmentRatio;
+  detail.negativeProjectionRatio = negativeRatio;
+  detail.collapsedFrameCount = numFrame - activeFrameCount;
+  detail.coherentBase = coherentBase;
+  detail.fitBase = fitBase;
+  detail.penaltyBase = penaltyBase;
+  detail.supportBonus = supportBonus;
+  detail.collapsePenalty = collapsePenalty;
+  detail.negativePenalty = negativePenalty;
+  detail.consistencyScore = consistencyScore;
+else
+  detail = struct();
+end
+end
+
+
+function detail = localBuildEmptyConsistencyDiag(numFrame)
+%LOCALBUILDEMPTYCONSISTENCYDIAG Build the default CP consistency diagnostics.
+
+detail = struct();
+detail.effectiveFrameSupport = nan;
+detail.effectiveFrameSupportRatio = nan;
+detail.activeFrameSupportRatio = nan;
+detail.dominantFrameRatio = nan;
+detail.positiveAlignmentRatio = nan;
+detail.negativeProjectionRatio = nan;
+detail.collapsedFrameCount = nan;
+detail.coherentBase = 0;
+detail.fitBase = 0;
+detail.penaltyBase = 0;
+detail.supportBonus = 0;
+detail.collapsePenalty = 0;
+detail.negativePenalty = 0;
+detail.consistencyScore = 0;
+if nargin >= 1 && isfinite(numFrame) && numFrame >= 0
+  detail.collapsedFrameCount = numFrame;
+end
 end
 
 
@@ -841,6 +1321,19 @@ end
 fdAliasIndex = round((fdPrior - fdSat) / model.fdAliasStepHz);
 fdAliasShiftHz = fdAliasIndex * model.fdAliasStepHz;
 fdSatEval = fdSat + fdAliasShiftHz;
+end
+
+
+function fieldValue = localGetStructField(dataStruct, fieldName, defaultValue)
+%LOCALGETSTRUCTFIELD Read one struct field with a default fallback.
+
+fieldValue = defaultValue;
+if isstruct(dataStruct) && isfield(dataStruct, fieldName)
+  rawValue = dataStruct.(fieldName);
+  if ~isempty(rawValue)
+    fieldValue = rawValue;
+  end
+end
 end
 
 

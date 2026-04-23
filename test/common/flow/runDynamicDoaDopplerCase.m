@@ -114,6 +114,9 @@ for iCand = 1:numCandidate
     if isfield(candidateItem, 'initDoaHalfWidth') && ~isempty(candidateItem.initDoaHalfWidth)
       dynOptCur.initDoaHalfWidth = candidateItem.initDoaHalfWidth;
     end
+    if isfield(candidateItem, 'freezeDoa') && ~isempty(candidateItem.freezeDoa)
+      dynOptCur.freezeDoa = logical(candidateItem.freezeDoa);
+    end
     if isfield(candidateItem, 'startTag') && ~isempty(candidateItem.startTag)
       startTagList(iCand) = string(candidateItem.startTag);
     end

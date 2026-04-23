@@ -102,6 +102,36 @@ end
 if ~isfield(modelOpt, 'disableUnknownWarmAnchor') || isempty(modelOpt.disableUnknownWarmAnchor)
   modelOpt.disableUnknownWarmAnchor = false;
 end
+if ~isfield(modelOpt, 'freezeDoa') || isempty(modelOpt.freezeDoa)
+  modelOpt.freezeDoa = false;
+end
+if ~isfield(modelOpt, 'disableUnknownDoaReleaseFloor') || isempty(modelOpt.disableUnknownDoaReleaseFloor)
+  modelOpt.disableUnknownDoaReleaseFloor = false;
+end
+if ~isfield(modelOpt, 'unknownDoaReleaseHalfWidth') || isempty(modelOpt.unknownDoaReleaseHalfWidth)
+  modelOpt.unknownDoaReleaseHalfWidth = [];
+end
+if ~isfield(modelOpt, 'continuousPhaseConsistencyWeight') || isempty(modelOpt.continuousPhaseConsistencyWeight)
+  modelOpt.continuousPhaseConsistencyWeight = 0;
+end
+if ~isfield(modelOpt, 'continuousPhaseCollapsePenaltyWeight') || isempty(modelOpt.continuousPhaseCollapsePenaltyWeight)
+  modelOpt.continuousPhaseCollapsePenaltyWeight = 0;
+end
+if ~isfield(modelOpt, 'continuousPhaseNegativeProjectionPenaltyWeight') || isempty(modelOpt.continuousPhaseNegativeProjectionPenaltyWeight)
+  modelOpt.continuousPhaseNegativeProjectionPenaltyWeight = 0;
+end
+if ~isfield(modelOpt, 'continuousPhaseNonRefFitFloorWeight') || isempty(modelOpt.continuousPhaseNonRefFitFloorWeight)
+  modelOpt.continuousPhaseNonRefFitFloorWeight = 0;
+end
+if ~isfield(modelOpt, 'continuousPhaseNonRefSupportFloorWeight') || isempty(modelOpt.continuousPhaseNonRefSupportFloorWeight)
+  modelOpt.continuousPhaseNonRefSupportFloorWeight = 0;
+end
+if ~isfield(modelOpt, 'unknownWarmAnchorUseScaledSolve') || isempty(modelOpt.unknownWarmAnchorUseScaledSolve)
+  modelOpt.unknownWarmAnchorUseScaledSolve = true;
+end
+if ~isfield(modelOpt, 'unknownWarmAnchorFallbackSqp') || isempty(modelOpt.unknownWarmAnchorFallbackSqp)
+  modelOpt.unknownWarmAnchorFallbackSqp = true;
+end
 
 if ~isscalar(modelOpt.lightSpeed) || ~isfinite(modelOpt.lightSpeed) || modelOpt.lightSpeed <= 0
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidLightSpeed', ...
@@ -164,6 +194,73 @@ end
 if ~isscalar(modelOpt.disableUnknownWarmAnchor) || ~islogical(modelOpt.disableUnknownWarmAnchor)
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidDisableUnknownWarmAnchor', ...
     'modelOpt.disableUnknownWarmAnchor must be a logical scalar.');
+end
+if ~isscalar(modelOpt.freezeDoa) || ~islogical(modelOpt.freezeDoa)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidFreezeDoa', ...
+    'modelOpt.freezeDoa must be a logical scalar.');
+end
+if ~isscalar(modelOpt.disableUnknownDoaReleaseFloor) || ~islogical(modelOpt.disableUnknownDoaReleaseFloor)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidDisableUnknownDoaReleaseFloor', ...
+    'modelOpt.disableUnknownDoaReleaseFloor must be a logical scalar.');
+end
+if ~isempty(modelOpt.unknownDoaReleaseHalfWidth)
+  if ~isnumeric(modelOpt.unknownDoaReleaseHalfWidth) || ...
+      any(~isfinite(modelOpt.unknownDoaReleaseHalfWidth)) || ...
+      any(modelOpt.unknownDoaReleaseHalfWidth < 0)
+    error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownDoaReleaseHalfWidth', ...
+      ['modelOpt.unknownDoaReleaseHalfWidth must be empty or a ', ...
+       'nonnegative finite 2x1 half-width vector.']);
+  end
+  if numel(modelOpt.unknownDoaReleaseHalfWidth) == 1
+    modelOpt.unknownDoaReleaseHalfWidth = repmat(modelOpt.unknownDoaReleaseHalfWidth, 2, 1);
+  end
+  if numel(modelOpt.unknownDoaReleaseHalfWidth) ~= 2
+    error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownDoaReleaseHalfWidthSize', ...
+      'modelOpt.unknownDoaReleaseHalfWidth must contain one value per DoA dimension.');
+  end
+end
+if ~isscalar(modelOpt.continuousPhaseConsistencyWeight) || ...
+    ~isfinite(modelOpt.continuousPhaseConsistencyWeight) || ...
+    modelOpt.continuousPhaseConsistencyWeight < 0
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidContinuousPhaseConsistencyWeight', ...
+    'modelOpt.continuousPhaseConsistencyWeight must be a nonnegative finite scalar.');
+end
+if ~isscalar(modelOpt.continuousPhaseCollapsePenaltyWeight) || ...
+    ~isfinite(modelOpt.continuousPhaseCollapsePenaltyWeight) || ...
+    modelOpt.continuousPhaseCollapsePenaltyWeight < 0
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidContinuousPhaseCollapsePenaltyWeight', ...
+    'modelOpt.continuousPhaseCollapsePenaltyWeight must be a nonnegative finite scalar.');
+end
+if ~isscalar(modelOpt.continuousPhaseNegativeProjectionPenaltyWeight) || ...
+    ~isfinite(modelOpt.continuousPhaseNegativeProjectionPenaltyWeight) || ...
+    modelOpt.continuousPhaseNegativeProjectionPenaltyWeight < 0
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidContinuousPhaseNegativeProjectionPenaltyWeight', ...
+    ['modelOpt.continuousPhaseNegativeProjectionPenaltyWeight must be a ', ...
+     'nonnegative finite scalar.']);
+end
+if ~isscalar(modelOpt.continuousPhaseNonRefFitFloorWeight) || ...
+    ~isfinite(modelOpt.continuousPhaseNonRefFitFloorWeight) || ...
+    modelOpt.continuousPhaseNonRefFitFloorWeight < 0
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidContinuousPhaseNonRefFitFloorWeight', ...
+    ['modelOpt.continuousPhaseNonRefFitFloorWeight must be a ', ...
+     'nonnegative finite scalar.']);
+end
+if ~isscalar(modelOpt.continuousPhaseNonRefSupportFloorWeight) || ...
+    ~isfinite(modelOpt.continuousPhaseNonRefSupportFloorWeight) || ...
+    modelOpt.continuousPhaseNonRefSupportFloorWeight < 0
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidContinuousPhaseNonRefSupportFloorWeight', ...
+    ['modelOpt.continuousPhaseNonRefSupportFloorWeight must be a ', ...
+     'nonnegative finite scalar.']);
+end
+if ~isscalar(modelOpt.unknownWarmAnchorUseScaledSolve) || ...
+    ~islogical(modelOpt.unknownWarmAnchorUseScaledSolve)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownWarmAnchorUseScaledSolve', ...
+    'modelOpt.unknownWarmAnchorUseScaledSolve must be a logical scalar.');
+end
+if ~isscalar(modelOpt.unknownWarmAnchorFallbackSqp) || ...
+    ~islogical(modelOpt.unknownWarmAnchorFallbackSqp)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownWarmAnchorFallbackSqp', ...
+    'modelOpt.unknownWarmAnchorFallbackSqp must be a logical scalar.');
 end
 if ~modelOpt.debugEnable
   modelOpt.debugStoreEvalTrace = false;
@@ -356,6 +453,16 @@ model.debugTruth = modelOpt.debugTruth;
 model.debugStoreEvalTrace = modelOpt.debugStoreEvalTrace;
 model.debugMaxEvalTrace = modelOpt.debugMaxEvalTrace;
 model.disableUnknownWarmAnchor = logical(modelOpt.disableUnknownWarmAnchor);
+model.freezeDoa = logical(modelOpt.freezeDoa);
+model.disableUnknownDoaReleaseFloor = logical(modelOpt.disableUnknownDoaReleaseFloor);
+model.unknownDoaReleaseHalfWidth = reshape(modelOpt.unknownDoaReleaseHalfWidth, [], 1);
+model.continuousPhaseConsistencyWeight = modelOpt.continuousPhaseConsistencyWeight;
+model.continuousPhaseCollapsePenaltyWeight = modelOpt.continuousPhaseCollapsePenaltyWeight;
+model.continuousPhaseNegativeProjectionPenaltyWeight = modelOpt.continuousPhaseNegativeProjectionPenaltyWeight;
+model.continuousPhaseNonRefFitFloorWeight = modelOpt.continuousPhaseNonRefFitFloorWeight;
+model.continuousPhaseNonRefSupportFloorWeight = modelOpt.continuousPhaseNonRefSupportFloorWeight;
+model.unknownWarmAnchorUseScaledSolve = logical(modelOpt.unknownWarmAnchorUseScaledSolve);
+model.unknownWarmAnchorFallbackSqp = logical(modelOpt.unknownWarmAnchorFallbackSqp);
 [doaLbCache, doaUbCache] = localBuildDoaBounds(model);
 model.doaLb = doaLbCache;
 model.doaUb = doaUbCache;
@@ -978,6 +1085,10 @@ end
 baseRange = model.doaGrid{1}.range;
 doaLb = baseRange(:, 1);
 doaUb = baseRange(:, 2);
+
+if isfield(model, 'freezeDoa') && logical(model.freezeDoa)
+  return;
+end
 
 if isempty(model.initDoaParam) || isempty(model.initDoaHalfWidth)
   return;

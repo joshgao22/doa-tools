@@ -4,9 +4,8 @@ function runState = runPerfTaskGridWithCheckpoint(taskGrid, sharedData, taskRunn
 % outer task is evaluated independently and saved to one small temporary MAT
 % file so interrupted runs can resume without changing the estimator path.
 %
-% One task file is written per outer task index. A lightweight status MAT
-% file is also updated on the client side so the run directory always shows
-% visible progress while the task grid is still running.
+% One task file is written per outer task index. On success, the caller can
+% delete the temporary run directory after saveExpSnapshot finishes.
 
 arguments
   taskGrid (:, 1) struct
@@ -20,7 +19,6 @@ opt = localResolveOpt(opt);
 runDir = localBuildRunDir(opt.outputRoot, opt.runName, opt.runKey);
 taskDir = fullfile(runDir, "task");
 manifestFile = fullfile(runDir, "manifest.mat");
-statusFile = fullfile(runDir, "status.mat");
 
 if ~opt.resume && isfolder(runDir)
   rmdir(runDir, 's');
@@ -41,23 +39,24 @@ localWriteManifest(manifestFile, manifestInfo);
 numTask = numel(taskGrid);
 doneMask = localLoadDoneMask(taskDir, numTask);
 numDone = nnz(doneMask);
-localPrintStartStatus(runDir, numTask, numDone);
-localWriteStatus(statusFile, opt.runName, opt.runKey, numTask, doneMask, numDone);
-if ~isempty(opt.progressFcn) && numDone > 0
-  opt.progressFcn(numDone);
-end
-
 todoIdx = find(~doneMask);
+localPrintStartStatus(runDir, numDone, numTask);
+
 if opt.useParfor && ~isempty(todoIdx)
-  progressQueue = parallel.pool.DataQueue;
-  afterEach(progressQueue, @localHandleTaskCompleted);
+  progressQueue = [];
+  if ~isempty(opt.progressFcn)
+    progressQueue = parallel.pool.DataQueue;
+    afterEach(progressQueue, @(~) opt.progressFcn(1));
+  end
 
   parfor iTodo = 1:numel(todoIdx)
     iTask = todoIdx(iTodo);
     taskInfo = taskGrid(iTask);
     taskResult = taskRunner(taskInfo, sharedData);
     localSaveTaskResult(taskDir, iTask, taskResult);
-    send(progressQueue, iTask);
+    if ~isempty(progressQueue)
+      send(progressQueue, iTask);
+    end
   end
 else
   for iTodo = 1:numel(todoIdx)
@@ -65,100 +64,93 @@ else
     taskInfo = taskGrid(iTask);
     taskResult = taskRunner(taskInfo, sharedData);
     localSaveTaskResult(taskDir, iTask, taskResult);
-    localHandleTaskCompleted(iTask);
-  end
-end
-
-resultCell = localCollectTaskResults(taskDir, numTask);
-doneMask = localLoadDoneMask(taskDir, numTask);
-numDone = nnz(doneMask);
-localWriteStatus(statusFile, opt.runName, opt.runKey, numTask, doneMask, numDone);
-
-runState = struct();
-runState.runDir = runDir;
-runState.taskDir = taskDir;
-runState.manifestFile = manifestFile;
-runState.statusFile = statusFile;
-runState.resultCell = resultCell;
-runState.doneMask = doneMask;
-runState.numTask = numTask;
-runState.numDone = numDone;
-runState.isComplete = all(doneMask);
-
-  function localHandleTaskCompleted(taskIndex)
-  %LOCALHANDLETASKCOMPLETED Update progress and persistent status on client side.
-
-    if taskIndex >= 1 && taskIndex <= numTask
-      doneMask(taskIndex) = true;
-    end
-    numDone = nnz(doneMask);
-    localWriteStatus(statusFile, opt.runName, opt.runKey, numTask, doneMask, numDone);
     if ~isempty(opt.progressFcn)
       opt.progressFcn(1);
     end
   end
 end
 
+resultCell = localCollectTaskResults(taskDir, numTask);
+doneMask = localLoadDoneMask(taskDir, numTask);
+
+runState = struct();
+runState.runDir = runDir;
+runState.taskDir = taskDir;
+runState.manifestFile = manifestFile;
+runState.resultCell = resultCell;
+runState.doneMask = doneMask;
+runState.numTask = numTask;
+runState.numDone = nnz(doneMask);
+runState.isComplete = all(doneMask);
+end
+
 
 function opt = localResolveOpt(opt)
-%LOCALRESOLVEOPT Fill defaults and validate one option struct.
+%LOCALRESOLVEOPT Resolve defaults and validate checkpoint runner options.
 
-optDefault = struct();
-optDefault.runName = "runPerfTaskGridWithCheckpoint";
-optDefault.runKey = "default";
-optDefault.outputRoot = fullfile("out", "checkpoint_tmp");
-optDefault.useParfor = true;
-optDefault.resume = true;
-optDefault.meta = struct();
-optDefault.progressFcn = [];
+allowedField = { ...
+  'runName', ...
+  'runKey', ...
+  'outputRoot', ...
+  'useParfor', ...
+  'resume', ...
+  'meta', ...
+  'progressFcn'};
 
 optField = fieldnames(opt);
-validField = fieldnames(optDefault);
-extraField = setdiff(optField, validField);
+extraField = setdiff(optField, allowedField);
 if ~isempty(extraField)
   error('runPerfTaskGridWithCheckpoint:UnknownOption', ...
-    'Unknown option field(s): %s', strjoin(extraField, ', '));
+    'Unknown checkpoint option field: %s', strjoin(extraField, ', '));
 end
 
-for iField = 1:numel(validField)
-  fieldName = validField{iField};
-  if ~isfield(opt, fieldName) || isempty(opt.(fieldName))
-    opt.(fieldName) = optDefault.(fieldName);
-  end
+if ~isfield(opt, 'runName') || isempty(opt.runName)
+  error('runPerfTaskGridWithCheckpoint:MissingRunName', ...
+    'checkpointOpt.runName is required.');
 end
-
-if ~(ischar(opt.runName) || isStringScalar(opt.runName))
-  error('runPerfTaskGridWithCheckpoint:InvalidRunName', ...
-    'opt.runName must be a character vector or string scalar.');
+if ~isfield(opt, 'runKey') || isempty(opt.runKey)
+  opt.runKey = "default";
 end
-if ~(ischar(opt.runKey) || isStringScalar(opt.runKey))
-  error('runPerfTaskGridWithCheckpoint:InvalidRunKey', ...
-    'opt.runKey must be a character vector or string scalar.');
+if ~isfield(opt, 'outputRoot') || isempty(opt.outputRoot)
+  opt.outputRoot = fullfile("out", "checkpoint_tmp");
 end
-if ~(ischar(opt.outputRoot) || isStringScalar(opt.outputRoot))
-  error('runPerfTaskGridWithCheckpoint:InvalidOutputRoot', ...
-    'opt.outputRoot must be a character vector or string scalar.');
+if ~isfield(opt, 'useParfor') || isempty(opt.useParfor)
+  opt.useParfor = true;
 end
-if ~islogical(opt.useParfor) || ~isscalar(opt.useParfor)
-  error('runPerfTaskGridWithCheckpoint:InvalidUseParfor', ...
-    'opt.useParfor must be a logical scalar.');
+if ~isfield(opt, 'resume') || isempty(opt.resume)
+  opt.resume = true;
 end
-if ~islogical(opt.resume) || ~isscalar(opt.resume)
-  error('runPerfTaskGridWithCheckpoint:InvalidResume', ...
-    'opt.resume must be a logical scalar.');
+if ~isfield(opt, 'meta') || isempty(opt.meta)
+  opt.meta = struct();
 end
-if ~isstruct(opt.meta) || ~isscalar(opt.meta)
-  error('runPerfTaskGridWithCheckpoint:InvalidMeta', ...
-    'opt.meta must be a scalar struct.');
-end
-if ~(isempty(opt.progressFcn) || isa(opt.progressFcn, 'function_handle'))
-  error('runPerfTaskGridWithCheckpoint:InvalidProgressFcn', ...
-    'opt.progressFcn must be empty or a function handle.');
+if ~isfield(opt, 'progressFcn')
+  opt.progressFcn = [];
 end
 
 opt.runName = string(opt.runName);
 opt.runKey = string(opt.runKey);
 opt.outputRoot = string(opt.outputRoot);
+opt.useParfor = logical(opt.useParfor);
+opt.resume = logical(opt.resume);
+if ~isa(opt.meta, 'struct')
+  error('runPerfTaskGridWithCheckpoint:InvalidMeta', ...
+    'checkpointOpt.meta must be a struct.');
+end
+if ~isempty(opt.progressFcn) && ~isa(opt.progressFcn, 'function_handle')
+  error('runPerfTaskGridWithCheckpoint:InvalidProgressFcn', ...
+    'checkpointOpt.progressFcn must be empty or a function handle.');
+end
+end
+
+
+function localPrintStartStatus(runDir, numDone, numTask)
+%LOCALPRINTSTARTSTATUS Print one concise checkpoint start banner.
+
+if numDone > 0
+  fprintf('[checkpoint] Resume run from %s (%d/%d done).\n', runDir, numDone, numTask);
+else
+  fprintf('[checkpoint] Start new run at %s (0/%d done).\n', runDir, numTask);
+end
 end
 
 
@@ -192,31 +184,6 @@ if ~isequaln(manifestSaved.runName, manifestInfo.runName) || ...
     ['Checkpoint manifest mismatch detected for runName=%s, runKey=%s. ', ...
      'Delete the temporary checkpoint directory or change runKey before rerunning.'], ...
     manifestInfo.runName, manifestInfo.runKey);
-end
-end
-
-
-function localWriteStatus(statusFile, runName, runKey, numTask, doneMask, numDone)
-%LOCALWRITESTATUS Persist one lightweight progress snapshot.
-
-statusInfo = struct();
-statusInfo.runName = runName;
-statusInfo.runKey = runKey;
-statusInfo.numTask = numTask;
-statusInfo.numDone = numDone;
-statusInfo.doneMask = doneMask;
-statusInfo.updatedAt = datetime('now');
-save(statusFile, 'statusInfo');
-end
-
-
-function localPrintStartStatus(runDir, numTask, numDone)
-%LOCALPRINTSTARTSTATUS Print one concise start banner for new or resumed runs.
-
-if numDone > 0
-  fprintf('[checkpoint] Resume run from %s (%d/%d done).\n', runDir, numDone, numTask);
-else
-  fprintf('[checkpoint] Start new run at %s (0/%d done).\n', runDir, numTask);
 end
 end
 

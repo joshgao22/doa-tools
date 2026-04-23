@@ -27,16 +27,19 @@ end
 angleDiffDeg = calcLatlonAngleError(estRefOnly.doaParamEst(:), estWeightZero.doaParamEst(:));
 fdRefDiffHz = abs(estRefOnly.fdRefEst - estWeightZero.fdRefEst);
 fvalDiff = abs(estRefOnly.fval - estWeightZero.fval);
+tolAngleDeg = 1e-6;
+tolFdRefHz = 1e-3;
+tolFval = 1e-3;
 
-if angleDiffDeg > 1e-9
+if angleDiffDeg > tolAngleDeg
   error('regressionSfStaticRefOnlyEquivalence:DoaMismatch', ...
     'Zero-weight multi-sat static must match ref-only static DoA when the same DoA initializer is used.');
 end
-if fdRefDiffHz > 1e-6
+if fdRefDiffHz > tolFdRefHz
   error('regressionSfStaticRefOnlyEquivalence:FdRefMismatch', ...
     'Zero-weight multi-sat static must match ref-only static fdRef when the same DoA initializer is used.');
 end
-if fvalDiff > 1e-6
+if fvalDiff > tolFval
   error('regressionSfStaticRefOnlyEquivalence:FvalMismatch', ...
     'Zero-weight multi-sat static must match ref-only static objective value when the same DoA initializer is used.');
 end

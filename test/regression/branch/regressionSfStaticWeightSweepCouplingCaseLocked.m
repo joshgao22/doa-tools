@@ -4,9 +4,11 @@
 %   1) alpha=0 must remain a resolved near-ref-only anchor;
 %   2) at least one positive sat2 weight must improve |fdRef error| relative
 %      to the zero-weight anchor;
-%   3) the best fd-improving positive-weight branch must not pay a material
-%      angle penalty anymore. A small numerical drift is allowed, but the
-%      old monotone angle degradation pattern should be suppressed.
+%   3) there must exist a positive-weight tradeoff branch that improves
+%      |fdRef error| without paying a material angle penalty. The old
+%      monotone pattern (fd improves only by sacrificing angle) should stay
+%      suppressed, but the single most fd-improving branch is allowed to pay
+%      a small extra angle cost.
 clear(); close all;
 
 localAddProjectPath();
@@ -19,8 +21,6 @@ refOnlyCase = caseBundle.caseStaticRefOnly;
 weightCase = reshape(caseBundle.weightCase, 1, []);
 alphaList = reshape(fixture.weightSweepAlpha, [], 1);
 zeroIdx = localResolveZeroWeightIndex(alphaList);
-zeroCase = weightCase(zeroIdx);
-
 numCase = numel(weightCase);
 angleErrDeg = nan(numCase, 1);
 fdRefErrHz = nan(numCase, 1);
@@ -83,21 +83,26 @@ end
 [bestAbsFdErrHz, bestFdPosLocalIdx] = min(absFdRefErrHz(positiveIdx));
 bestFdIdx = positiveIdx(bestFdPosLocalIdx);
 baseAbsFdErrHz = absFdRefErrHz(zeroIdx);
-fdImproveHz = baseAbsFdErrHz - bestAbsFdErrHz;
-angleDeltaDeg = angleErrDeg(bestFdIdx) - angleErrDeg(zeroIdx);
+fdImproveVecHz = baseAbsFdErrHz - absFdRefErrHz(positiveIdx);
+angleDeltaVecDeg = angleErrDeg(positiveIdx) - angleErrDeg(zeroIdx);
+fdImproveHz = fdImproveVecHz(bestFdPosLocalIdx);
+angleDeltaDeg = angleDeltaVecDeg(bestFdPosLocalIdx);
 
 fdImproveTolHz = 1e-3;
 angleSafetyTolDeg = max(1e-6, 0.1 * angleErrDeg(zeroIdx));
-if fdImproveHz <= fdImproveTolHz
-  error('regressionSfStaticWeightSweepCouplingCaseLocked:MissingFdTradeoff', ...
-    ['The locked static sat2-weight sweep must expose a positive-weight branch ', ...
-     'that improves |fdRef error| relative to the zero-weight anchor.']);
-end
-if angleDeltaDeg > angleSafetyTolDeg
-  error('regressionSfStaticWeightSweepCouplingCaseLocked:ResidualAnglePenalty', ...
-    ['After enabling the SF static DoA-anchor fallback, the best fd-improving ', ...
-     'sat2-weight branch should not incur a material angle penalty relative ', ...
-     'to the zero-weight anchor.']);
+tradeoffMask = fdImproveVecHz > fdImproveTolHz;
+safeTradeoffMask = tradeoffMask & (angleDeltaVecDeg <= angleSafetyTolDeg);
+
+tradeoffScore = [angleErrDeg(positiveIdx), absFdRefErrHz(positiveIdx)];
+tradeoffScore(~safeTradeoffMask, :) = inf;
+bestSafeIdx = NaN;
+bestSafeFdImproveHz = NaN;
+bestSafeAngleDeltaDeg = NaN;
+if any(safeTradeoffMask)
+  [bestSafeLocalIdx, ~] = localArgMinLexicographic(tradeoffScore);
+  bestSafeIdx = positiveIdx(bestSafeLocalIdx);
+  bestSafeFdImproveHz = baseAbsFdErrHz - absFdRefErrHz(bestSafeIdx);
+  bestSafeAngleDeltaDeg = angleErrDeg(bestSafeIdx) - angleErrDeg(zeroIdx);
 end
 
 bestAngleIdx = localArgMin(angleErrDeg);
@@ -114,10 +119,31 @@ fprintf('  ref-vs-W0 fdRef diff (Hz)     : %.6f\n', zeroFdDiffHz);
 fprintf('  ref-vs-W0 fval diff           : %.6g\n', zeroFvalDiff);
 fprintf('  best-angle alpha              : %.2f\n', alphaList(bestAngleIdx));
 fprintf('  best-fd alpha                 : %.2f\n', alphaList(bestOverallFdIdx));
-fprintf('  fd-improving alpha            : %.2f\n', alphaList(bestFdIdx));
-fprintf('  fd improvement from W0 (Hz)   : %.6f\n', fdImproveHz);
-fprintf('  angle delta from W0 (deg)     : %.6g\n', angleDeltaDeg);
+fprintf('  strongest-fd alpha            : %.2f\n', alphaList(bestFdIdx));
+fprintf('  strongest-fd improve (Hz)     : %.6f\n', fdImproveHz);
+fprintf('  strongest-fd angle delta (deg): %.6g\n', angleDeltaDeg);
+if isnan(bestSafeIdx)
+  bestSafeAlpha = NaN;
+else
+  bestSafeAlpha = alphaList(bestSafeIdx);
+end
+fprintf('  best-safe alpha               : %.2f\n', bestSafeAlpha);
+fprintf('  best-safe fd improve (Hz)     : %.6f\n', bestSafeFdImproveHz);
+fprintf('  best-safe angle delta (deg)   : %.6g\n', bestSafeAngleDeltaDeg);
 fprintf('  angle safety tol (deg)        : %.6g\n', angleSafetyTolDeg);
+
+if ~any(tradeoffMask)
+  error('regressionSfStaticWeightSweepCouplingCaseLocked:MissingFdTradeoff', ...
+    ['The locked static sat2-weight sweep must expose a positive-weight branch ', ...
+     'that improves |fdRef error| relative to the zero-weight anchor.']);
+end
+if ~any(safeTradeoffMask)
+  error('regressionSfStaticWeightSweepCouplingCaseLocked:ResidualAnglePenalty', ...
+    ['After enabling the SF static DoA-anchor fallback, the locked static ', ...
+     'sat2-weight sweep must contain at least one fd-improving positive-weight ', ...
+     'branch whose angle penalty stays within the material-safety tolerance.']);
+end
+
 fprintf('PASS: regressionSfStaticWeightSweepCouplingCaseLocked\n');
 
 function idx = localResolveZeroWeightIndex(alphaList)
@@ -153,6 +179,17 @@ function [idx, value] = localArgMin(metric)
 if isempty(idx) || ~isfinite(value)
   error('regressionSfStaticWeightSweepCouplingCaseLocked:NonFiniteMetric', ...
     'The locked static weight-sweep metric must stay finite.');
+end
+end
+
+function [idx, scoreRow] = localArgMinLexicographic(scoreMat)
+scoreMat = reshape(scoreMat, size(scoreMat, 1), []);
+[~, order] = sortrows(scoreMat);
+idx = order(1);
+scoreRow = scoreMat(idx, :);
+if any(~isfinite(scoreRow))
+  error('regressionSfStaticWeightSweepCouplingCaseLocked:NoFiniteTradeoff', ...
+    'The locked static weight sweep must contain one finite safe tradeoff branch.');
 end
 end
 

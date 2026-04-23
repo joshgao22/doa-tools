@@ -1,48 +1,309 @@
-function resultFile = saveExpSnapshot(prefix)
-%SAVE_EXPERIMENT_SNAPSHOT Save current function workspace and entry code into one MAT file.
+function resultFile = saveExpSnapshot(prefix, opt)
+%SAVEEXPSNAPSHOT Save caller workspace snapshot for experiment recovery.
 %
-%   resultFile = save_experiment_snapshot()
-%   resultFile = save_experiment_snapshot(prefix)
+%   resultFile = saveExpSnapshot()
+%   resultFile = saveExpSnapshot(prefix)
+%   resultFile = saveExpSnapshot(prefix, opt)
 %
-% This function packs:
-%   1) All variables in the *caller* function workspace
-%   2) The entry m-file source code (as text)
-% into a single .mat file for experiment reproducibility.
+% Default behavior matches the old implementation: save all variables from
+% the caller workspace so loadExpSnapshot can restore them later.
 %
-% Input:
-%   prefix (optional) - filename prefix (default: 'exp_snapshot')
-%
-% Output:
-%   resultFile - saved .mat filename
+% Optional fields in opt:
+%   includeVars  - caller variable names to save explicitly
+%   excludeVars  - caller variable names to skip from full workspace save
+%   outputDir    - snapshot directory, default <repoRoot>/test/data/cache
+%   maxVarBytes  - skip auto-collected variables larger than this threshold
+%                  includeVars has higher priority and bypasses this filter
+%   extraMeta    - extra metadata struct to store in meta.extraMeta
+%   verbose      - print one concise save summary (default true)
 
-  if nargin < 1 || isempty(prefix)
-    prefix = 'exp_snapshot';
-  end
+if nargin < 1
+  prefix = '';
+end
+if nargin < 2 || isempty(opt)
+  opt = struct();
+end
 
-  % ---------- filename ----------
-  timestamp  = datestr(now,'yyyymmdd-HHMMSS');
-  resultFile = sprintf('%s_%s.mat', prefix, timestamp);
+opt = localResolveOpt(opt);
+callerWhos = evalin('caller', 'whos');
+callerEntry = evalin('caller', 'mfilename(''fullpath'')');
+callerEntryName = evalin('caller', 'mfilename');
+callerInfo = localBuildCallerInfo(callerEntry, callerEntryName);
+prefix = localResolvePrefix(prefix, callerInfo.entryName);
 
-  % ---------- collect caller workspace ----------
-  vars = evalin('caller', 'who');
-  data = struct();
-  for k = 1:numel(vars)
-    data.(vars{k}) = evalin('caller', vars{k});
-  end
+if ~isfolder(opt.outputDir)
+  mkdir(opt.outputDir);
+end
 
-  % ---------- meta information ----------
-  meta = struct();
-  meta.time  = datetime('now');
-  meta.entry = evalin('caller', 'mfilename(''fullpath'')');
+timestamp = datestr(now, 'yyyymmdd-HHMMSS');
+resultFile = fullfile(opt.outputDir, sprintf('%s_%s.mat', prefix, timestamp));
 
+[inventory, saveMask] = localPlanSnapshotSelection(callerWhos, opt);
+data = struct();
+saveIdx = find(saveMask);
+for iSave = 1:numel(saveIdx)
+  iVar = saveIdx(iSave);
+  varName = callerWhos(iVar).name;
   try
-    meta.code = fileread([meta.entry '.m']);
-  catch
-    meta.code = '';
+    data.(varName) = evalin('caller', varName);
+  catch readErr
+    inventory(iVar).isSaved = false;
+    inventory(iVar).skipReason = sprintf('evalFailed:%s', readErr.identifier);
+    if isfield(data, varName)
+      data = rmfield(data, varName);
+    end
   end
+end
 
-  % ---------- save ----------
-  save(resultFile, 'data', 'meta');
+meta = localBuildMeta(callerInfo, opt, data, inventory, resultFile);
 
-  fprintf('Saved experiment snapshot to %s\n', resultFile);
+saveFlag = localChooseSaveFlag(inventory);
+try
+  localSaveSnapshot(resultFile, data, meta, inventory, saveFlag);
+catch firstErr
+  if strcmp(saveFlag, '-v7.3')
+    rethrow(firstErr);
+  end
+  if isfile(resultFile)
+    delete(resultFile);
+  end
+  meta.matVersionUsed = '-v7.3';
+  localSaveSnapshot(resultFile, data, meta, inventory, '-v7.3');
+end
+
+if opt.verbose
+  savedMask = [inventory.isSaved];
+  fprintf('Saved experiment snapshot to %s (%d/%d vars saved).\n', ...
+    resultFile, nnz(savedMask), numel(savedMask));
+end
+end
+
+
+function opt = localResolveOpt(opt)
+allowedField = {'includeVars', 'excludeVars', 'outputDir', 'maxVarBytes', 'extraMeta', 'verbose'};
+optField = fieldnames(opt);
+extraField = setdiff(optField, allowedField);
+if ~isempty(extraField)
+  error('saveExpSnapshot:UnknownOption', ...
+    'Unknown saveExpSnapshot option field: %s', strjoin(extraField, ', '));
+end
+
+if ~isfield(opt, 'includeVars') || isempty(opt.includeVars)
+  opt.includeVars = {};
+else
+  opt.includeVars = cellstr(string(opt.includeVars(:)'));
+end
+if ~isfield(opt, 'excludeVars') || isempty(opt.excludeVars)
+  opt.excludeVars = {};
+else
+  opt.excludeVars = cellstr(string(opt.excludeVars(:)'));
+end
+if ~isempty(opt.includeVars) && ~isempty(opt.excludeVars)
+  error('saveExpSnapshot:ConflictingSelection', ...
+    'includeVars and excludeVars cannot be used at the same time.');
+end
+if ~isfield(opt, 'outputDir') || isempty(opt.outputDir)
+  opt.outputDir = fullfile(localGetProjectRoot(), 'test', 'data', 'cache');
+end
+if ~isfield(opt, 'maxVarBytes') || isempty(opt.maxVarBytes)
+  opt.maxVarBytes = [];
+end
+if ~isfield(opt, 'extraMeta') || isempty(opt.extraMeta)
+  opt.extraMeta = struct();
+end
+if ~isfield(opt, 'verbose') || isempty(opt.verbose)
+  opt.verbose = true;
+end
+
+opt.outputDir = char(string(opt.outputDir));
+opt.verbose = logical(opt.verbose);
+if ~isempty(opt.maxVarBytes)
+  opt.maxVarBytes = double(opt.maxVarBytes);
+  if ~isscalar(opt.maxVarBytes) || ~isfinite(opt.maxVarBytes) || opt.maxVarBytes <= 0
+    error('saveExpSnapshot:InvalidMaxVarBytes', ...
+      'maxVarBytes must be one positive finite scalar.');
+  end
+end
+if ~isstruct(opt.extraMeta)
+  error('saveExpSnapshot:InvalidExtraMeta', ...
+    'extraMeta must be a struct.');
+end
+end
+
+
+function callerInfo = localBuildCallerInfo(callerEntry, callerEntryName)
+callerInfo = struct();
+callerInfo.entry = char(string(callerEntry));
+callerInfo.entryName = char(string(callerEntryName));
+callerInfo.code = '';
+
+if isempty(callerInfo.entryName)
+  stack = dbstack('-completenames');
+  if numel(stack) >= 2
+    [stackDir, stackName] = fileparts(stack(2).file);
+    callerInfo.entryName = stackName;
+    if isempty(callerInfo.entry)
+      callerInfo.entry = fullfile(stackDir, stackName);
+    end
+  end
+end
+
+if ~isempty(callerInfo.entry)
+  entryFile = callerInfo.entry;
+  if ~endsWith(entryFile, '.m')
+    entryFile = [entryFile '.m'];
+  end
+  if isfile(entryFile)
+    try
+      callerInfo.code = fileread(entryFile);
+    catch
+      callerInfo.code = '';
+    end
+  end
+end
+end
+
+
+function prefix = localResolvePrefix(prefix, entryName)
+if nargin < 1 || isempty(prefix)
+  prefix = entryName;
+end
+if isempty(prefix)
+  prefix = 'exp_snapshot';
+end
+prefix = char(string(prefix));
+prefix = regexprep(prefix, '[\\/:*?"<>|\s]+', '_');
+if isempty(prefix)
+  prefix = 'exp_snapshot';
+end
+end
+
+
+function [inventory, saveMask] = localPlanSnapshotSelection(callerWhos, opt)
+varNameList = {callerWhos.name};
+inventory = repmat(localEmptyInventoryRow(), numel(callerWhos), 1);
+saveMask = false(numel(callerWhos), 1);
+
+includeMode = ~isempty(opt.includeVars);
+if includeMode
+  missingVar = setdiff(opt.includeVars, varNameList);
+  if ~isempty(missingVar)
+    error('saveExpSnapshot:MissingIncludeVar', ...
+      'Included caller variable not found: %s', strjoin(missingVar, ', '));
+  end
+end
+
+for iVar = 1:numel(callerWhos)
+  varInfo = callerWhos(iVar);
+  varName = varInfo.name;
+
+  inventory(iVar).name = varName;
+  inventory(iVar).class = varInfo.class;
+  inventory(iVar).size = varInfo.size;
+  inventory(iVar).bytes = varInfo.bytes;
+
+  [shouldSave, skipReason] = localSelectVariable(varName, varInfo.bytes, opt, includeMode);
+  inventory(iVar).isSaved = shouldSave;
+  inventory(iVar).skipReason = skipReason;
+  saveMask(iVar) = shouldSave;
+end
+end
+
+
+function [shouldSave, skipReason] = localSelectVariable(varName, varBytes, opt, includeMode)
+if includeMode
+  shouldSave = any(strcmp(varName, opt.includeVars));
+  if shouldSave
+    skipReason = '';
+  else
+    skipReason = 'notIncluded';
+  end
+  return;
+end
+
+if any(strcmp(varName, opt.excludeVars))
+  shouldSave = false;
+  skipReason = 'excluded';
+  return;
+end
+
+if ~isempty(opt.maxVarBytes) && varBytes > opt.maxVarBytes
+  shouldSave = false;
+  skipReason = 'tooLarge';
+  return;
+end
+
+shouldSave = true;
+skipReason = '';
+end
+
+
+function meta = localBuildMeta(callerInfo, opt, data, inventory, resultFile)
+savedVarNames = fieldnames(data);
+skipMask = ~[inventory.isSaved];
+meta = struct();
+meta.time = datetime('now');
+meta.entry = callerInfo.entry;
+meta.entryName = callerInfo.entryName;
+meta.code = callerInfo.code;
+meta.outputDir = fileparts(resultFile);
+meta.resultFile = resultFile;
+meta.savedVarNames = savedVarNames;
+meta.skippedVarNames = {inventory(skipMask).name};
+meta.extraMeta = opt.extraMeta;
+meta.matVersionUsed = 'default';
+
+if ~isempty(opt.includeVars)
+  meta.selectionMode = 'include';
+elseif ~isempty(opt.excludeVars)
+  meta.selectionMode = 'exclude';
+elseif ~isempty(opt.maxVarBytes)
+  meta.selectionMode = 'allWithSizeLimit';
+else
+  meta.selectionMode = 'all';
+end
+
+meta.maxVarBytes = opt.maxVarBytes;
+end
+
+
+function saveFlag = localChooseSaveFlag(inventory)
+savedMask = [inventory.isSaved];
+savedBytes = [inventory(savedMask).bytes];
+if isempty(savedBytes)
+  saveFlag = 'default';
+  return;
+end
+
+if any(savedBytes >= 2^31) || sum(double(savedBytes)) >= 2^31
+  saveFlag = '-v7.3';
+else
+  saveFlag = 'default';
+end
+end
+
+
+function localSaveSnapshot(resultFile, data, meta, inventory, saveFlag)
+if strcmp(saveFlag, 'default')
+  save(resultFile, 'data', 'meta', 'inventory');
+else
+  save(resultFile, 'data', 'meta', 'inventory', saveFlag);
+end
+end
+
+
+function row = localEmptyInventoryRow()
+row = struct( ...
+  'name', '', ...
+  'class', '', ...
+  'size', [], ...
+  'bytes', 0, ...
+  'isSaved', false, ...
+  'skipReason', '');
+end
+
+
+function projectRoot = localGetProjectRoot()
+thisFile = mfilename('fullpath');
+projectRoot = fileparts(fileparts(fileparts(thisFile)));
 end

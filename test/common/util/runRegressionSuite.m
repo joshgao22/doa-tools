@@ -12,7 +12,7 @@ function result = runRegressionSuite(suiteName, scriptRelPathList, varargin)
 %
 % Optional inputs:
 %   runOpt.projectRoot   - repository root. Default: auto resolve.
-%   runOpt.stopOnFailure - stop on first failure. Default: true.
+%   runOpt.stopOnFailure - stop on first failure. Default: false.
 %   runOpt.verbose       - print per-script progress. Default: true.
 %
 % Output:
@@ -88,6 +88,7 @@ for iScript = 1:numScript
     itemUse.status = "FAIL";
     itemUse.errorId = string(localNormalizeErrorId(ME.identifier));
     itemUse.errorMessage = string(ME.message);
+    itemUse.errorLocation = string(localBuildErrorLocation(ME));
   end
 
   itemUse.runTimeSec = toc(runTimer);
@@ -126,12 +127,17 @@ result.totalRunTimeSec = totalRunTimeSec;
 
 if runOpt.verbose
   localPrintSuiteSummary(suiteName, item);
+  if ~result.allPassed
+    localPrintFailureDetail(item);
+  end
 end
 
 if ~result.allPassed && ~runOpt.stopOnFailure
-  warning('runRegressionSuite:SuiteHasFailure', ...
-    'Regression suite %s finished with %d failure(s).', ...
-    char(string(suiteName)), result.numFailed);
+  firstFailIdx = find(string({item.status}) == "FAIL", 1, 'first');
+  firstFail = item(firstFailIdx);
+  error('runRegressionSuite:RegressionFailed', ...
+    'Regression suite %s finished with %d failure(s). First failure: %s\n%s', ...
+    char(string(suiteName)), result.numFailed, char(firstFail.scriptName), char(firstFail.errorMessage));
 end
 end
 
@@ -141,7 +147,7 @@ function runOpt = localParseRunOpt(varargin)
 
 runOpt = struct();
 runOpt.projectRoot = "";
-runOpt.stopOnFailure = true;
+runOpt.stopOnFailure = false;
 runOpt.verbose = true;
 
 if nargin == 0
@@ -158,6 +164,9 @@ if nargin == 1 && isstruct(varargin{1})
   end
   if isfield(optIn, 'verbose') && ~isempty(optIn.verbose)
     runOpt.verbose = logical(optIn.verbose);
+  end
+  if isfield(optIn, 'stopOnError') && ~isempty(optIn.stopOnError)
+    runOpt.stopOnFailure = logical(optIn.stopOnError);
   end
   return;
 end
@@ -177,6 +186,8 @@ for iArg = 1:2:nargin
       runOpt.stopOnFailure = logical(value);
     case 'verbose'
       runOpt.verbose = logical(value);
+    case {'stoponerror', 'stoponfail'}
+      runOpt.stopOnFailure = logical(value);
     otherwise
       error('runRegressionSuite:UnknownOption', ...
         'Unknown option name: %s', char(string(varargin{iArg})));
@@ -196,6 +207,7 @@ item.status = "NOT_RUN";
 item.runTimeSec = NaN;
 item.errorId = "";
 item.errorMessage = "";
+item.errorLocation = "";
 end
 
 
@@ -235,15 +247,17 @@ scriptName = strings(numItem, 1);
 status = strings(numItem, 1);
 runTimeSec = NaN(numItem, 1);
 errorId = strings(numItem, 1);
+errorLocation = strings(numItem, 1);
 
 for iItem = 1:numItem
   scriptName(iItem) = item(iItem).scriptName;
   status(iItem) = item(iItem).status;
   runTimeSec(iItem) = item(iItem).runTimeSec;
   errorId(iItem) = item(iItem).errorId;
+  errorLocation(iItem) = item(iItem).errorLocation;
 end
 
-summaryTable = table(scriptName, status, runTimeSec, errorId);
+summaryTable = table(scriptName, status, runTimeSec, errorId, errorLocation);
 end
 
 
@@ -257,6 +271,42 @@ totalRunTimeSec = sum([item.runTimeSec], 'omitnan');
 
 fprintf('=== %s regression summary: %d/%d passed, %d failed, total %.3f s ===\n', ...
   char(string(suiteName)), numPassed, numTotal, numFailed, totalRunTimeSec);
+end
+
+
+function localPrintFailureDetail(item)
+%LOCALPRINTFAILUREDETAIL Print one compact failure list after the suite finishes.
+
+failIdx = find(string({item.status}) == "FAIL");
+if isempty(failIdx)
+  return;
+end
+fprintf('--- failed regressions ---\n');
+for iFail = reshape(failIdx, 1, [])
+  fprintf('  %s', char(item(iFail).scriptName));
+  if strlength(item(iFail).errorId) > 0
+    fprintf(' [%s]', char(item(iFail).errorId));
+  end
+  fprintf('\n');
+  if strlength(item(iFail).errorLocation) > 0
+    fprintf('    at %s\n', char(item(iFail).errorLocation));
+  end
+  if strlength(item(iFail).errorMessage) > 0
+    fprintf('    %s\n', char(item(iFail).errorMessage));
+  end
+end
+end
+
+
+function errorLocation = localBuildErrorLocation(ME)
+%LOCALBUILDERRORLOCATION Build one compact first-stack error location string.
+
+errorLocation = "";
+if isempty(ME.stack)
+  return;
+end
+frame = ME.stack(1);
+errorLocation = string(frame.name) + ":" + string(frame.line);
 end
 
 

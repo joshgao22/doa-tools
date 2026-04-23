@@ -52,9 +52,9 @@ end
 staticMsHalfWidth = [0.002; 0.002];
 optVerbose = false;
 
-snrDb = -20:3:10;
+snrDb = -20:3:15;
 numParam = numel(snrDb);
-numRepeat = 20;
+numRepeat = 2000;
 pwrNoiseList = pwrSource ./ (10.^(snrDb(:) / 10));
 
 %% Select satellites and build the reference scene
@@ -211,7 +211,11 @@ checkpointOpt.useParfor = true;
 checkpointOpt.resume = true;
 checkpointOpt.meta = checkpointMeta;
 
-numProgressStep = numTask + numParam;
+checkpointRunDir = fullfile(checkpointOpt.outputRoot, checkpointOpt.runName, checkpointOpt.runKey);
+checkpointTaskDir = fullfile(checkpointRunDir, 'task');
+numDoneTask = localCountCheckpointTaskFile(checkpointTaskDir, numTask);
+numTodoTask = numTask - numDoneTask;
+numProgressStep = numTodoTask + numParam;
 progressbar('reset', numProgressStep);
 checkpointOpt.progressFcn = @(step) progressbar('advance', step);
 
@@ -434,6 +438,23 @@ for iSat = 2:numel(selectedSatIdxGlobal)
 end
 runKey = string(sprintf('seed%d_%s_snr%dto%d_n%d_rep%d_case%d', ...
   baseSeed, satToken, snrDb(1), snrDb(end), numel(snrDb), numRepeat, numCase));
+end
+
+
+function numDoneTask = localCountCheckpointTaskFile(taskDir, numTask)
+%LOCALCOUNTCHECKPOINTTASKFILE Count completed checkpoint task files.
+
+numDoneTask = 0;
+if ~isfolder(taskDir)
+  return;
+end
+
+for iTask = 1:numTask
+  taskFile = fullfile(taskDir, sprintf('task_%06d.mat', iTask));
+  if isfile(taskFile)
+    numDoneTask = numDoneTask + 1;
+  end
+end
 end
 
 

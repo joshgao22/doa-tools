@@ -62,6 +62,10 @@ baseRange = model.doaGrid{1}.range;
 doaLb = baseRange(:, 1);
 doaUb = baseRange(:, 2);
 
+if isfield(model, 'freezeDoa') && logical(model.freezeDoa)
+  return;
+end
+
 if isempty(model.initDoaParam) || isempty(model.initDoaHalfWidth)
   return;
 end
