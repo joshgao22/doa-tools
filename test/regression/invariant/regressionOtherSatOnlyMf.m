@@ -1,14 +1,15 @@
+function regressionOtherSatOnlyMf(varargin)
 % Regression check for the other-satellite-only MF dynamic path.
 % This script focuses on one narrow contract only: after selecting the
 % non-reference satellite as a single-satellite subset, the MF generator,
 % model builder, initializer, and known-rate solver should still remain
 % self-consistent and recover that subset truth.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
-fprintf('Running regressionOtherSatOnlyMf ...\n');
+  fprintf('Running regressionOtherSatOnlyMf ...\n');
 
 truthHyp = struct();
 truthHyp.localDoaArr = localExtractTruthLocalDoa(fixture.sceneSeqOtherOnly);
@@ -63,14 +64,17 @@ if angleErrDeg > 0.01 || fdRefErrHz > 1 || fdRateErrHzPerSec > 50
     angleErrDeg, fdRefErrHz, fdRateErrHzPerSec);
 end
 
-fprintf('  otherSat global idx     : %d\n', fixture.otherSatIdxGlobal);
-fprintf('  truth residual ratio    : %.3e\n', residualRatioTruth);
-fprintf('  solveVariant            : %s\n', string(optimInfo.solveVariant));
-fprintf('  angle err (deg)         : %.6f\n', angleErrDeg);
-fprintf('  fdRef err (Hz)          : %.6f\n', fdRefErrHz);
-fprintf('  fdRate err (Hz/s)       : %.6f\n', fdRateErrHzPerSec);
-fprintf('PASS: regressionOtherSatOnlyMf\n');
+  fprintf('  otherSat global idx     : %d\n', fixture.otherSatIdxGlobal);
+  fprintf('  truth residual ratio    : %.3e\n', residualRatioTruth);
+  fprintf('  solveVariant            : %s\n', string(optimInfo.solveVariant));
+  fprintf('  angle err (deg)         : %.6f\n', angleErrDeg);
+  fprintf('  fdRef err (Hz)          : %.6f\n', fdRefErrHz);
+  fprintf('  fdRate err (Hz/s)       : %.6f\n', fdRateErrHzPerSec);
+  fprintf('PASS: regressionOtherSatOnlyMf\n');
 
+
+
+end
 
 function localDoa = localExtractTruthLocalDoa(sceneSeq)
 %LOCALEXTRACTTRUTHLOCALDOA Extract 2 x Ns x Nf local DoA truth.
@@ -180,13 +184,4 @@ fixture.carrierFreq = carrierFreq;
 fixture.fdRangeOther = fdRangeOther;
 fixture.fdRateRangeOther = fdRateRangeOther;
 fixture.otherSatIdxGlobal = otherSatIdxGlobal;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

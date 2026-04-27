@@ -1,15 +1,18 @@
+function regressionMfUnknownWarmStartSet(varargin)
 % Regression check for CP-U outer warm-start candidate construction.
-% This script focuses on one narrow contract only:
+% This regression focuses on one narrow contract only:
 %   1) buildUnknownInitCandidateSet must expose the documented outer start
 %      sources through startTag;
 %   2) the outer candidate set must retain both fromCpK and fromStatic;
 %   3) each outer candidate must carry finite initParam and a local DoA box;
 %   4) outer-source identity must be preserved even when the two sources
 %      collapse to the same numeric fdRate initializer.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
+fixture.dynMsKnownOpt.verbose = verbose;
+fixture.dynMsUnknownOpt.verbose = verbose;
 
 fprintf('Running regressionMfUnknownWarmStartSet ...\n');
 
@@ -106,6 +109,7 @@ fprintf('  DoA half-width norm     : %s\n', localFormatNumericRow(halfWidthNorm)
 fprintf('  collapsed fdRate init   : %d\n', isCollapsedFdRateInit);
 fprintf('PASS: regressionMfUnknownWarmStartSet\n');
 
+end
 
 function textOut = localFormatStringRow(valueVec)
 %LOCALFORMATSTRINGROW Format one string row for compact logging.
@@ -278,13 +282,4 @@ spanTruth = max(maxTruth - minTruth, eps);
 pad = max(absPad, fracPad * spanTruth);
 value = [min(defaultRange(1), minTruth - pad), ...
          max(defaultRange(2), maxTruth + pad)];
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

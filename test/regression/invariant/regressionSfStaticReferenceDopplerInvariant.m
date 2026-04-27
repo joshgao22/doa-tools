@@ -1,3 +1,4 @@
+function regressionSfStaticReferenceDopplerInvariant(varargin)
 % Regression check for SF static reference-Doppler invariants.
 % This script focuses on one narrow contract only:
 %   1) every resolved SF static estimator result must satisfy
@@ -7,12 +8,13 @@
 %      in the estimator output aux fields;
 %   2) the ref-only subset must remap refSatIdxLocal to 1, while the full
 %      multi-satellite cases must preserve the full-scene reference index.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionSfStaticReferenceDopplerInvariant ...\n');
+  fprintf('Running regressionSfStaticReferenceDopplerInvariant ...\n');
 
 caseList = [ ...
   fixture.caseBundle.caseStaticRefOnly, ...
@@ -38,20 +40,22 @@ maxRefMatchErrHz = 0;
 maxDeltaRefErrHz = 0;
 for iCase = 1:numel(caseList)
   [deltaRefErrHz, refMatchErrHz, composeErrHz] = localCheckCaseInvariant( ...
-    caseList(iCase), expectedRefIdxList(iCase), expectedNumSatList(iCase));
+    caseList(iCase), expectedRefIdxList(iCase), expectedNumSatList(iCase), verbose);
   maxDeltaRefErrHz = max(maxDeltaRefErrHz, deltaRefErrHz);
   maxRefMatchErrHz = max(maxRefMatchErrHz, refMatchErrHz);
   maxComposeErrHz = max(maxComposeErrHz, composeErrHz);
 end
 
-fprintf('  checked case count           : %d\n', numel(caseList));
-fprintf('  max |deltaFdRef(refSat)| Hz  : %.6g\n', maxDeltaRefErrHz);
-fprintf('  max |fdSat(refSat)-fdRef| Hz : %.6g\n', maxRefMatchErrHz);
-fprintf('  max composition error Hz     : %.6g\n', maxComposeErrHz);
-fprintf('PASS: regressionSfStaticReferenceDopplerInvariant\n');
+  fprintf('  checked case count           : %d\n', numel(caseList));
+  fprintf('  max |deltaFdRef(refSat)| Hz  : %.6g\n', maxDeltaRefErrHz);
+  fprintf('  max |fdSat(refSat)-fdRef| Hz : %.6g\n', maxRefMatchErrHz);
+  fprintf('  max composition error Hz     : %.6g\n', maxComposeErrHz);
+  fprintf('PASS: regressionSfStaticReferenceDopplerInvariant\n');
 
 
-function [deltaRefErrHz, refMatchErrHz, composeErrHz] = localCheckCaseInvariant(caseInfo, expectedRefIdxLocal, expectedNumSat)
+end
+
+function [deltaRefErrHz, refMatchErrHz, composeErrHz] = localCheckCaseInvariant(caseInfo, expectedRefIdxLocal, expectedNumSat, verbose)
 %LOCALCHECKCASEINVARIANT Check one resolved SF static case.
 
 if ~isstruct(caseInfo) || ~isfield(caseInfo, 'estResult') || isempty(caseInfo.estResult)
@@ -112,15 +116,8 @@ if composeErrHz > tolHz
     caseTag, composeErrHz, tolHz);
 end
 
-fprintf('  %-28s refIdx=%d numSat=%d composeErr=%.3e Hz\n', ...
-  caseTag, refSatIdxLocal, numel(fdSat), composeErrHz);
+if verbose
+  fprintf('  %-28s refIdx=%d numSat=%d composeErr=%.3e Hz\n', ...
+    caseTag, refSatIdxLocal, numel(fdSat), composeErrHz);
 end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

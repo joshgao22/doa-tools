@@ -1,15 +1,17 @@
+function regressionMsSfStaticObjectiveDecomposition(varargin)
 % Regression check for SF static multi-sat objective decomposition.
 % Contract:
 %   1) the full SF static objective at weight [1; alpha] must equal the sum
 %      of the ref-only full-scene objective and alpha times the non-ref-only
 %      full-scene objective at the same fixed probe point;
 %   2) the same decomposition must hold per-satellite in aux.objectiveSat.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionMsSfStaticObjectiveDecomposition ...\n');
+  fprintf('Running regressionMsSfStaticObjectiveDecomposition ...\n');
 
 alphaList = reshape(fixture.weightSweepAlpha, [], 1);
 probePoint = struct();
@@ -48,13 +50,15 @@ if max(abs(perSatErr(:))) > perSatTol
     'The per-satellite SF static objective pieces must follow the same weighted decomposition.');
 end
 
-fprintf('  alpha list                     : %s\n', localFormatNumericRow(alphaList));
-fprintf('  full objective sweep           : %s\n', localFormatNumericRow(objFull));
-fprintf('  predicted objective sweep      : %s\n', localFormatNumericRow(objPred));
-fprintf('  objective decomposition error  : %s\n', localFormatNumericRow(objErr));
-fprintf('  max per-sat error              : %.6g\n', max(abs(perSatErr(:))));
-fprintf('PASS: regressionMsSfStaticObjectiveDecomposition\n');
+  fprintf('  alpha list                     : %s\n', localFormatNumericRow(alphaList));
+  fprintf('  full objective sweep           : %s\n', localFormatNumericRow(objFull));
+  fprintf('  predicted objective sweep      : %s\n', localFormatNumericRow(objPred));
+  fprintf('  objective decomposition error  : %s\n', localFormatNumericRow(objErr));
+  fprintf('  max per-sat error              : %.6g\n', max(abs(perSatErr(:))));
+  fprintf('PASS: regressionMsSfStaticObjectiveDecomposition\n');
 
+
+end
 
 function probe = localEvalWeightCase(fixture, satWeight, probePoint)
 %LOCALEVALWEIGHTCASE Evaluate one SF static full-scene weight case.
@@ -72,12 +76,4 @@ function text = localFormatNumericRow(value)
 value = reshape(value, 1, []);
 text = sprintf('[%s]', strjoin(arrayfun(@(x) sprintf('%.6g', x), value, ...
   'UniformOutput', false), ', '));
-end
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

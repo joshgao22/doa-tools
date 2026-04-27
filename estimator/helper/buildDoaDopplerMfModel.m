@@ -51,6 +51,9 @@ end
 if ~isfield(modelOpt, 'optimOpt') || isempty(modelOpt.optimOpt)
   modelOpt.optimOpt = struct();
 end
+if ~isfield(modelOpt, 'verbose') || isempty(modelOpt.verbose)
+  modelOpt.verbose = false;
+end
 if ~isfield(modelOpt, 'phaseMode') || isempty(modelOpt.phaseMode)
   modelOpt.phaseMode = 'continuous';
 end
@@ -132,6 +135,21 @@ end
 if ~isfield(modelOpt, 'unknownWarmAnchorFallbackSqp') || isempty(modelOpt.unknownWarmAnchorFallbackSqp)
   modelOpt.unknownWarmAnchorFallbackSqp = true;
 end
+if ~isfield(modelOpt, 'unknownWarmAnchorUseParfor') || isempty(modelOpt.unknownWarmAnchorUseParfor)
+  modelOpt.unknownWarmAnchorUseParfor = false;
+end
+if ~isfield(modelOpt, 'unknownWarmAnchorMinParforSeed') || isempty(modelOpt.unknownWarmAnchorMinParforSeed)
+  modelOpt.unknownWarmAnchorMinParforSeed = 3;
+end
+if ~isfield(modelOpt, 'unknownWarmAnchorFdRateReleaseHalfWidth') || isempty(modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth)
+  modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth = [];
+end
+if ~isfield(modelOpt, 'unknownWarmAnchorFdRateReleaseOffsetList') || isempty(modelOpt.unknownWarmAnchorFdRateReleaseOffsetList)
+  modelOpt.unknownWarmAnchorFdRateReleaseOffsetList = [];
+end
+if ~isfield(modelOpt, 'verboseSolverIterations') || isempty(modelOpt.verboseSolverIterations)
+  modelOpt.verboseSolverIterations = false;
+end
 
 if ~isscalar(modelOpt.lightSpeed) || ~isfinite(modelOpt.lightSpeed) || modelOpt.lightSpeed <= 0
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidLightSpeed', ...
@@ -173,6 +191,10 @@ end
 if ~isscalar(modelOpt.phaseRefine) || ~islogical(modelOpt.phaseRefine)
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidPhaseRefine', ...
     'modelOpt.phaseRefine must be a logical scalar.');
+end
+if ~isscalar(modelOpt.verbose) || ~islogical(modelOpt.verbose)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidVerbose', ...
+    'modelOpt.verbose must be a logical scalar.');
 end
 if ~isscalar(modelOpt.debugEnable) || ~islogical(modelOpt.debugEnable)
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidDebugEnable', ...
@@ -261,6 +283,42 @@ if ~isscalar(modelOpt.unknownWarmAnchorFallbackSqp) || ...
     ~islogical(modelOpt.unknownWarmAnchorFallbackSqp)
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownWarmAnchorFallbackSqp', ...
     'modelOpt.unknownWarmAnchorFallbackSqp must be a logical scalar.');
+end
+if ~isscalar(modelOpt.unknownWarmAnchorUseParfor) || ...
+    ~islogical(modelOpt.unknownWarmAnchorUseParfor)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownWarmAnchorUseParfor', ...
+    'modelOpt.unknownWarmAnchorUseParfor must be a logical scalar.');
+end
+if ~isscalar(modelOpt.unknownWarmAnchorMinParforSeed) || ...
+    ~isfinite(modelOpt.unknownWarmAnchorMinParforSeed) || ...
+    modelOpt.unknownWarmAnchorMinParforSeed < 1
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownWarmAnchorMinParforSeed', ...
+    'modelOpt.unknownWarmAnchorMinParforSeed must be a positive finite scalar.');
+end
+modelOpt.unknownWarmAnchorMinParforSeed = ceil(modelOpt.unknownWarmAnchorMinParforSeed);
+if ~isempty(modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth)
+  if ~isscalar(modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth) || ...
+      ~isfinite(modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth) || ...
+      modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth < 0
+    error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownWarmAnchorFdRateReleaseHalfWidth', ...
+      ['modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth must be empty or ', ...
+       'one nonnegative finite scalar.']);
+  end
+end
+if ~isempty(modelOpt.unknownWarmAnchorFdRateReleaseOffsetList)
+  if ~isnumeric(modelOpt.unknownWarmAnchorFdRateReleaseOffsetList) || ...
+      any(~isfinite(modelOpt.unknownWarmAnchorFdRateReleaseOffsetList(:)))
+    error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownWarmAnchorFdRateReleaseOffsetList', ...
+      ['modelOpt.unknownWarmAnchorFdRateReleaseOffsetList must be empty or ', ...
+       'one finite numeric vector.']);
+  end
+  modelOpt.unknownWarmAnchorFdRateReleaseOffsetList = ...
+    reshape(modelOpt.unknownWarmAnchorFdRateReleaseOffsetList, [], 1);
+end
+if ~isscalar(modelOpt.verboseSolverIterations) || ...
+    ~islogical(modelOpt.verboseSolverIterations)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidVerboseSolverIterations', ...
+    'modelOpt.verboseSolverIterations must be a logical scalar.');
 end
 if ~modelOpt.debugEnable
   modelOpt.debugStoreEvalTrace = false;
@@ -448,6 +506,7 @@ model.initFdCount = modelOpt.initFdCount;
 model.initDoaParam = reshape(modelOpt.initDoaParam, [], 1);
 model.initDoaHalfWidth = reshape(modelOpt.initDoaHalfWidth, [], 1);
 model.optimOpt = modelOpt.optimOpt;
+model.verbose = logical(modelOpt.verbose);
 model.debugEnable = modelOpt.debugEnable;
 model.debugTruth = modelOpt.debugTruth;
 model.debugStoreEvalTrace = modelOpt.debugStoreEvalTrace;
@@ -463,6 +522,11 @@ model.continuousPhaseNonRefFitFloorWeight = modelOpt.continuousPhaseNonRefFitFlo
 model.continuousPhaseNonRefSupportFloorWeight = modelOpt.continuousPhaseNonRefSupportFloorWeight;
 model.unknownWarmAnchorUseScaledSolve = logical(modelOpt.unknownWarmAnchorUseScaledSolve);
 model.unknownWarmAnchorFallbackSqp = logical(modelOpt.unknownWarmAnchorFallbackSqp);
+model.unknownWarmAnchorUseParfor = logical(modelOpt.unknownWarmAnchorUseParfor);
+model.unknownWarmAnchorMinParforSeed = modelOpt.unknownWarmAnchorMinParforSeed;
+model.unknownWarmAnchorFdRateReleaseHalfWidth = modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth;
+model.unknownWarmAnchorFdRateReleaseOffsetList = reshape(modelOpt.unknownWarmAnchorFdRateReleaseOffsetList, [], 1);
+model.verboseSolverIterations = logical(modelOpt.verboseSolverIterations);
 [doaLbCache, doaUbCache] = localBuildDoaBounds(model);
 model.doaLb = doaLbCache;
 model.doaUb = doaUbCache;

@@ -1,11 +1,12 @@
+function regressionMfBranchKnownUnknown(varargin)
 % Regression check for MF known-rate / unknown-rate branch solving.
-% This script focuses on one narrow contract only:
+% This regression focuses on one narrow contract only:
 %   1) the unknown-rate branch must build continuation candidates;
 %   2) both CP-K and CP-U must improve upon the same initialized state;
 %   3) CP-U must not fit worse than CP-K on the same noiseless data.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
 fprintf('Running regressionMfBranchKnownUnknown ...\n');
@@ -19,6 +20,7 @@ commonOpt.initDoaParam = fixture.truth.latlonTrueDeg(:) + [0.05; -0.04];
 commonOpt.initDoaHalfWidth = [0.10; 0.10];
 commonOpt.optimOpt = struct('MaxIterations', 80, 'StepTolerance', 1e-10, ...
   'OptimalityTolerance', 1e-10);
+commonOpt.verbose = verbose;
 
 optKnown = commonOpt;
 optKnown.fdRateMode = 'known';
@@ -28,7 +30,7 @@ optKnown.fdRateKnown = fixture.truth.fdRateFit;
   fixture.carrierFreq, fixture.sampleRate, fixture.viewMs.doaGrid, ...
   fixture.fdRange, fixture.fdRateRange, optKnown);
 [initParamKnown, ~] = buildDoaDopplerMfInit(modelKnown, []);
-[solveKnown, optimInfoKnown, initEvalDiagKnown] = solveDoaDopplerMfBranches(modelKnown, initParamKnown, false);
+[solveKnown, optimInfoKnown, initEvalDiagKnown] = solveDoaDopplerMfBranches(modelKnown, initParamKnown, verbose);
 
 optUnknown = commonOpt;
 optUnknown.fdRateMode = 'unknown';
@@ -37,7 +39,7 @@ optUnknown.fdRateMode = 'unknown';
   fixture.carrierFreq, fixture.sampleRate, fixture.viewMs.doaGrid, ...
   fixture.fdRange, fixture.fdRateRange, optUnknown);
 [initParamUnknown, ~] = buildDoaDopplerMfInit(modelUnknown, []);
-[solveUnknown, optimInfoUnknown, initEvalDiagUnknown] = solveDoaDopplerMfBranches(modelUnknown, initParamUnknown, false);
+[solveUnknown, optimInfoUnknown, initEvalDiagUnknown] = solveDoaDopplerMfBranches(modelUnknown, initParamUnknown, verbose);
 
 latlonKnown = reshape(solveKnown.finalEvalDiag.latlon, 2, []);
 latlonUnknown = reshape(solveUnknown.finalEvalDiag.latlon, 2, []);
@@ -101,6 +103,7 @@ fprintf('  CP-U fdRef err (Hz)    : %.6f\n', fdRefErrUnknownHz);
 fprintf('  CP-U fdRate err (Hz/s) : %.6f\n', fdRateErrUnknownHzPerSec);
 fprintf('PASS: regressionMfBranchKnownUnknown\n');
 
+end
 
 function fixture = localBuildRegressionFixture()
 %LOCALBUILDREGRESSIONFIXTURE Build one noiseless dynamic multi-sat case.
@@ -179,13 +182,4 @@ fixture.sampleRate = waveInfo.sampleRate;
 fixture.carrierFreq = carrierFreq;
 fixture.fdRange = fdRange;
 fixture.fdRateRange = fdRateRange;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

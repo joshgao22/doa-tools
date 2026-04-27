@@ -4,8 +4,9 @@ function runState = runPerfTaskGridWithCheckpoint(taskGrid, sharedData, taskRunn
 % outer task is evaluated independently and saved to one small temporary MAT
 % file so interrupted runs can resume without changing the estimator path.
 %
-% One task file is written per outer task index. On success, the caller can
-% delete the temporary run directory after saveExpSnapshot finishes.
+% One task file is written per outer task index. On success, callers can set
+% cleanupOnSuccess=true for immediate cleanup or call cleanupPerfTaskGridCheckpoint
+% after assembling and saving their final lightweight result struct.
 
 arguments
   taskGrid (:, 1) struct
@@ -74,6 +75,9 @@ resultCell = localCollectTaskResults(taskDir, numTask);
 doneMask = localLoadDoneMask(taskDir, numTask);
 
 runState = struct();
+runState.runName = opt.runName;
+runState.runKey = opt.runKey;
+runState.outputRoot = opt.outputRoot;
 runState.runDir = runDir;
 runState.taskDir = taskDir;
 runState.manifestFile = manifestFile;
@@ -82,6 +86,14 @@ runState.doneMask = doneMask;
 runState.numTask = numTask;
 runState.numDone = nnz(doneMask);
 runState.isComplete = all(doneMask);
+runState.cleanupOnSuccess = opt.cleanupOnSuccess;
+runState.cleanedOnSuccess = false;
+if opt.cleanupOnSuccess && runState.isComplete
+  runState.cleanupReport = cleanupPerfTaskGridCheckpoint(runState, opt.cleanupOpt);
+  runState.cleanedOnSuccess = true;
+else
+  runState.cleanupReport = struct([]);
+end
 end
 
 
@@ -95,7 +107,9 @@ allowedField = { ...
   'useParfor', ...
   'resume', ...
   'meta', ...
-  'progressFcn'};
+  'progressFcn', ...
+  'cleanupOnSuccess', ...
+  'cleanupOpt'};
 
 optField = fieldnames(opt);
 extraField = setdiff(optField, allowedField);
@@ -126,12 +140,19 @@ end
 if ~isfield(opt, 'progressFcn')
   opt.progressFcn = [];
 end
+if ~isfield(opt, 'cleanupOnSuccess') || isempty(opt.cleanupOnSuccess)
+  opt.cleanupOnSuccess = false;
+end
+if ~isfield(opt, 'cleanupOpt') || isempty(opt.cleanupOpt)
+  opt.cleanupOpt = struct();
+end
 
 opt.runName = string(opt.runName);
 opt.runKey = string(opt.runKey);
 opt.outputRoot = string(opt.outputRoot);
 opt.useParfor = logical(opt.useParfor);
 opt.resume = logical(opt.resume);
+opt.cleanupOnSuccess = logical(opt.cleanupOnSuccess);
 if ~isa(opt.meta, 'struct')
   error('runPerfTaskGridWithCheckpoint:InvalidMeta', ...
     'checkpointOpt.meta must be a struct.');
@@ -139,6 +160,10 @@ end
 if ~isempty(opt.progressFcn) && ~isa(opt.progressFcn, 'function_handle')
   error('runPerfTaskGridWithCheckpoint:InvalidProgressFcn', ...
     'checkpointOpt.progressFcn must be empty or a function handle.');
+end
+if ~isstruct(opt.cleanupOpt)
+  error('runPerfTaskGridWithCheckpoint:InvalidCleanupOpt', ...
+    'checkpointOpt.cleanupOpt must be a struct.');
 end
 end
 

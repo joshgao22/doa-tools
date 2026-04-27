@@ -396,7 +396,7 @@ checkpointRunDir = runState.runDir;
 clear sharedData taskGrid checkpointMeta checkpointOpt runState;
 saveExpSnapshot("doaDopplerStatDualSatUraEciPerf");
 if isfolder(checkpointRunDir)
-  rmdir(checkpointRunDir, 's');
+  cleanupRunArtifacts(checkpointRunDir, struct('requiredPrefix', 'seed', 'verbose', false));
 end
 
 %% Local functions

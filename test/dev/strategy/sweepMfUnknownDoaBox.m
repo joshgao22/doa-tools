@@ -3,8 +3,6 @@
 % boxes so we can choose a practical default width. It reports the final
 % angle error, fval, boundary margin, and fdRate gap for each box.
 clear(); close all; clc;
-
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
 fprintf('Running sweepMfUnknownDoaBox ...\n');
@@ -117,8 +115,4 @@ end
 function value = localExpandRangeToTruth(defaultRange, truthVals, fracPad, absPad)
 truthVals = truthVals(isfinite(truthVals)); if isempty(truthVals), value = defaultRange; return; end
 minTruth = min(truthVals); maxTruth = max(truthVals); spanTruth = max(maxTruth - minTruth, eps); pad = max(absPad, fracPad * spanTruth); value = [min(defaultRange(1), minTruth - pad), max(defaultRange(2), maxTruth + pad)];
-end
-
-function localAddProjectPath()
-scriptDir = fileparts(mfilename('fullpath')); projectRoot = fileparts(fileparts(scriptDir)); addpath(genpath(projectRoot));
 end

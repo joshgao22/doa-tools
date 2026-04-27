@@ -1,13 +1,15 @@
-% Regression diagnostic for the simplified dynamic flow.
+function regressionMfDoaProfileWithHealthyFd(varargin)
+%REGRESSIONMFDOAPROFILEWITHHEALTHYFD Guard simplified dynamic DoA-profile regression.
 % Find one MS-MF dynamic case whose fd chain is already healthy, then scan
 % local DoA objective meshes for:
 %   1) SS-SF-Static
 %   2) MS-SF-Static
 %   3) MS-MF-Subset-CP (selected non-periodic subset)
 %   4) MS-MF-Periodic-CP
-% using the original objective scale (no reciprocal transform).
-clear(); close all;
-localAddProjectPath();
+% using the original objective scale. This regression is automatic only;
+% the mesh-plotting companion lives in test/dev/probe.
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
 context = buildDynamicDualSatEciContext(struct( ...
   'baseSeed', 253, ...
@@ -19,6 +21,7 @@ flowOpt = buildSimpleDynamicFlowOpt(struct( ...
   'periodicRefineFdRateHalfWidthHzPerSec', 100, ...
   'periodicRefineDoaHalfWidthDeg', [1e-8; 1e-8], ...
   'periodicRefineFreezeDoa', true));
+flowOpt.verbose = verbose;
 
 snrDb = 10;
 seedList = 253:264;
@@ -26,7 +29,7 @@ numSeed = numel(seedList);
 healthyCaseCell = cell(numSeed, 1);
 healthyScoreList = -inf(numSeed, 1);
 
-seedTracker = localCreateProgressTracker('Searching healthy-fd seeds', numSeed);
+seedTracker = localCreateProgressTracker('Searching healthy-fd seeds', numSeed, verbose);
 cleanupSeedTracker = onCleanup(@() localCloseProgressTracker(seedTracker));
 parfor iSeed = 1:numSeed
   taskSeed = seedList(iSeed);
@@ -48,7 +51,9 @@ parfor iSeed = 1:numSeed
       healthyCaseCell{iSeed} = struct('repeatData', repeatData, 'staticBundle', staticBundle, 'msFlow', msFlow);
     end
   end
-  send(seedTracker.queue, 1);
+  if verbose
+    send(seedTracker.queue, 1);
+  end
 end
 clear cleanupSeedTracker;
 
@@ -94,37 +99,30 @@ periodicModel = localBuildMfProbeModel(selectedRep.repeatData.periodicFixture, p
 
 ssStaticSurface = localScanSfDoaSurface( ...
   ssStaticModel, ssStaticCase.estResult.fdRefEst, latGrid, lonGrid, ...
-  truthDoaDeg, ssStaticDoaDeg, "SS-SF-Static");
+  truthDoaDeg, ssStaticDoaDeg, "SS-SF-Static", verbose);
 msStaticSurface = localScanSfDoaSurface( ...
   msStaticModel, msStaticCase.estResult.fdRefEst, latGrid, lonGrid, ...
-  truthDoaDeg, msStaticDoaDeg, "MS-SF-Static");
+  truthDoaDeg, msStaticDoaDeg, "MS-SF-Static", verbose);
 subsetSurface = localScanMfDoaSurface( ...
   subsetModel, subsetCase.estResult.fdRefEst, subsetCase.estResult.fdRateEst, ...
   latGrid, lonGrid, truthDoaDeg, subsetDoaDeg, probeOpt, ...
-  sprintf('MS-MF-Subset-CP (%s)', char(selectedSubsetLabel)));
+  sprintf('MS-MF-Subset-CP (%s)', char(selectedSubsetLabel)), verbose);
 periodicSurface = localScanMfDoaSurface( ...
   periodicModel, periodicCase.estResult.fdRefEst, periodicCase.estResult.fdRateEst, ...
-  latGrid, lonGrid, truthDoaDeg, periodicDoaDeg, probeOpt, "MS-MF-Periodic-CP");
+  latGrid, lonGrid, truthDoaDeg, periodicDoaDeg, probeOpt, "MS-MF-Periodic-CP", verbose);
 
-fprintf('Running regressionMfDoaProfileWithHealthyFd ...\n');
-fprintf('  selected taskSeed              : %d\n', selectedRep.repeatData.taskSeed);
-fprintf('  selected subset label          : %s\n', selectedSubsetLabel);
-fprintf('  selected subset offsets        : %s\n', localFormatIntegerRow(selectedSubsetOffsets));
-fprintf('  dyn angle err (deg)            : %.6f\n', periodicSummary.angleErrDeg);
-fprintf('  dyn fdRef err (Hz)             : %.6f\n', periodicSummary.fdRefErrHz);
-fprintf('  dyn fdRate err (Hz/s)          : %.6f\n', periodicSummary.fdRateErrHzPerSec);
-localPrintSurfaceSummary(ssStaticSurface);
-localPrintSurfaceSummary(msStaticSurface);
-localPrintSurfaceSummary(subsetSurface);
-localPrintSurfaceSummary(periodicSurface);
-localPlotDoaMeshComparison(latGrid, lonGrid, [ssStaticSurface, msStaticSurface, subsetSurface, periodicSurface]);
-fprintf('PASS: regressionMfDoaProfileWithHealthyFd\n');
-
-
-function localAddProjectPath()
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
+  fprintf('Running regressionMfDoaProfileWithHealthyFd ...\n');
+  fprintf('  selected taskSeed              : %d\n', selectedRep.repeatData.taskSeed);
+  fprintf('  selected subset label          : %s\n', selectedSubsetLabel);
+  fprintf('  selected subset offsets        : %s\n', localFormatIntegerRow(selectedSubsetOffsets));
+  fprintf('  dyn angle err (deg)            : %.6f\n', periodicSummary.angleErrDeg);
+  fprintf('  dyn fdRef err (Hz)             : %.6f\n', periodicSummary.fdRefErrHz);
+  fprintf('  dyn fdRate err (Hz/s)          : %.6f\n', periodicSummary.fdRateErrHzPerSec);
+  localPrintSurfaceSummary(ssStaticSurface);
+  localPrintSurfaceSummary(msStaticSurface);
+  localPrintSurfaceSummary(subsetSurface);
+  localPrintSurfaceSummary(periodicSurface);
+  fprintf('PASS: regressionMfDoaProfileWithHealthyFd\n');
 end
 
 function value = localGetFieldOrDefault(dataStruct, fieldName, defaultValue)
@@ -137,12 +135,18 @@ if isstruct(dataStruct) && isfield(dataStruct, fieldName)
 end
 end
 
-function tracker = localCreateProgressTracker(titleText, totalCount)
+function tracker = localCreateProgressTracker(titleText, totalCount, verbose)
 tracker = struct();
-tracker.queue = parallel.pool.DataQueue;
+tracker.queue = [];
 tracker.titleText = char(titleText);
 tracker.totalCount = totalCount;
+tracker.verbose = logical(verbose);
 
+if ~tracker.verbose
+  return;
+end
+
+tracker.queue = parallel.pool.DataQueue;
 fprintf('%s\n', tracker.titleText);
 progressbar('displaymode', 'replace');
 progressbar('minimalupdateinterval', 0.2);
@@ -151,7 +155,7 @@ afterEach(tracker.queue, @(~) progressbar('advance'));
 end
 
 function localCloseProgressTracker(tracker)
-if isempty(tracker)
+if isempty(tracker) || ~isfield(tracker, 'verbose') || ~tracker.verbose
   return;
 end
 pause(0.05);
@@ -195,9 +199,9 @@ modelOpt.disableUnknownDoaReleaseFloor = true;
   fixtureUse.viewMs.doaGrid, fixtureUse.fdRange, fixtureUse.fdRateRange, modelOpt);
 end
 
-function surfaceInfo = localScanSfDoaSurface(model, fdRefFix, latGrid, lonGrid, truthDoaDeg, estDoaDeg, displayName)
+function surfaceInfo = localScanSfDoaSurface(model, fdRefFix, latGrid, lonGrid, truthDoaDeg, estDoaDeg, displayName, verbose)
 objGrid = nan(numel(latGrid), numel(lonGrid));
-tracker = localCreateProgressTracker(sprintf('Scanning %s mesh', char(displayName)), numel(latGrid));
+tracker = localCreateProgressTracker(sprintf('Scanning %s mesh', char(displayName)), numel(latGrid), verbose);
 cleanupTracker = onCleanup(@() localCloseProgressTracker(tracker));
 parfor iLat = 1:numel(latGrid)
   objRow = nan(1, numel(lonGrid));
@@ -206,7 +210,9 @@ parfor iLat = 1:numel(latGrid)
     objRow(iLon) = evalDoaDopplerSfProfileLike(model, optVar);
   end
   objGrid(iLat, :) = objRow;
-  send(tracker.queue, 1);
+  if verbose
+    send(tracker.queue, 1);
+  end
 end
 clear cleanupTracker;
 
@@ -216,9 +222,9 @@ surfaceInfo = localBuildSurfaceInfo(displayName, objGrid, latGrid, lonGrid, trut
   sprintf('fdRef fixed = %.6f Hz', fdRefFix));
 end
 
-function surfaceInfo = localScanMfDoaSurface(model, fdRefFix, fdRateFix, latGrid, lonGrid, truthDoaDeg, estDoaDeg, probeOpt, displayName)
+function surfaceInfo = localScanMfDoaSurface(model, fdRefFix, fdRateFix, latGrid, lonGrid, truthDoaDeg, estDoaDeg, probeOpt, displayName, verbose)
 objGrid = nan(numel(latGrid), numel(lonGrid));
-tracker = localCreateProgressTracker(sprintf('Scanning %s mesh', char(displayName)), numel(latGrid));
+tracker = localCreateProgressTracker(sprintf('Scanning %s mesh', char(displayName)), numel(latGrid), verbose);
 cleanupTracker = onCleanup(@() localCloseProgressTracker(tracker));
 parfor iLat = 1:numel(latGrid)
   objRow = nan(1, numel(lonGrid));
@@ -231,7 +237,9 @@ parfor iLat = 1:numel(latGrid)
     objRow(iLon) = localGetFieldOrDefault(probeEval, 'obj', NaN);
   end
   objGrid(iLat, :) = objRow;
-  send(tracker.queue, 1);
+  if verbose
+    send(tracker.queue, 1);
+  end
 end
 clear cleanupTracker;
 
@@ -282,50 +290,6 @@ fprintf('    truth DoA (deg)              : [%.6f, %.6f]\n', ...
   surfaceInfo.truthDoaDeg(1), surfaceInfo.truthDoaDeg(2));
 fprintf('    estimate DoA (deg)           : [%.6f, %.6f]\n', ...
   surfaceInfo.estDoaDeg(1), surfaceInfo.estDoaDeg(2));
-end
-
-function localPlotDoaMeshComparison(latGrid, lonGrid, surfaceInfoList)
-numSurface = numel(surfaceInfoList);
-if numSurface ~= 4
-  error('regressionMfDoaProfileWithHealthyFd:UnexpectedSurfaceCount', ...
-    'Expected exactly 4 surfaces, but got %d.', numSurface);
-end
-
-[lonMesh, latMesh] = meshgrid(lonGrid, latGrid);
-figure('Name', 'DoA mesh comparison near truth', 'Color', 'w');
-tiledlayout(2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-for iSurf = 1:numSurface
-  surfaceInfo = surfaceInfoList(iSurf);
-  nexttile;
-  mesh(lonMesh, latMesh, surfaceInfo.objGrid);
-  hold on;
-  truthObj = localInterpSurfaceValue(lonGrid, latGrid, surfaceInfo.objGrid, ...
-    surfaceInfo.truthDoaDeg(2), surfaceInfo.truthDoaDeg(1));
-  estObj = localInterpSurfaceValue(lonGrid, latGrid, surfaceInfo.objGrid, ...
-    surfaceInfo.estDoaDeg(2), surfaceInfo.estDoaDeg(1));
-  plot3(surfaceInfo.truthDoaDeg(2), surfaceInfo.truthDoaDeg(1), truthObj, ...
-    'wo', 'MarkerSize', 8, 'LineWidth', 1.5, 'MarkerFaceColor', 'w');
-  plot3(surfaceInfo.estDoaDeg(2), surfaceInfo.estDoaDeg(1), estObj, ...
-    'ks', 'MarkerSize', 7, 'LineWidth', 1.5, 'MarkerFaceColor', 'k');
-  hold off;
-  xlabel('Longitude (deg)');
-  ylabel('Latitude (deg)');
-  zlabel('Objective');
-  title({surfaceInfo.displayName, surfaceInfo.fixedLabel}, 'Interpreter', 'none');
-  view(45, 35);
-  grid on;
-  legend({'Objective mesh', 'Truth DoA', 'Estimate DoA'}, 'Location', 'best');
-end
-end
-
-function value = localInterpSurfaceValue(lonGrid, latGrid, objGrid, lonDeg, latDeg)
-[lonMesh, latMesh] = meshgrid(lonGrid, latGrid);
-value = interp2(lonMesh, latMesh, objGrid, lonDeg, latDeg, 'linear');
-if ~isfinite(value)
-  [~, latIdx] = min(abs(latGrid - latDeg));
-  [~, lonIdx] = min(abs(lonGrid - lonDeg));
-  value = objGrid(latIdx, lonIdx);
-end
 end
 
 function textOut = localFormatIntegerRow(valueVec)

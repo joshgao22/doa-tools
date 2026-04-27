@@ -9,8 +9,6 @@
 %   3) the printed trace should be detailed enough to guide the next code
 %      modification without rerunning the whole pipeline blindly.
 clear(); close all; clc;
-
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
 fprintf('Running traceMfUnknownOuterStartIdentity ...\n');
@@ -545,13 +543,4 @@ spanTruth = max(maxTruth - minTruth, eps);
 pad = max(absPad, fracPad * spanTruth);
 value = [min(defaultRange(1), minTruth - pad), ...
          max(defaultRange(2), maxTruth + pad)];
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

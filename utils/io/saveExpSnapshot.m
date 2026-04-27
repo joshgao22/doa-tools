@@ -12,6 +12,8 @@ function resultFile = saveExpSnapshot(prefix, opt)
 %   includeVars  - caller variable names to save explicitly
 %   excludeVars  - caller variable names to skip from full workspace save
 %   outputDir    - snapshot directory, default <repoRoot>/test/data/cache
+%                  or a task-type subdirectory such as replay/scan/perf when
+%                  the caller location identifies one
 %   maxVarBytes  - skip auto-collected variables larger than this threshold
 %                  includeVars has higher priority and bypasses this filter
 %   extraMeta    - extra metadata struct to store in meta.extraMeta
@@ -24,12 +26,12 @@ if nargin < 2 || isempty(opt)
   opt = struct();
 end
 
-opt = localResolveOpt(opt);
 callerWhos = evalin('caller', 'whos');
 callerEntry = evalin('caller', 'mfilename(''fullpath'')');
 callerEntryName = evalin('caller', 'mfilename');
 callerInfo = localBuildCallerInfo(callerEntry, callerEntryName);
 prefix = localResolvePrefix(prefix, callerInfo.entryName);
+opt = localResolveOpt(opt, callerInfo, prefix);
 
 if ~isfolder(opt.outputDir)
   mkdir(opt.outputDir);
@@ -79,7 +81,7 @@ end
 end
 
 
-function opt = localResolveOpt(opt)
+function opt = localResolveOpt(opt, callerInfo, prefix)
 allowedField = {'includeVars', 'excludeVars', 'outputDir', 'maxVarBytes', 'extraMeta', 'verbose'};
 optField = fieldnames(opt);
 extraField = setdiff(optField, allowedField);
@@ -103,7 +105,7 @@ if ~isempty(opt.includeVars) && ~isempty(opt.excludeVars)
     'includeVars and excludeVars cannot be used at the same time.');
 end
 if ~isfield(opt, 'outputDir') || isempty(opt.outputDir)
-  opt.outputDir = fullfile(localGetProjectRoot(), 'test', 'data', 'cache');
+  opt.outputDir = localResolveDefaultOutputDir(callerInfo, prefix);
 end
 if ~isfield(opt, 'maxVarBytes') || isempty(opt.maxVarBytes)
   opt.maxVarBytes = [];
@@ -131,17 +133,50 @@ end
 end
 
 
+function outputDir = localResolveDefaultOutputDir(callerInfo, prefix)
+% Resolve the default snapshot directory from caller path or filename prefix.
+cacheRoot = fullfile(localGetProjectRoot(), 'test', 'data', 'cache');
+entryPath = lower(strrep(char(string(localGetStructField(callerInfo, 'entry', ''))), '\', '/'));
+entryName = lower(char(string(localGetStructField(callerInfo, 'entryName', ''))));
+prefixName = lower(char(string(prefix)));
+
+if ~isempty(strfind(entryPath, '/test/dev/replay/')) || strncmp(prefixName, 'replay', numel('replay')) %#ok<STREMP>
+  outputDir = fullfile(cacheRoot, 'replay');
+elseif ~isempty(strfind(entryPath, '/test/dev/scan/')) || strncmp(prefixName, 'scan', numel('scan')) %#ok<STREMP>
+  outputDir = fullfile(cacheRoot, 'scan');
+elseif ~isempty(strfind(entryPath, '/test/regression/')) || strncmp(prefixName, 'regression', numel('regression')) %#ok<STREMP>
+  outputDir = fullfile(cacheRoot, 'regression');
+elseif (~isempty(strfind(entryPath, '/test/dev/')) && ~isempty(strfind(entryName, 'perf'))) ...
+    || ~isempty(strfind(prefixName, 'perf')) %#ok<STREMP>
+  outputDir = fullfile(cacheRoot, 'perf');
+else
+  outputDir = cacheRoot;
+end
+end
+
+
+function value = localGetStructField(dataStruct, fieldName, defaultValue)
+% Return one struct field when it exists; otherwise keep the default value.
+value = defaultValue;
+if isstruct(dataStruct) && isfield(dataStruct, fieldName)
+  value = dataStruct.(fieldName);
+end
+end
+
+
 function callerInfo = localBuildCallerInfo(callerEntry, callerEntryName)
 callerInfo = struct();
 callerInfo.entry = char(string(callerEntry));
 callerInfo.entryName = char(string(callerEntryName));
 callerInfo.code = '';
 
-if isempty(callerInfo.entryName)
-  stack = dbstack('-completenames');
-  if numel(stack) >= 2
-    [stackDir, stackName] = fileparts(stack(2).file);
-    callerInfo.entryName = stackName;
+if isempty(callerInfo.entry) || isempty(callerInfo.entryName)
+  callerFrame = localFindExternalCallerFrame();
+  if ~isempty(callerFrame)
+    [stackDir, stackName] = fileparts(callerFrame.file);
+    if isempty(callerInfo.entryName)
+      callerInfo.entryName = stackName;
+    end
     if isempty(callerInfo.entry)
       callerInfo.entry = fullfile(stackDir, stackName);
     end
@@ -161,6 +196,37 @@ if ~isempty(callerInfo.entry)
     end
   end
 end
+end
+
+
+function callerFrame = localFindExternalCallerFrame()
+% Return the first stack frame outside this snapshot helper file.
+callerFrame = [];
+stack = dbstack('-completenames');
+if isempty(stack)
+  return;
+end
+thisFile = localNormalizeMFilePath(stack(1).file);
+for iFrame = 1:numel(stack)
+  stackFile = localNormalizeMFilePath(stack(iFrame).file);
+  if ~strcmp(stackFile, thisFile)
+    callerFrame = stack(iFrame);
+    return;
+  end
+end
+end
+
+
+function pathText = localNormalizeMFilePath(pathText)
+% Normalize one m-file path for stack-frame comparisons.
+pathText = char(string(pathText));
+if isempty(pathText)
+  return;
+end
+if ~endsWith(lower(pathText), '.m')
+  pathText = [pathText '.m'];
+end
+pathText = lower(strrep(pathText, '\', '/'));
 end
 
 

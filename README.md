@@ -1,403 +1,238 @@
 # doa-tools
 
-A MATLAB toolbox for array processing, DoA estimation, and the current multi-satellite DoA-Doppler research code.
+本仓库用于 DoA / Doppler / CRB 相关研究代码，当前主线是多星连续相位多帧 DoA-Doppler 估计。代码组织目标是：正式算法逻辑集中，测试与排障入口清楚，回归与 replay 职责分开，避免同一现象在多个脚本里重复验证。
 
-This repository contains two layers of code:
+## 规范入口
 
-1. **Generic array/estimation utilities** such as array construction, steering generation, classical estimators, and CRB helpers.
-2. **Project-specific multi-satellite DoA-Doppler code** for static and dynamic LEO uplink scenarios, including scene construction, signal generation, MLE/CRB implementations, regression scripts, and development entry scripts.
+AI 或自动化工具修改代码前，先读 `AGENTS.md`。`AGENTS.md` 负责说明读文档顺序、规范职责和冲突裁决；根 README 负责全局代码风格、注释语言、文件存储和目录职责；更细的局部规则放在目标目录 README 中。
 
-The project has gradually evolved from a generic DOA toolbox into a mixed repository with both reusable toolbox code and active research code. The folder rules below are intended to keep that boundary clear and reduce maintenance cost.
+默认读取链条：
 
-## Quick start
+```text
+AGENTS.md -> README.md -> 目标目录 README -> 更内层 README -> 必要时读 results / 排障记录
+```
 
-Run `startup.m` to add the repository to the MATLAB path.
+不维护单独的长 `CODING_RULES.md`。长期规则应放在根 README 或局部 README；具体运行结果应放在 `results/` 文档；当前优先级和机制结论放在排障记录。外部 coding prompt 只约束 AI 的执行风格和风险偏好，不替代仓库内 `AGENTS.md` 与 README 的文件职责。
 
-For active project development, the usual entry points are:
+## 文档分工与冲突裁决
 
-- `test/dev/doaDopplerStatDualSatUraEci.m`
-- `test/dev/doaDopplerDynDualSatUraEci.m`
-- `test/regression/runRegressionQuick.m`
-- `test/regression/runRegressionPipeline.m`
+| 文档 | 承担内容 | 不承担内容 |
+|---|---|---|
+| `AGENTS.md` | 最短读法、优先级、冲突裁决、默认修改原则 | 长实验结果、脚本使用手册 |
+| 根 `README.md` | 仓库导航、目录职责、全局风格、落盘规范索引 | 单个 replay / scan 的长结果 |
+| 目录 README | 本目录入口、文件职责、运行方式、局部规则 | 历史排障流水账 |
+| `results/` 文档 | 具体运行结果、长表格、snapshot 绑定、观察现象 | 通用 coding 规范 |
+| 排障主记录 | 当前主问题、优先级、必跑护栏、已证伪路线 | 脚本使用手册和完整结果表 |
+| 机制归并版 / 历史归档 | 机制证据和历史回溯 | 日常开发入口 |
+| 外部 coding prompt | AI 执行风格、风险偏好、交付说明格式 | 仓库文件索引和长期实验记录 |
 
-If the regression runners are not yet committed in your local branch, add them under `test/regression/` and keep their shared orchestration helper out of the estimator core.
+若文档之间冲突，先按 `AGENTS.md` 的读法和优先级处理。若冲突会影响默认数值路径、reference-sat 语义、搜索边界、输出字段或 summary 口径，优先选择更小、更保守的修改，并在交付说明中写明取舍。
 
-## Top-level folder structure
+## 当前论文主线
+
+当前研究围绕以下问题展开：
+
+- 在多帧观测窗口内，DoA 近似慢变，但 Doppler 漂移已经不可忽略；
+- 主参数是参考时刻的全局 DoA 与参考星链路上的 Doppler；
+- 参考星 Doppler rate 作为 nuisance parameter 进入模型；
+- 连续相位 CP 模型是主模型，跨帧独立相位 IP 是对比基线；
+- CRB / EFIM 用于解释 known-rate 与 unknown-rate 条件下的主参数信息损失。
+
+因此，代码修改默认围绕这个主线服务，不为与论文主线无关的泛化框架重构接口。
+
+## 常用入口
+
+### 快速检查代码是否回退
+
+- 入口：`test/regression/runRegressionQuick.m`
+- 用途：日常改 estimator、flow、scene、summary 后的第一道自动护栏。
+
+### 集中检查 dynamic flow
+
+- 入口：`test/regression/runRegressionDynamicFlow.m`
+- 用途：改 subset bank、periodic refine、polish、recovery gate 后跑。
+
+### 跑少量完整 pipeline 护栏
+
+- 入口：`test/regression/runRegressionPipeline.m`
+- 用途：改完整 fixture -> estimator -> summary 链路后跑。
+
+### 跑 checkpoint / snapshot / cleanup smoke
+
+- 入口：`test/regression/perf/runRegressionPerfSmoke.m`
+- 用途：改长任务工程链路后跑。
+
+### 单次代表性实验
+
+- static：`test/dev/doaDopplerStatDualSatUraEci.m`
+- dynamic：`test/dev/doaDopplerDynDualSatUraEci.m`
+
+### 固定问题回放与小 MC 诊断
+
+- 入口目录：`test/dev/replay/`
+- 用途：复现 hard case、打印 trace、画图、保存 slim snapshot。
+- 详细结果记录：`test/dev/replay/results/`
+
+### 机制扫描与策略比较
+
+- scan：`test/dev/scan/`
+- scan 详细结果记录：`test/dev/scan/results/`
+- strategy：`test/dev/strategy/`
+
+## 仓库目录职责
 
 ### `array/`
-Generic array construction and steering-related utilities.
 
-Put code here when it is **array-topology specific** and does not depend on the satellite/scene model.
+通用阵列构造、阵列旋转、steering、array-only snapshot。
 
-Typical contents:
-
-- array geometry builders such as ULA/UPA creation
-- coordinate-frame array rotation helpers
-- generic snapshot generation for array-only experiments
-- generic steering matrix helpers
-
-Guideline:
-
-- New reusable array helpers go here.
-- Old prototype or compatibility implementations stay under `array/legacy/`.
+- 不依赖 satellite scene 或当前论文的 reference-sat 语义；
+- 旧实现保留在 `legacy/`，非主线优先入口。
 
 ### `estimator/`
-Active estimators and estimator-side helper logic.
 
-This folder contains both generic estimators and the project's current DoA-Doppler MLE implementations.
+正式估计器入口与 estimator 侧 helper。
 
-Typical contents:
-
-- single-frame and multi-frame MLE estimators
-- MUSIC / MVDR and related estimators
-- shared profile-likelihood evaluators
-- grid construction and local refinement helpers
-- estimator-specific orchestration helpers in `estimator/helper/`
-
-Use `estimator/helper/` for logic that is **part of the formal estimator pipeline** and may be reused by multiple estimators or branches, for example:
-
-- model construction
-- parameter packing/unpacking
-- initialization construction
-- branch solving
-- profile-likelihood helper logic
-
-Do **not** leave those pieces buried in `test/dev` local functions once they become stable.
-
-Subfolders:
-
-- `estimator/doaGrid/`: grid generation and neighborhood helpers
-- `estimator/covariance/`: covariance-side estimator utilities
-- `estimator/helper/`: active shared estimator helpers
-- `estimator/legacy/`: frozen legacy implementations kept for reference or compatibility
+- profile likelihood、init、branch solve、winner adoption 等正式算法逻辑放这里；
+- dev-only probe、replay、summary 不应长期留在这里；
+- helper 分工见 `estimator/helper/README.md`。
 
 ### `performance/`
-Performance analysis and CRB-related code.
 
-Put code here when it computes **bounds, FIM/EFIM, or theoretical performance quantities**, not when it runs Monte Carlo experiments.
+CRB、FIM、EFIM、理论性能界。
 
-Typical contents:
-
-- single-frame DoA / DoA-Doppler CRB
-- multi-frame dynamic CRB
-- helper logic for FIM blocks and shared CRB calculations
-
-Guideline:
-
-- If the code produces a bound from a model, it belongs here.
-- If the code runs simulations to compare estimators, it belongs under `test/`.
-- Compatibility wrappers for old CRB interfaces may remain, but the main logic should converge into the current unified entry points.
+- 只放性能界计算；
+- Monte Carlo orchestration、表格汇总、plot 数据构造放 `test/`。
 
 ### `satellite/`
-Satellite-specific geometry, scene, and signal-generation code.
 
-This folder should contain code that depends on orbital geometry, reference-satellite semantics, or scene construction.
+卫星几何、场景、信号生成、动态 truth。
 
-Recommended placement inside this folder:
-
-#### `satellite/scene/`
-Scene construction and reference-state logic.
-
-Put code here when it defines or manipulates:
-
-- satellite/user geometry
-- reference satellite semantics
-- scene slicing by satellite or by frame
-- local/global DoA mapping tied to scene state
-- Doppler and differential Doppler geometric construction
-- motion-aware user-state construction
-
-Examples already in the repo include:
-
-- `resolveReferenceSatState`
-- `buildReferenceDopplerState`
-- `buildUserStateFromLatlon`
-- `computeRelativeDopplerGeom`
-- `selectSatScene`, `selectSatSceneSeq`, `selectFrameSceneSeq`
-
-#### `satellite/signal/`
-Signal and snapshot generation.
-
-Put code here when it builds or modifies the received signal itself, for example:
-
-- pilot/synchronization waveform generation
-- multi-satellite or multi-frame snapshot generation
-- path gain construction
-- fractional delay application
-- received-signal slicing helpers
-
-Examples already in the repo include:
-
-- `genPilotWaveform`
-- `genMultiSatSnapshots`
-- `genMultiFrameSnapshots`
-- `buildFramePathGain`
-- `selectRxSigBySat`
-
-#### `satellite/dynamic/`
-Dynamic diagnostics and dynamic truth construction.
-
-Put code here when it is specific to **time evolution over the multi-frame window**, for example:
-
-- steering drift diagnostics
-- Doppler line-fit truth construction
-- dynamic-strength scaling for experiments
-- dynamic truth summary helpers
-
-Examples already in the repo include:
-
-- `buildDynTruthFromLinkParam`
-- `scaleLinkParamDoppler`
-- `buildSteeringDriftDiag`
-- `buildDeltaFdFitDiag`
-
-### `plottool/`
-Reusable plotting helpers.
-
-Put code here only when the plotting logic is generic enough to be shared across multiple scripts.
-
-Do not move every one-off debug figure here. If a plot is only used by one development script, keep it local until it becomes genuinely reusable.
-
-### `solvers/`
-External solver interfaces and solver-side linear algebra helpers.
-
-Use this folder for:
-
-- solver capability checks
-- SDP-related conversion helpers
-- third-party solver glue that is not estimator-specific
-
-### `utils/`
-Low-level reusable utilities that do not belong to the signal model or estimator model.
-
-Typical contents:
-
-- math helpers
-- structure utilities
-- generic runners
-- progress utilities
-- metric helpers
-- I/O helpers
-
-Recommended placement:
-
-- `utils/metric/`: scalar metrics such as DoA/lat-lon error calculations
-- `utils/io/`: save/load helpers for experiment snapshots and artifacts
-
-Rule of thumb:
-
-- If a function has no DoA-Doppler model semantics and would still make sense in another project, it likely belongs in `utils/`.
-- If it knows about reference satellites, frames, or profile likelihood, it probably belongs elsewhere.
+- reference-sat、scene slicing、Doppler geometry 放 `satellite/scene/`；
+- pilot / rx snapshot 放 `satellite/signal/`；
+- steering drift、line-fit truth 诊断放 `satellite/dynamic/`。
 
 ### `test/`
-Experiment, development, and regression code.
 
-This folder is intentionally separated from `estimator/` and `performance/`: it should contain scripts and helpers that **exercise** the formal modules, not replace them.
+regression、dev、replay、scan、strategy、实验 helper。
 
-Current subfolders and their intended roles are:
+- regression 是自动 pass/fail 护栏；
+- replay 是固定问题回放，不是正确性契约；
+- scan 是较系统的参数 / schedule / surface 扫描；
+- common 是实验侧复用 helper，不长期维护第二套正式算法。
 
-#### `test/common/`
-Shared experiment-side helpers.
+### `utils/` 与 `plottool/`
 
-Put code here when it is reused by multiple test/dev/regression scripts but is **not** part of the formal estimator core.
+通用工具和通用绘图。
 
-Typical contents:
+- 只有确实没有 DoA-Doppler 语义的工具才放 `utils/`；
+- 单脚本一次性图先留 local，复用后再提升到 `test/common/plot/` 或 `plottool/`。
 
-- case/result struct builders
-- experiment-side summary tables
-- static-to-dynamic transition helpers
-- subset fixture builders
-- multi-start summaries
-- experiment-side plotting helpers
-- regression/test path helpers
+## README 索引
 
-Examples already in the repo include:
+### 规范与结果入口
 
-- `buildDoaDopplerCaseResult`
-- `buildDoaDopplerStaticTransitionBundle`
-- `buildDynamicFrameSubsetFixture`
-- `buildDynamicSubsetFixtureBank`
-- `runDynamicDoaDopplerCase`
-- `summarizeDynamicEstimatorDebug`
-- `summarizeDynamicMultiStart`
+- `AGENTS.md`：AI / 自动化修改代码前的最短入口，说明读文档链条和优先级。
+- `test/data/cache/README.md`：大 `.mat` snapshot 的集中存储规则。
 
-What should **not** go here:
+### 测试与排障入口
 
-- core estimator mathematics that should live in `estimator/helper/`
-- scene/reference-state construction that should live in `satellite/scene/`
-- raw signal generation that should live in `satellite/signal/`
+- `test/README.md`：test 总入口，决定跑 regression、replay、scan 还是 strategy。
+- `test/regression/README.md`：每个 regression 的唯一契约和 runner 说明。
+- `test/dev/README.md`：dev 主入口、子目录职责和脚本选择。
+- `test/dev/replay/README.md`：replay 脚本规范、入口索引和当前一句话结论。
+- `test/dev/replay/results/README.md`：replay 详细结果记录与 snapshot 绑定。
+- `test/dev/scan/README.md`：scan 的扫描维度、输出和相关 replay。
+- `test/dev/scan/results/README.md`：scan 详细结果记录与 snapshot 绑定。
+- `test/dev/strategy/README.md`：策略比较与已证伪方向记录。
+- `test/common/README.md`：test helper 的放置边界。
 
-#### `test/dev/`
-Development entry scripts and interactive diagnosis scripts.
+### 正式实现与理论分析
 
-Use this folder for scripts that you run manually while developing or debugging.
+- `estimator/README.md`：正式 estimator 入口和模型层级。
+- `estimator/helper/README.md`：model/init/bounds/branch/warm-anchor helper 分工。
+- `satellite/scene/README.md`：reference-sat、scene、Doppler 不变量。
+- `performance/README.md`：CRB / FIM / EFIM 与论文分析层对应关系。
 
-Typical contents:
+## 全局 coding 约束
 
-- single-shot verification scripts
-- scenario scripts used to inspect summaries and figures
-- scan/sweep/trace style scripts for mechanism diagnosis
-- ranking or screening scripts for satellite pairs or schedules
+### 行为保持
 
-Examples already in the repo include:
+默认保持现有函数签名、默认参数、初始化策略、搜索边界、reference-sat 语义、sat 顺序、输出字段、summary 口径和 fallback 顺序。
 
-- `doaDopplerStatDualSatUraEci`
-- `doaDopplerDynDualSatUraEci`
-- `doaDopplerDynFdRefCombScan`
-- `doaDopplerDynTruthNeighborhoodScan`
-- `doaDopplerDynCpIpTyingScan`
+如果修改可能改变数值行为，交付说明必须写明：
 
-Rule of thumb:
+- 哪个模块变了；
+- 哪个数值路径变了；
+- 风险点在哪里；
+- 为什么必要；
+- 建议跑哪些 regression / replay。
 
-- `test/dev/` scripts should mainly do orchestration, call helpers, and print results.
-- Once a local function becomes long, reusable, or numerically important, move it out to a proper helper folder.
+### MATLAB 风格
 
-#### `test/regression/`
-Focused regression scripts that guard stable behavior.
+- `.m` 文件中的函数头注释、脚本头注释和 inline comment 使用英文。
+- README、排障记录和说明文档使用中文。
+- 命名和格式沿用当前目录同类型、非 legacy 文件风格。
+- 不为小改动新增过重 `arguments`、`validateattributes`、通用 opt resolver 或框架化封装。
+- 主入口只做 orchestration；正式复用逻辑按职责放到 estimator / satellite / performance / test common。
 
-Only keep scripts here if they check a **clear contract** and are suitable for repeated regression runs.
+### 文件与结果存储
 
-Recommended categories, even if the folder is still flat in your branch:
+- 运行时临时文件放仓库根目录 `tmp/<scriptName>/<runKey>/`。
+- 大 `.mat` snapshot 统一放 `test/data/cache/<taskType>/`，例如 `replay/`、`scan/`、`perf/`。
+- replay 保存轻量 `replayData`；scan 保存轻量 `scanData`；perf 保存 final result struct、summary table、关键配置和 meta。
+- 不默认保存 `rxSigCell`、完整 `sceneSeq`、fixture cache、transition bundle、全量 objective map、完整 debug trace 或图片文件。
+- 人工可读的结果分析不写进 cache 目录，放到对应任务目录的 `results/` 文档。
 
-- **Invariant** regressions: geometry, reference-state, model-build, truth-replay
-- **Branch** regressions: known/unknown branch behavior, warm-start construction, candidate selection
-- **Pipeline** regressions: the active end-to-end flow that should not silently regress
+常用落盘入口只在 `test/data/cache/README.md` 维护详细说明：
 
-Typical examples in the repo:
+| 操作 | 推荐入口 | 位置 |
+|---|---|---|
+| 保存最终 snapshot | `saveExpSnapshot` | `utils/io/saveExpSnapshot.m` |
+| 恢复 snapshot | `loadExpSnapshot` | `utils/io/loadExpSnapshot.m` |
+| 清理 cache / tmp 运行产物 | `cleanupRunArtifacts` | `utils/io/cleanupRunArtifacts.m` |
+| 清理 checkpoint run 目录 | `cleanupPerfTaskGridCheckpoint` | `test/common/flow/cleanupPerfTaskGridCheckpoint.m` |
 
-- model-build regressions
-- reference-state regressions
-- unknown-rate warm-start / release regressions
-- subset-tooth-selection pipeline regressions
+根 README 只保留入口索引；save / load / cleanup 的调用细节不要在其它 README 中重复维护。
 
-Keep the runner scripts here as well:
+### 文档同步
 
-- `runRegressionQuick.m`: fast invariant + branch checks
-- `runRegressionPipeline.m`: active pipeline checks
+- 新增或重命名 regression / replay / scan / common helper 后，同步更新对应局部 README。
+- 新增入口文件、移动 helper、改变结果保存位置、改变 replay / scan 输出字段或改变 summary/table 口径后，同步更新对应 README。
+- 只改内部数值实现且入口、输出字段、保存位置不变时，不强制更新 README；若行为变化可能影响使用者判断，仍应在交付说明中说明。
+- 新增重要 replay / scan 结果时，先更新对应 `results/*.md`；只把影响当前决策的结论摘到排障主记录。
+- README 负责入口、职责和运行方式；排障记录负责当前优先级、机制结论和已证伪路线。
 
-What should **not** stay here:
+## 放置规则摘要
 
-- one-off trace scripts
-- large exploratory sweeps without clear pass/fail semantics
-- dev-only visualization scripts
+### 正式算法逻辑
 
-Those belong in `test/dev/`.
+放到：
 
-#### `test/paper/`
-Paper-figure generation scripts and experiment wrappers intended for final figures/tables.
+- `estimator/helper/`
+- `satellite/scene/`
+- `satellite/signal/`
+- `performance/`
 
-Use this folder when a script is no longer only for diagnosis and is meant to generate stable paper-ready outputs.
+不要长期放在：
 
-#### `test/data/`
-Small test data, saved fixtures, or local experiment assets needed by regression/dev scripts.
+- `test/dev/` local helper；
+- `test/common/flow/` 的 orchestration glue；
+- replay / probe 脚本内部。
 
-Keep only lightweight project data here. Large temporary dumps should stay outside the repo.
+### 回归护栏
 
-#### `test/archive/`
-Retired or historical scripts.
+放到 `test/regression/`，前提是：
 
-Use this only for scripts that you want to preserve for reference but do not want to treat as active development or regression code.
+- 能自动 pass/fail；
+- 结论已经稳定为代码契约；
+- 失败能指向具体契约；
+- 不需要人工看图或比较表格。
 
-Do not move active-but-messy code here just to avoid organizing it. Prefer a clear active folder whenever the script still has value.
+### 问题定位
 
-### `examples/`
-Generic examples inherited from the original toolbox.
+放到 `test/dev/replay/`、`test/dev/probe/`、`test/dev/scan/` 或 `test/dev/strategy/`。
 
-These are useful for toolbox-level sanity checks and public-facing demos, but they are not the main home of the current multi-satellite project workflow.
-
-## Placement rules for new code
-
-Use the following rules when adding new code.
-
-### Put code in `estimator/helper/` if it is:
-
-- part of the formal estimator path
-- reused across multiple estimator branches
-- numerically important enough to deserve direct regression
-- about model construction, initialization, branch solving, or profile likelihood
-
-### Put code in `satellite/scene/` if it is about:
-
-- scene construction
-- reference-satellite semantics
-- local/global DoA mapping
-- user/satellite state construction
-- Doppler geometry derived from scene state
-
-### Put code in `satellite/signal/` if it is about:
-
-- waveform generation
-- snapshot generation
-- path gains
-- delay/Doppler application to signals
-- received-signal slicing
-
-### Put code in `performance/` if it is about:
-
-- CRB / FIM / EFIM
-- theoretical bounds
-- analytic performance metrics derived from a model
-
-### Put code in `test/common/` if it is:
-
-- shared by multiple scripts
-- experiment-side orchestration or reporting
-- not part of the formal estimator kernel
-
-### Keep code local in a script only if it is:
-
-- short
-- file-private
-- glue only
-- unlikely to be reused
-
-Examples of acceptable script-local functions:
-
-- compact formatting helpers
-- tiny guards
-- simple plot cosmetics
-- default-value shims
-
-Do **not** keep the following buried as long local functions once they stabilize:
-
-- reference-Doppler semantics
-- truth construction
-- subset fixture generation
-- path gain construction
-- profile-likelihood logic
-- unknown-rate release logic
-- branch selection logic
-
-## Legacy code policy
-
-Folders named `legacy/` are retained for reference, compatibility, or historical comparison.
-
-Guidelines:
-
-- Do not add new mainline functionality there.
-- Do not copy legacy code into new project code unless there is a deliberate compatibility reason.
-- When a legacy entry point must remain callable, prefer a thin wrapper around the current implementation.
-
-## Practical workflow
-
-A practical development flow for this repo is:
-
-1. Build or modify formal modules under `satellite/`, `estimator/`, or `performance/`.
-2. Wire them into `test/common/` experiment helpers if needed.
-3. Verify behavior with `test/dev/` scenario scripts.
-4. Guard the stable behavior with `test/regression/`.
-5. Only after the path is stable, move figure-generation wrappers to `test/paper/`.
-
-## Notes for this project
-
-For the current multi-satellite DoA-Doppler line, keep the following discipline:
-
-- Use `test/dev/doaDopplerStatDualSatUraEci.m` and `test/dev/doaDopplerDynDualSatUraEci.m` as scenario entry scripts, not as long-term homes for core logic.
-- Keep static and dynamic implementations aligned through shared helpers whenever the semantics are the same.
-- Treat reference-satellite semantics as explicit invariants.
-- Keep debug/probe logic on a bypass path so it does not alter the main objective or default outputs.
-- Use regression scripts to guard invariants, branch behavior, and the active tooth-selection / in-tooth-refine pipeline.
-
-## License
-
-The source code is released under the [MIT](LICENSE.md) license.
+- 固定问题或小 MC：`replay/`；
+- 局部曲面 / profile：`probe/`；
+- 参数和 schedule 扫描：`scan/`；
+- 策略比较和已证伪路线：`strategy/`。

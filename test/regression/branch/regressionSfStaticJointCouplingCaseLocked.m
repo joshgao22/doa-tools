@@ -1,3 +1,4 @@
+function regressionSfStaticJointCouplingCaseLocked(varargin)
 % Regression check for the locked SF static SS/MS joint-coupling case.
 % This script mirrors the current doaDopplerStatDualSatUraEci setup and
 % keeps the contract intentionally narrow:
@@ -7,12 +8,12 @@
 %   3) the printed mixed-point diagnostics should help decide whether the
 %      remaining MS static gap is dominated by DoA coupling, fdRef coupling,
 %      or both.
-clear(); close all;
-
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+localPrint = @(varargin) fprintf(varargin{:});
 fixture = buildSfStaticJointCouplingFixture();
 
-fprintf('Running regressionSfStaticJointCouplingCaseLocked ...\n');
+localPrint('Running regressionSfStaticJointCouplingCaseLocked ...\n');
 
 caseBundle = fixture.caseBundle;
 caseSsStatic = caseBundle.caseStaticRefOnly;
@@ -62,32 +63,34 @@ ssTruthFdImprove = freeSsEval.fval - mixSsTruthFdEval.fval;
 msDominantAxis = localClassifyDominantAxis(msTruthDoaImprove, msTruthFdImprove);
 ssDominantAxis = localClassifyDominantAxis(ssTruthDoaImprove, ssTruthFdImprove);
 
-fprintf('  free SS angle err (deg)        : %.6g\n', freeSsAngleErrDeg);
-fprintf('  free MS angle err (deg)        : %.6g\n', freeMsAngleErrDeg);
-fprintf('  free SS fdRef err (Hz)         : %.6f\n', freeSsFdErrHz);
-fprintf('  free MS fdRef err (Hz)         : %.6f\n', freeMsFdErrHz);
-fprintf('  free SS objective              : %.6g\n', freeSsEval.fval);
-fprintf('  free MS objective              : %.6g\n', freeMsEval.fval);
-fprintf('  truth SS objective             : %.6g\n', truthSsEval.fval);
-fprintf('  truth MS objective             : %.6g\n', truthMsEval.fval);
-fprintf('  mix MS truthDoA/freeFd obj     : %.6g\n', mixMsTruthDoaEval.fval);
-fprintf('  mix MS freeDoA/truthFd obj     : %.6g\n', mixMsTruthFdEval.fval);
-fprintf('  mix SS truthDoA/freeFd obj     : %.6g\n', mixSsTruthDoaEval.fval);
-fprintf('  mix SS freeDoA/truthFd obj     : %.6g\n', mixSsTruthFdEval.fval);
-fprintf('  MS truthDoA improve            : %.6g\n', msTruthDoaImprove);
-fprintf('  MS truthFd improve             : %.6g\n', msTruthFdImprove);
-fprintf('  SS truthDoA improve            : %.6g\n', ssTruthDoaImprove);
-fprintf('  SS truthFd improve             : %.6g\n', ssTruthFdImprove);
-fprintf('  MS dominant coupling axis      : %s\n', msDominantAxis);
-fprintf('  SS dominant coupling axis      : %s\n', ssDominantAxis);
+localPrint('  free SS angle err (deg)        : %.6g\n', freeSsAngleErrDeg);
+localPrint('  free MS angle err (deg)        : %.6g\n', freeMsAngleErrDeg);
+localPrint('  free SS fdRef err (Hz)         : %.6f\n', freeSsFdErrHz);
+localPrint('  free MS fdRef err (Hz)         : %.6f\n', freeMsFdErrHz);
+localPrint('  free SS objective              : %.6g\n', freeSsEval.fval);
+localPrint('  free MS objective              : %.6g\n', freeMsEval.fval);
+localPrint('  truth SS objective             : %.6g\n', truthSsEval.fval);
+localPrint('  truth MS objective             : %.6g\n', truthMsEval.fval);
+localPrint('  mix MS truthDoA/freeFd obj     : %.6g\n', mixMsTruthDoaEval.fval);
+localPrint('  mix MS freeDoA/truthFd obj     : %.6g\n', mixMsTruthFdEval.fval);
+localPrint('  mix SS truthDoA/freeFd obj     : %.6g\n', mixSsTruthDoaEval.fval);
+localPrint('  mix SS freeDoA/truthFd obj     : %.6g\n', mixSsTruthFdEval.fval);
+localPrint('  MS truthDoA improve            : %.6g\n', msTruthDoaImprove);
+localPrint('  MS truthFd improve             : %.6g\n', msTruthFdImprove);
+localPrint('  SS truthDoA improve            : %.6g\n', ssTruthDoaImprove);
+localPrint('  SS truthFd improve             : %.6g\n', ssTruthFdImprove);
+localPrint('  MS dominant coupling axis      : %s\n', msDominantAxis);
+localPrint('  SS dominant coupling axis      : %s\n', ssDominantAxis);
 
-fprintf('  free MS objectiveSat           : %s\n', localFormatNumericRow(freeMsEval.objectiveSat));
-fprintf('  truth MS objectiveSat          : %s\n', localFormatNumericRow(truthMsEval.objectiveSat));
-fprintf('  mix MS truthDoA objectiveSat   : %s\n', localFormatNumericRow(mixMsTruthDoaEval.objectiveSat));
-fprintf('  mix MS truthFd objectiveSat    : %s\n', localFormatNumericRow(mixMsTruthFdEval.objectiveSat));
+localPrint('  free MS objectiveSat           : %s\n', localFormatNumericRow(freeMsEval.objectiveSat));
+localPrint('  truth MS objectiveSat          : %s\n', localFormatNumericRow(truthMsEval.objectiveSat));
+localPrint('  mix MS truthDoA objectiveSat   : %s\n', localFormatNumericRow(mixMsTruthDoaEval.objectiveSat));
+localPrint('  mix MS truthFd objectiveSat    : %s\n', localFormatNumericRow(mixMsTruthFdEval.objectiveSat));
 
-fprintf('PASS: regressionSfStaticJointCouplingCaseLocked\n');
+localPrint('PASS: regressionSfStaticJointCouplingCaseLocked\n');
 
+
+end
 
 function evalInfo = localEvalStaticPoint(view, fixture, doaParam, fdRefHz, satWeight)
 %LOCALEVALSTATICPOINT Evaluate one locked SF static point through the estimator.
@@ -187,13 +190,4 @@ function text = localFormatNumericRow(value)
 value = reshape(value, 1, []);
 text = sprintf('[%s]', strjoin(arrayfun(@(x) sprintf('%.6g', x), value, ...
   'UniformOutput', false), ', '));
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

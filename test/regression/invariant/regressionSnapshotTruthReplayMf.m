@@ -1,15 +1,16 @@
+function regressionSnapshotTruthReplayMf(varargin)
 % Regression check for MF truth replay consistency.
 % This script verifies that the dynamic generator and the MF evaluator stay
 % self-consistent under the project continuous-phase model. It uses one
 % noiseless dynamic scene and checks:
 %   1) the truth hypothesis yields a near-zero residual;
 %   2) small DoA or Doppler perturbations degrade the objective.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
-fprintf('Running regressionSnapshotTruthReplayMf ...\n');
+  fprintf('Running regressionSnapshotTruthReplayMf ...\n');
 
 modelOpt = struct();
 modelOpt.useLogObjective = false;
@@ -57,14 +58,17 @@ if ~(objTruth < objFdPert)
     'Truth objective must be lower than the Doppler-perturbed objective.');
 end
 
-fprintf('  truth residual ratio : %.3e\n', residualRatioTruth);
-fprintf('  truth objective      : %.6f\n', objTruth);
-fprintf('  DoA-perturbed obj    : %.6f\n', objDoaPert);
-fprintf('  fd-perturbed obj     : %.6f\n', objFdPert);
-fprintf('  DoA-perturbed resid  : %.6f\n', profDoaPert.residualNorm);
-fprintf('  fd-perturbed resid   : %.6f\n', profFdPert.residualNorm);
-fprintf('PASS: regressionSnapshotTruthReplayMf\n');
+  fprintf('  truth residual ratio : %.3e\n', residualRatioTruth);
+  fprintf('  truth objective      : %.6f\n', objTruth);
+  fprintf('  DoA-perturbed obj    : %.6f\n', objDoaPert);
+  fprintf('  fd-perturbed obj     : %.6f\n', objFdPert);
+  fprintf('  DoA-perturbed resid  : %.6f\n', profDoaPert.residualNorm);
+  fprintf('  fd-perturbed resid   : %.6f\n', profFdPert.residualNorm);
+  fprintf('PASS: regressionSnapshotTruthReplayMf\n');
 
+
+
+end
 
 function hyp = localBuildTruthHypothesis(sceneSeq, truth)
 %LOCALBUILDTRUTHHYPOTHESIS Build one evaluator hypothesis from stored truth.
@@ -172,13 +176,4 @@ fixture.sampleRate = waveInfo.sampleRate;
 fixture.carrierFreq = carrierFreq;
 fixture.fdRange = fdRange;
 fixture.fdRateRange = fdRateRange;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

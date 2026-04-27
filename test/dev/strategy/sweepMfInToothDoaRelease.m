@@ -13,8 +13,6 @@
 % before the periodic full-data refinement falls into an in-tooth bad basin?
 clear(); close all; clc;
 
-localAddProjectPath();
-
 periodicOffsetIdx = -4:5;
 masterOffsetIdx = -9:10;
 deterministicOffsetIdx = [-9, -7, -6, -5, -4, 0, 1, 3, 7, 8];
@@ -448,11 +446,4 @@ end
 function textOut = localFormatIntegerRow(valueVec)
 valueVec = reshape(valueVec, 1, []);
 textOut = ['[', strjoin(arrayfun(@(x) sprintf('%d', x), valueVec, 'UniformOutput', false), ', '), ']'];
-end
-
-
-function localAddProjectPath()
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

@@ -1,3 +1,4 @@
+function regressionSfStaticWeightSweepCouplingCaseLocked(varargin)
 % Regression check for the locked SF static sat2-weight sweep after the
 % DoA-anchor fallback update.
 % The contract is now:
@@ -9,12 +10,12 @@
 %      monotone pattern (fd improves only by sacrificing angle) should stay
 %      suppressed, but the single most fd-improving branch is allowed to pay
 %      a small extra angle cost.
-clear(); close all;
-
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+localPrint = @(varargin) fprintf(varargin{:});
 fixture = buildSfStaticJointCouplingFixture();
 
-fprintf('Running regressionSfStaticWeightSweepCouplingCaseLocked ...\n');
+localPrint('Running regressionSfStaticWeightSweepCouplingCaseLocked ...\n');
 
 caseBundle = fixture.caseBundle;
 refOnlyCase = caseBundle.caseStaticRefOnly;
@@ -108,29 +109,29 @@ end
 bestAngleIdx = localArgMin(angleErrDeg);
 [bestOverallFdIdx, ~] = localArgMin(absFdRefErrHz);
 
-fprintf('  alpha list                    : %s\n', localFormatNumericRow(alphaList));
-fprintf('  angle err sweep (deg)         : %s\n', localFormatNumericRow(angleErrDeg));
-fprintf('  fdRef err sweep (Hz)          : %s\n', localFormatNumericRow(fdRefErrHz));
-fprintf('  objective sweep               : %s\n', localFormatNumericRow(fvalList));
-fprintf('  zero-weight angle err (deg)   : %.6g\n', angleErrDeg(zeroIdx));
-fprintf('  zero-weight fdRef err (Hz)    : %.6f\n', fdRefErrHz(zeroIdx));
-fprintf('  ref-vs-W0 angle diff (deg)    : %.6g\n', zeroAngleDiffDeg);
-fprintf('  ref-vs-W0 fdRef diff (Hz)     : %.6f\n', zeroFdDiffHz);
-fprintf('  ref-vs-W0 fval diff           : %.6g\n', zeroFvalDiff);
-fprintf('  best-angle alpha              : %.2f\n', alphaList(bestAngleIdx));
-fprintf('  best-fd alpha                 : %.2f\n', alphaList(bestOverallFdIdx));
-fprintf('  strongest-fd alpha            : %.2f\n', alphaList(bestFdIdx));
-fprintf('  strongest-fd improve (Hz)     : %.6f\n', fdImproveHz);
-fprintf('  strongest-fd angle delta (deg): %.6g\n', angleDeltaDeg);
+localPrint('  alpha list                    : %s\n', localFormatNumericRow(alphaList));
+localPrint('  angle err sweep (deg)         : %s\n', localFormatNumericRow(angleErrDeg));
+localPrint('  fdRef err sweep (Hz)          : %s\n', localFormatNumericRow(fdRefErrHz));
+localPrint('  objective sweep               : %s\n', localFormatNumericRow(fvalList));
+localPrint('  zero-weight angle err (deg)   : %.6g\n', angleErrDeg(zeroIdx));
+localPrint('  zero-weight fdRef err (Hz)    : %.6f\n', fdRefErrHz(zeroIdx));
+localPrint('  ref-vs-W0 angle diff (deg)    : %.6g\n', zeroAngleDiffDeg);
+localPrint('  ref-vs-W0 fdRef diff (Hz)     : %.6f\n', zeroFdDiffHz);
+localPrint('  ref-vs-W0 fval diff           : %.6g\n', zeroFvalDiff);
+localPrint('  best-angle alpha              : %.2f\n', alphaList(bestAngleIdx));
+localPrint('  best-fd alpha                 : %.2f\n', alphaList(bestOverallFdIdx));
+localPrint('  strongest-fd alpha            : %.2f\n', alphaList(bestFdIdx));
+localPrint('  strongest-fd improve (Hz)     : %.6f\n', fdImproveHz);
+localPrint('  strongest-fd angle delta (deg): %.6g\n', angleDeltaDeg);
 if isnan(bestSafeIdx)
   bestSafeAlpha = NaN;
 else
   bestSafeAlpha = alphaList(bestSafeIdx);
 end
-fprintf('  best-safe alpha               : %.2f\n', bestSafeAlpha);
-fprintf('  best-safe fd improve (Hz)     : %.6f\n', bestSafeFdImproveHz);
-fprintf('  best-safe angle delta (deg)   : %.6g\n', bestSafeAngleDeltaDeg);
-fprintf('  angle safety tol (deg)        : %.6g\n', angleSafetyTolDeg);
+localPrint('  best-safe alpha               : %.2f\n', bestSafeAlpha);
+localPrint('  best-safe fd improve (Hz)     : %.6f\n', bestSafeFdImproveHz);
+localPrint('  best-safe angle delta (deg)   : %.6g\n', bestSafeAngleDeltaDeg);
+localPrint('  angle safety tol (deg)        : %.6g\n', angleSafetyTolDeg);
 
 if ~any(tradeoffMask)
   error('regressionSfStaticWeightSweepCouplingCaseLocked:MissingFdTradeoff', ...
@@ -144,7 +145,9 @@ if ~any(safeTradeoffMask)
      'branch whose angle penalty stays within the material-safety tolerance.']);
 end
 
-fprintf('PASS: regressionSfStaticWeightSweepCouplingCaseLocked\n');
+localPrint('PASS: regressionSfStaticWeightSweepCouplingCaseLocked\n');
+
+end
 
 function idx = localResolveZeroWeightIndex(alphaList)
 idx = find(abs(alphaList) <= eps(max(1, max(abs(alphaList)))), 1, 'first');
@@ -197,10 +200,4 @@ function text = localFormatNumericRow(value)
 value = reshape(value, 1, []);
 text = sprintf('[%s]', strjoin(arrayfun(@(x) sprintf('%.6g', x), value, ...
   'UniformOutput', false), ', '));
-end
-
-function localAddProjectPath()
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

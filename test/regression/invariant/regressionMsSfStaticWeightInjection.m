@@ -1,15 +1,17 @@
+function regressionMsSfStaticWeightInjection(varargin)
 % Regression check for SF static sat-weight injection at one fixed probe point.
 % Contract:
 %   1) the per-satellite residual/noise terms must stay unchanged when only
 %      satWeight changes at a fixed [DoA; fdRef] probe point;
 %   2) the ref-sat objective contribution must stay unchanged;
 %   3) the non-ref-sat objective contribution must scale linearly with alpha.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionMsSfStaticWeightInjection ...\n');
+  fprintf('Running regressionMsSfStaticWeightInjection ...\n');
 
 alphaList = reshape(fixture.weightSweepAlpha, [], 1);
 probePoint = struct();
@@ -74,15 +76,17 @@ if abs(objectiveSat(2, 1)) > objectiveTol
     'The non-ref-sat SF static objective contribution must vanish at alpha = 0.');
 end
 
-fprintf('  alpha list                     : %s\n', localFormatNumericRow(alphaList));
-fprintf('  residual energy sat1 sweep     : %s\n', localFormatNumericRow(residualEnergySat(1, :).')); 
-fprintf('  residual energy sat2 sweep     : %s\n', localFormatNumericRow(residualEnergySat(2, :).'));
-fprintf('  objective sat1 sweep           : %s\n', localFormatNumericRow(objectiveSat(1, :).'));
-fprintf('  objective sat2 sweep           : %s\n', localFormatNumericRow(objectiveSat(2, :).'));
-fprintf('  sat2 objective / alpha         : %s\n', ...
-  localFormatNumericRow(otherObjectivePerUnit(:)));
-fprintf('PASS: regressionMsSfStaticWeightInjection\n');
+  fprintf('  alpha list                     : %s\n', localFormatNumericRow(alphaList));
+  fprintf('  residual energy sat1 sweep     : %s\n', localFormatNumericRow(residualEnergySat(1, :).'));
+  fprintf('  residual energy sat2 sweep     : %s\n', localFormatNumericRow(residualEnergySat(2, :).'));
+  fprintf('  objective sat1 sweep           : %s\n', localFormatNumericRow(objectiveSat(1, :).'));
+  fprintf('  objective sat2 sweep           : %s\n', localFormatNumericRow(objectiveSat(2, :).'));
+  fprintf('  sat2 objective / alpha         : %s\n', ...
+    localFormatNumericRow(otherObjectivePerUnit(:)));
+  fprintf('PASS: regressionMsSfStaticWeightInjection\n');
 
+
+end
 
 function text = localFormatNumericRow(value)
 %LOCALFORMATNUMERICROW Format one numeric vector for console output.
@@ -90,12 +94,4 @@ function text = localFormatNumericRow(value)
 value = reshape(value, 1, []);
 text = sprintf('[%s]', strjoin(arrayfun(@(x) sprintf('%.6g', x), value, ...
   'UniformOutput', false), ', '));
-end
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

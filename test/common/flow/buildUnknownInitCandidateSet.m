@@ -18,21 +18,52 @@ if isempty(staticHalfWidth)
 end
 
 initCand = {};
-if ~isempty(initParamCpKnown)
-  initCand{end + 1} = struct( ...
-    'initParam', initParamCpKnown, ...
-    'initDoaParam', reshape(cpKnownCase.estResult.doaParamEst, [], 1), ...
-    'initDoaHalfWidth', cpKnownHalfWidth, ...
-    'startTag', "fromCpK");
-end
-if ~isempty(initParamStatic)
-  initCand{end + 1} = struct( ...
-    'initParam', initParamStatic, ...
-    'initDoaParam', reshape(staticCase.estResult.doaParamEst, [], 1), ...
-    'initDoaHalfWidth', staticHalfWidth, ...
-    'startTag', "fromStatic");
-end
+initCand = localAppendInitCandidate(initCand, cpKnownCase, initParamCpKnown, cpKnownHalfWidth, "fromCpK");
+initCand = localAppendInitCandidate(initCand, staticCase, initParamStatic, staticHalfWidth, "fromStatic");
 if isempty(initCand)
   initCand = [];
+end
+end
+
+
+function initCand = localAppendInitCandidate(initCand, sourceCase, initParamUse, initDoaHalfWidth, startTag)
+%LOCALAPPENDINITCANDIDATE Append one well-formed outer warm-start candidate.
+
+if isempty(initParamUse) || isempty(initDoaHalfWidth)
+  return;
+end
+estResult = localGetFieldOrDefault(sourceCase, 'estResult', struct());
+if isempty(estResult) || ~isstruct(estResult)
+  return;
+end
+initDoaParam = reshape(localGetFieldOrDefault(estResult, 'doaParamEst', []), [], 1);
+if isempty(initDoaParam) || ~all(isfinite(initDoaParam))
+  return;
+end
+initParamUse = reshape(initParamUse, [], 1);
+initDoaHalfWidth = reshape(initDoaHalfWidth, [], 1);
+if ~all(isfinite(initParamUse)) || ~all(isfinite(initDoaHalfWidth)) || any(initDoaHalfWidth <= 0)
+  return;
+end
+
+initCand{end + 1} = struct( ...
+  'initParam', initParamUse, ...
+  'initDoaParam', initDoaParam, ...
+  'initDoaHalfWidth', initDoaHalfWidth, ...
+  'startTag', string(startTag), ...
+  'sourceSolveVariant', string(localGetFieldOrDefault(estResult, 'solveVariant', "unknown")), ...
+  'sourceIsResolved', logical(localGetFieldOrDefault(estResult, 'isResolved', false)));
+end
+
+
+function value = localGetFieldOrDefault(dataStruct, fieldName, defaultValue)
+%LOCALGETFIELDORDEFAULT Read one struct field with a default fallback.
+
+value = defaultValue;
+if isstruct(dataStruct) && isfield(dataStruct, fieldName)
+  rawValue = dataStruct.(fieldName);
+  if ~isempty(rawValue)
+    value = rawValue;
+  end
 end
 end

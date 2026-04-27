@@ -1,13 +1,14 @@
+function regressionMfModelBuild(varargin)
 % Regression check for MF model construction.
 % This script verifies one narrow contract only: the MF model builder must
 % preserve the reference-satellite identity and must enforce the requested
 % local DoA box through its bounds for both CP-K and CP-U paths.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
-fprintf('Running regressionMfModelBuild ...\n');
+  fprintf('Running regressionMfModelBuild ...\n');
 
 initDoaParam = fixture.truth.latlonTrueDeg(:) + [0.08; -0.06];
 initDoaHalfWidth = [0.12; 0.10];
@@ -81,12 +82,15 @@ if abs(lbUnknown(4) - fixture.fdRateRange(1)) > 1e-12 || ...
     'Unknown-rate fdRate bounds must match the configured fdRateRange.');
 end
 
-fprintf('  refSatIdxLocal  : %d\n', modelKnown.refSatIdxLocal);
-fprintf('  known DoA bounds: [%.6f, %.6f] x [%.6f, %.6f]\n', ...
-  lbKnown(1), ubKnown(1), lbKnown(2), ubKnown(2));
-fprintf('  unknown vars    : %d\n', numel(lbUnknown));
-fprintf('PASS: regressionMfModelBuild\n');
+  fprintf('  refSatIdxLocal  : %d\n', modelKnown.refSatIdxLocal);
+  fprintf('  known DoA bounds: [%.6f, %.6f] x [%.6f, %.6f]\n', ...
+    lbKnown(1), ubKnown(1), lbKnown(2), ubKnown(2));
+  fprintf('  unknown vars    : %d\n', numel(lbUnknown));
+  fprintf('PASS: regressionMfModelBuild\n');
 
+
+
+end
 
 function localCheckBounds(doaLb, doaUb, expDoaLb, expDoaUb, caseTag)
 %LOCALCHECKBOUNDS Check the enforced local DoA box.
@@ -179,13 +183,4 @@ fixture.sampleRate = waveInfo.sampleRate;
 fixture.carrierFreq = carrierFreq;
 fixture.fdRange = fdRange;
 fixture.fdRateRange = fdRateRange;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

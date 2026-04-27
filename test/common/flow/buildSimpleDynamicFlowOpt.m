@@ -7,6 +7,16 @@ function flowOpt = buildSimpleDynamicFlowOpt(varargin)
 % runs one very-small DoA polish.
 % The flow intentionally excludes wide periodic fallback, known-rate
 % anchors, and blanket same-tooth rescue branches.
+%
+% The returned bundle now groups the flow configuration into four small
+% blocks:
+%   subset         : subset-bank and subset trust configuration
+%   periodicRefine : same-tooth replay configuration
+%   polish         : gated very-small DoA polish configuration
+%   parallel       : subset-evaluation parallel switches
+%
+% To keep existing callers stable, legacy flat field names are still
+% exported as compatibility aliases.
 
 opt = localParseFlowOpt(varargin{:});
 
@@ -35,23 +45,123 @@ flowOpt.dynBaseOpt = localMergeStruct(struct( ...
 
 flowOpt.singleDoaHalfWidth = reshape(localGetFieldOrDefault(opt, 'singleDoaHalfWidth', [0.003; 0.003]), [], 1);
 flowOpt.multiDoaHalfWidth = reshape(localGetFieldOrDefault(opt, 'multiDoaHalfWidth', [0.002; 0.002]), [], 1);
-flowOpt.subsetDoaHalfWidthDeg = reshape(localGetFieldOrDefault(opt, 'subsetDoaHalfWidthDeg', [0.01; 0.01]), [], 1);
-flowOpt.periodicRefineFdHalfWidthHz = localGetFieldOrDefault(opt, 'periodicRefineFdHalfWidthHz', 50);
-flowOpt.periodicRefineFdRateHalfWidthHzPerSec = localGetFieldOrDefault(opt, 'periodicRefineFdRateHalfWidthHzPerSec', 100);
-flowOpt.periodicRefineDoaHalfWidthDeg = reshape(localGetFieldOrDefault(opt, 'periodicRefineDoaHalfWidthDeg', [1e-8; 1e-8]), [], 1);
-flowOpt.periodicRefineFreezeDoa = logical(localGetFieldOrDefault(opt, 'periodicRefineFreezeDoa', true));
-flowOpt.periodicRefineDoaSeedMode = string(localGetFieldOrDefault(opt, 'periodicRefineDoaSeedMode', "dualWhenMulti"));
-flowOpt.periodicRefineMaxSubsetDoaDriftDeg = localGetFieldOrDefault(opt, 'periodicRefineMaxSubsetDoaDriftDeg', 0.003);
-flowOpt.periodicRefinePreferStaticWhenSubsetDriftLarge = logical(localGetFieldOrDefault(opt, 'periodicRefinePreferStaticWhenSubsetDriftLarge', true));
-flowOpt.periodicRefineSubsetTrustMinRelativeMargin = localGetFieldOrDefault(opt, 'periodicRefineSubsetTrustMinRelativeMargin', 5e-4);
-flowOpt.periodicRefineMaxFrozenDoaDisagreementDeg = localGetFieldOrDefault(opt, 'periodicRefineMaxFrozenDoaDisagreementDeg', 0.003);
-flowOpt.periodicRefineMaxFrozenRelativeObjGapForTie = localGetFieldOrDefault(opt, 'periodicRefineMaxFrozenRelativeObjGapForTie', 5e-4);
-flowOpt.periodicRefineEnableVerySmallDoaPolish = logical(localGetFieldOrDefault(opt, 'periodicRefineEnableVerySmallDoaPolish', true));
-flowOpt.periodicRefinePolishDoaHalfWidthDeg = reshape(localGetFieldOrDefault(opt, 'periodicRefinePolishDoaHalfWidthDeg', [0.004; 0.004]), [], 1);
-flowOpt.periodicRefinePolishTriggerDoaDriftDeg = localGetFieldOrDefault(opt, 'periodicRefinePolishTriggerDoaDriftDeg', 0.0015);
-flowOpt.periodicRefinePolishMaxFrozenRelativeObjGap = localGetFieldOrDefault(opt, 'periodicRefinePolishMaxFrozenRelativeObjGap', 5e-4);
-flowOpt.parallelOpt = localMergeStruct(struct('enableSubsetEvalParfor', true, 'minSubsetEvalParfor', 4), ...
-  localGetFieldOrDefault(opt, 'parallelOpt', struct()));
+
+subsetOpt = localMergeStruct(struct( ...
+  'defaultBankLabelList', ["curated1", "curated2", "curated3"], ...
+  'marginFallbackBankLabelList', ["random1"], ...
+  'enableMarginFallback', true, ...
+  'trustMinRelativeMargin', 5e-4, ...
+  'maxDoaDriftFromStaticDeg', 0.003, ...
+  'doaHalfWidthDeg', [0.01; 0.01]), ...
+  localGetFieldOrDefault(opt, 'subset', struct()));
+subsetOpt.defaultBankLabelList = localNormalizeStringRow(localGetFirstFieldOrDefault(opt, ...
+  {'subsetDefaultBankLabelList', 'defaultSubsetLabelList'}, subsetOpt.defaultBankLabelList));
+subsetOpt.marginFallbackBankLabelList = localNormalizeStringRow(localGetFirstFieldOrDefault(opt, ...
+  {'subsetMarginFallbackBankLabelList', 'subsetEscalationBankLabelList'}, subsetOpt.marginFallbackBankLabelList));
+subsetOpt.enableMarginFallback = logical(localGetFirstFieldOrDefault(opt, ...
+  {'subsetEnableMarginFallback', 'enableSubsetMarginFallback'}, subsetOpt.enableMarginFallback));
+subsetOpt.trustMinRelativeMargin = localGetFirstFieldOrDefault(opt, ...
+  {'subsetTrustMinRelativeMargin', 'periodicRefineSubsetTrustMinRelativeMargin'}, subsetOpt.trustMinRelativeMargin);
+subsetOpt.maxDoaDriftFromStaticDeg = localGetFirstFieldOrDefault(opt, ...
+  {'subsetMaxDoaDriftFromStaticDeg', 'periodicRefineMaxSubsetDoaDriftDeg'}, subsetOpt.maxDoaDriftFromStaticDeg);
+subsetOpt.doaHalfWidthDeg = reshape(localGetFirstFieldOrDefault(opt, ...
+  {'subsetDoaHalfWidthDeg'}, subsetOpt.doaHalfWidthDeg), [], 1);
+
+periodicRefineOpt = localMergeStruct(struct( ...
+  'fdHalfWidthHz', 50, ...
+  'fdRateHalfWidthHzPerSec', 100, ...
+  'doaHalfWidthDeg', [1e-8; 1e-8], ...
+  'freezeDoa', true, ...
+  'doaSeedMode', "dualWhenMulti", ...
+  'preferStaticWhenSubsetDriftLarge', true, ...
+  'maxFrozenDoaDisagreementDeg', 0.003, ...
+  'maxFrozenRelativeObjGapForTie', 5e-4), ...
+  localGetFieldOrDefault(opt, 'periodicRefine', struct()));
+periodicRefineOpt.fdHalfWidthHz = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefineFdHalfWidthHz'}, periodicRefineOpt.fdHalfWidthHz);
+periodicRefineOpt.fdRateHalfWidthHzPerSec = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefineFdRateHalfWidthHzPerSec'}, periodicRefineOpt.fdRateHalfWidthHzPerSec);
+periodicRefineOpt.doaHalfWidthDeg = reshape(localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefineDoaHalfWidthDeg'}, periodicRefineOpt.doaHalfWidthDeg), [], 1);
+periodicRefineOpt.freezeDoa = logical(localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefineFreezeDoa'}, periodicRefineOpt.freezeDoa));
+periodicRefineOpt.doaSeedMode = string(localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefineDoaSeedMode'}, periodicRefineOpt.doaSeedMode));
+periodicRefineOpt.preferStaticWhenSubsetDriftLarge = logical(localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefinePreferStaticWhenSubsetDriftLarge'}, periodicRefineOpt.preferStaticWhenSubsetDriftLarge));
+periodicRefineOpt.maxFrozenDoaDisagreementDeg = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefineMaxFrozenDoaDisagreementDeg'}, periodicRefineOpt.maxFrozenDoaDisagreementDeg);
+periodicRefineOpt.maxFrozenRelativeObjGapForTie = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefineMaxFrozenRelativeObjGapForTie'}, periodicRefineOpt.maxFrozenRelativeObjGapForTie);
+
+polishOpt = localMergeStruct(struct( ...
+  'enable', true, ...
+  'enableWhenMulti', true, ...
+  'doaHalfWidthDeg', [0.004; 0.004], ...
+  'triggerDoaDriftDeg', 0.0015, ...
+  'minFrozenDoaDisagreementDeg', 5e-4, ...
+  'maxFrozenRelativeObjGap', 5e-4, ...
+  'maxSelectedToothResidualHz', 50, ...
+  'maxHealthBucket', 0), ...
+  localGetFieldOrDefault(opt, 'polish', struct()));
+polishOpt.enable = logical(localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefineEnableVerySmallDoaPolish'}, polishOpt.enable));
+polishOpt.enableWhenMulti = logical(localGetFirstFieldOrDefault(opt, ...
+  {'periodicPolishEnableWhenMulti'}, polishOpt.enableWhenMulti));
+polishOpt.doaHalfWidthDeg = reshape(localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefinePolishDoaHalfWidthDeg', 'periodicPolishDoaHalfWidthDeg'}, ...
+  polishOpt.doaHalfWidthDeg), [], 1);
+polishOpt.triggerDoaDriftDeg = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefinePolishTriggerDoaDriftDeg'}, polishOpt.triggerDoaDriftDeg);
+polishOpt.minFrozenDoaDisagreementDeg = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefinePolishMinFrozenDoaDisagreementDeg'}, polishOpt.minFrozenDoaDisagreementDeg);
+polishOpt.maxFrozenRelativeObjGap = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefinePolishMaxFrozenRelativeObjGap'}, polishOpt.maxFrozenRelativeObjGap);
+polishOpt.maxSelectedToothResidualHz = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefinePolishMaxSelectedToothResidualHz'}, polishOpt.maxSelectedToothResidualHz);
+polishOpt.maxHealthBucket = localGetFirstFieldOrDefault(opt, ...
+  {'periodicRefinePolishMaxHealthBucket'}, polishOpt.maxHealthBucket);
+
+parallelOpt = localMergeStruct(struct( ...
+  'enableSubsetEvalParfor', true, ...
+  'minSubsetEvalParfor', 4), ...
+  localGetFieldOrDefault(opt, 'parallel', struct()));
+parallelOpt = localMergeStruct(parallelOpt, localGetFieldOrDefault(opt, 'parallelOpt', struct()));
+
+flowOpt.subset = subsetOpt;
+flowOpt.periodicRefine = periodicRefineOpt;
+flowOpt.polish = polishOpt;
+flowOpt.parallel = parallelOpt;
+flowOpt.parallelOpt = parallelOpt;
+
+% Legacy compatibility aliases used by the current simple-flow helpers.
+flowOpt.subsetDefaultBankLabelList = subsetOpt.defaultBankLabelList;
+flowOpt.subsetMarginFallbackBankLabelList = subsetOpt.marginFallbackBankLabelList;
+flowOpt.subsetEnableMarginFallback = subsetOpt.enableMarginFallback;
+flowOpt.subsetTrustMinRelativeMargin = subsetOpt.trustMinRelativeMargin;
+flowOpt.subsetMaxDoaDriftFromStaticDeg = subsetOpt.maxDoaDriftFromStaticDeg;
+flowOpt.subsetDoaHalfWidthDeg = subsetOpt.doaHalfWidthDeg;
+
+flowOpt.periodicRefineFdHalfWidthHz = periodicRefineOpt.fdHalfWidthHz;
+flowOpt.periodicRefineFdRateHalfWidthHzPerSec = periodicRefineOpt.fdRateHalfWidthHzPerSec;
+flowOpt.periodicRefineDoaHalfWidthDeg = periodicRefineOpt.doaHalfWidthDeg;
+flowOpt.periodicRefineFreezeDoa = periodicRefineOpt.freezeDoa;
+flowOpt.periodicRefineDoaSeedMode = periodicRefineOpt.doaSeedMode;
+flowOpt.periodicRefinePreferStaticWhenSubsetDriftLarge = periodicRefineOpt.preferStaticWhenSubsetDriftLarge;
+flowOpt.periodicRefineSubsetTrustMinRelativeMargin = subsetOpt.trustMinRelativeMargin;
+flowOpt.periodicRefineMaxSubsetDoaDriftDeg = subsetOpt.maxDoaDriftFromStaticDeg;
+flowOpt.periodicRefineMaxFrozenDoaDisagreementDeg = periodicRefineOpt.maxFrozenDoaDisagreementDeg;
+flowOpt.periodicRefineMaxFrozenRelativeObjGapForTie = periodicRefineOpt.maxFrozenRelativeObjGapForTie;
+
+flowOpt.periodicRefineEnableVerySmallDoaPolish = logical(polishOpt.enable && polishOpt.enableWhenMulti);
+flowOpt.periodicPolishEnableWhenMulti = polishOpt.enableWhenMulti;
+flowOpt.periodicRefinePolishDoaHalfWidthDeg = polishOpt.doaHalfWidthDeg;
+flowOpt.periodicPolishDoaHalfWidthDeg = polishOpt.doaHalfWidthDeg;
+flowOpt.periodicRefinePolishTriggerDoaDriftDeg = polishOpt.triggerDoaDriftDeg;
+flowOpt.periodicRefinePolishMinFrozenDoaDisagreementDeg = polishOpt.minFrozenDoaDisagreementDeg;
+flowOpt.periodicRefinePolishMaxFrozenRelativeObjGap = polishOpt.maxFrozenRelativeObjGap;
+flowOpt.periodicRefinePolishMaxSelectedToothResidualHz = polishOpt.maxSelectedToothResidualHz;
+flowOpt.periodicRefinePolishMaxHealthBucket = polishOpt.maxHealthBucket;
 end
 
 function opt = localParseFlowOpt(varargin)
@@ -83,6 +193,20 @@ if isstruct(dataStruct) && isfield(dataStruct, fieldName)
 end
 end
 
+function value = localGetFirstFieldOrDefault(dataStruct, fieldNameList, defaultValue)
+value = defaultValue;
+for iField = 1:numel(fieldNameList)
+  fieldName = fieldNameList{iField};
+  if isstruct(dataStruct) && isfield(dataStruct, fieldName)
+    rawValue = dataStruct.(fieldName);
+    if ~isempty(rawValue)
+      value = rawValue;
+      return;
+    end
+  end
+end
+end
+
 function outStruct = localMergeStruct(baseStruct, overrideStruct)
 outStruct = baseStruct;
 if nargin < 2 || isempty(overrideStruct)
@@ -92,4 +216,12 @@ fieldList = fieldnames(overrideStruct);
 for iField = 1:numel(fieldList)
   outStruct.(fieldList{iField}) = overrideStruct.(fieldList{iField});
 end
+end
+
+function value = localNormalizeStringRow(rawValue)
+if isempty(rawValue)
+  value = strings(1, 0);
+  return;
+end
+value = reshape(string(rawValue), 1, []);
 end

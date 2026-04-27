@@ -1,3 +1,4 @@
+function regressionRefStateInvariant(varargin)
 % Regression check for reference-satellite Doppler state invariants.
 % This script focuses on one narrow contract only:
 %   1) fdSat(refSat,:) = fdRef
@@ -5,14 +6,15 @@
 %   3) fdSat = fdRef + deltaFd
 % and verifies that the same contract still holds after selecting a
 % single-satellite subset scene sequence.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = localBuildRegressionFixture();
 sceneSeq = fixture.sceneSeq;
 sceneRef = fixture.sceneRef;
 
-fprintf('Running regressionRefStateInvariant ...\n');
+  fprintf('Running regressionRefStateInvariant ...\n');
 
 fullState = buildReferenceDopplerState(sceneRef, ...
   sceneSeq.satPosEci, sceneSeq.satVelEci, ...
@@ -33,12 +35,14 @@ if refOnlyState.refSatIdxLocal ~= 1
     'The selected single-satellite subset must keep refSatIdxLocal = 1.');
 end
 
-fprintf('  fullScene refSatIdxLocal      : %d\n', fullState.refSatIdxLocal);
-fprintf('  fullScene refSatIdxGlobal     : %d\n', fullState.refSatIdxGlobal);
-fprintf('  subset refSatIdxLocal         : %d\n', refOnlyState.refSatIdxLocal);
-fprintf('  subset fdRef at ref frame (Hz): %.6f\n', refOnlyState.fdRefRefFrame);
-fprintf('PASS: regressionRefStateInvariant\n');
+  fprintf('  fullScene refSatIdxLocal      : %d\n', fullState.refSatIdxLocal);
+  fprintf('  fullScene refSatIdxGlobal     : %d\n', fullState.refSatIdxGlobal);
+  fprintf('  subset refSatIdxLocal         : %d\n', refOnlyState.refSatIdxLocal);
+  fprintf('  subset fdRef at ref frame (Hz): %.6f\n', refOnlyState.fdRefRefFrame);
+  fprintf('PASS: regressionRefStateInvariant\n');
 
+
+end
 
 function localCheckReferenceInvariant(dopplerState, caseTag)
 %LOCALCHECKREFERENCEINVARIANT Check the shared reference-state identities.
@@ -96,13 +100,4 @@ fixture = struct();
 fixture.sceneSeq = sceneSeq;
 fixture.sceneRef = sceneSeq.sceneCell{sceneSeq.refFrameIdx};
 fixture.wavelen = wavelen;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

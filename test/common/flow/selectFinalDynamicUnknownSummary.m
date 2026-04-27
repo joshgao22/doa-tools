@@ -8,6 +8,8 @@ arguments
   opt (1, 1) struct = struct()
 end
 
+summaryCell = reshape(summaryCell, [], 1);
+candidateTag = reshape(string(candidateTag), [], 1);
 numCase = numel(summaryCell);
 if numCase <= 0
   error('selectFinalDynamicUnknownSummary:EmptySummaryCell', ...
@@ -16,6 +18,10 @@ end
 if numCase ~= numel(candidateTag)
   error('selectFinalDynamicUnknownSummary:SizeMismatch', ...
     'summaryCell and candidateTag must have the same length.');
+end
+
+for iCase = 1:numCase
+  summaryCell{iCase} = localNormalizeSelectionSummary(summaryCell{iCase}, candidateTag(iCase));
 end
 
 opt = localApplySelectionDefaults(opt);
@@ -34,7 +40,7 @@ reasonText = localBuildReasonText(orderIdx, scoreMat, componentNameList, candida
 [selectedIdx, selectedTag, reasonText] = localApplySubsetAnchorGuard( ...
   summaryCell, candidateTag, scoreMat, selectedIdx, selectedTag, reasonText, opt);
 [selectedIdx, selectedTag, reasonText] = localApplySameToothReleasePreference( ...
-  summaryCell, candidateTag, scoreMat, selectedIdx, selectedTag, reasonText, opt);
+  summaryCell, candidateTag, selectedIdx, selectedTag, reasonText, opt);
 end
 
 
@@ -89,6 +95,53 @@ end
 if ~isfield(opt, 'sameToothResidualToleranceRel') || isempty(opt.sameToothResidualToleranceRel)
   opt.sameToothResidualToleranceRel = 0;
 end
+end
+
+
+function summary = localNormalizeSelectionSummary(summaryIn, candidateTag)
+%LOCALNORMALIZESELECTIONSUMMARY Normalize one summary for final selection.
+
+summary = struct();
+summary.isResolved = false;
+summary.finalObj = NaN;
+summary.finalResidualNorm = NaN;
+summary.doaParamEst = nan(1, 2);
+summary.fdRefEst = NaN;
+summary.fdRateEst = NaN;
+summary.toothIdx = NaN;
+summary.toothResidualHz = NaN;
+summary.runTimeMs = inf;
+summary.nonRefSupportRatioFloor = NaN;
+summary.nonRefFitRatioFloor = NaN;
+summary.nonRefConsistencyRatioFloor = NaN;
+summary.nonRefCoherenceFloor = NaN;
+summary.nonRefRmsPhaseResidRad = NaN;
+summary.nonRefMaxAbsPhaseResidRad = NaN;
+summary.maxNonRefNegativeProjectionRatio = NaN;
+summary.isDoaFrozenLike = false;
+summary.stageTag = string(candidateTag);
+
+if isstruct(summaryIn)
+  fieldList = fieldnames(summaryIn);
+  for iField = 1:numel(fieldList)
+    summary.(fieldList{iField}) = summaryIn.(fieldList{iField});
+  end
+end
+if ~isfield(summary, 'stageTag') || strlength(string(summary.stageTag)) == 0
+  summary.stageTag = string(candidateTag);
+else
+  summary.stageTag = string(summary.stageTag);
+end
+if ~isfield(summary, 'isDoaFrozenLike') || isempty(summary.isDoaFrozenLike)
+  summary.isDoaFrozenLike = false;
+end
+if contains(lower(char(candidateTag)), 'anchor') && ~contains(lower(char(candidateTag)), 'polish')
+  summary.isDoaFrozenLike = logical(summary.isDoaFrozenLike) || true;
+else
+  summary.isDoaFrozenLike = logical(summary.isDoaFrozenLike);
+end
+summary.isResolved = logical(localGetLogicalField(summary, 'isResolved', false));
+summary.runTimeMs = localGetFiniteField(summary, 'runTimeMs', inf);
 end
 
 
@@ -172,7 +225,7 @@ end
 
 
 function [selectedIdx, selectedTag, reasonText] = localApplySameToothReleasePreference( ...
-  summaryCell, candidateTag, scoreMat, selectedIdx, selectedTag, reasonText, opt)
+  summaryCell, candidateTag, selectedIdx, selectedTag, reasonText, opt)
 %LOCALAPPLYSAMETOOTHRELEASEPREFERENCE Prefer released same-tooth candidates.
 % When the best candidates already agree on the same tooth and objective /
 % residual gaps are numerically tiny, prefer the candidate that is not a

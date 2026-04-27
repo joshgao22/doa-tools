@@ -23,12 +23,13 @@ arguments
 end
 
 caseDynMsUnknownFdWide = struct();
-fdWideUnknownSummary = localBuildSkippedUnknownSummary("periodic-fd-wide");
+fdWideUnknownSummary = localBuildSkippedUnknownSummary("periodic-fd-wide", "wide");
 
 if runFdWideFirst
   caseDynMsUnknownFdWide = localRunMsUnknownWideCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
     optVerbose, flowOpt, wideSeedCase);
-  fdWideUnknownSummary = buildUnknownSummaryFn(caseDynMsUnknownFdWide, truth, toothStepHz);
+  fdWideUnknownSummary = localBuildRouteSummary(caseDynMsUnknownFdWide, ...
+    "periodic-fd-wide", "wide", buildUnknownSummaryFn, truth, toothStepHz);
   wideRefineSeedCase = caseDynMsUnknownFdWide;
 else
   wideRefineSeedCase = wideSeedCase;
@@ -37,13 +38,15 @@ end
 if runWideRefine
   caseDynMsUnknownWide = localRunMsUnknownWideRefineCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
     optVerbose, flowOpt, wideRefineSeedCase);
-  wideUnknownSummary = buildUnknownSummaryFn(caseDynMsUnknownWide, truth, toothStepHz);
+  wideUnknownSummary = localBuildRouteSummary(caseDynMsUnknownWide, ...
+    "periodic-wide", "wide", buildUnknownSummaryFn, truth, toothStepHz);
 elseif runFdWideFirst
   caseDynMsUnknownWide = caseDynMsUnknownFdWide;
   wideUnknownSummary = fdWideUnknownSummary;
 else
   caseDynMsUnknownWide = wideRefineSeedCase;
-  wideUnknownSummary = buildUnknownSummaryFn(caseDynMsUnknownWide, truth, toothStepHz);
+  wideUnknownSummary = localBuildRouteSummary(caseDynMsUnknownWide, ...
+    "periodic-wide", "wide", buildUnknownSummaryFn, truth, toothStepHz);
 end
 end
 
@@ -110,24 +113,41 @@ caseDynMsUnknownWide = runDynamicDoaDopplerCase(runLabel, "multi", ...
 end
 
 
-function summary = localBuildSkippedUnknownSummary(stageTag)
+function summary = localBuildRouteSummary(caseUse, stageTag, routeFamily, buildUnknownSummaryFn, truth, toothStepHz)
+%LOCALBUILDROUTESUMMARY Normalize one route summary to the shared field set.
+
+baseSummary = buildDynamicUnknownCaseSummary(caseUse, NaN, struct());
+summary = baseSummary;
+summaryUse = buildUnknownSummaryFn(caseUse, truth, toothStepHz);
+summary = localOverlaySummary(summary, summaryUse);
+summary.stageTag = string(stageTag);
+summary.routeFamily = string(routeFamily);
+end
+
+
+function summary = localBuildSkippedUnknownSummary(stageTag, routeFamily)
 %LOCALBUILDSKIPPEDUNKNOWNSUMMARY Build one placeholder summary for skipped routes.
 
-summary = struct();
+summary = buildDynamicUnknownCaseSummary(struct(), NaN, struct());
 summary.solveVariant = "skipped";
 summary.isResolved = false;
-summary.doaParamEst = nan(1, 2);
-summary.fdRefEst = NaN;
-summary.fdRateEst = NaN;
-summary.angleErrDeg = NaN;
-summary.fdRefErrHz = NaN;
-summary.fdRateErrHzPerSec = NaN;
-summary.toothIdx = NaN;
-summary.toothResidualHz = NaN;
 summary.runTimeMs = 0;
-summary.finalObj = NaN;
-summary.finalResidualNorm = NaN;
 summary.stageTag = string(stageTag);
+summary.routeFamily = string(routeFamily);
+end
+
+
+function summary = localOverlaySummary(baseSummary, overrideSummary)
+%LOCALOVERLAYSUMMARY Overlay one summary struct on top of a canonical base.
+
+summary = baseSummary;
+if ~isstruct(overrideSummary)
+  return;
+end
+fieldList = fieldnames(overrideSummary);
+for iField = 1:numel(fieldList)
+  summary.(fieldList{iField}) = overrideSummary.(fieldList{iField});
+end
 end
 
 

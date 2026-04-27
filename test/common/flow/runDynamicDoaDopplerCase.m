@@ -10,7 +10,10 @@ if nargin < 14
   initParamOverride = [];
 end
 
+verbose = verbose || localResolveInheritedVerbose();
+
 dynOpt = dynBaseOpt;
+dynOpt.verbose = verbose;
 if isKnownRate
   dynOpt.fdRateMode = 'known';
   dynOpt.fdRateKnown = truth.fdRateFit;
@@ -281,3 +284,30 @@ if isobject(dataStruct) && isprop(dataStruct, fieldName)
   fieldValue = dataStruct.(fieldName);
 end
 end
+
+function verbose = localResolveInheritedVerbose()
+%LOCALRESOLVEINHERITEDVERBOSE Inherit one repo-level verbose flag.
+
+verbose = false;
+try
+  if isappdata(0, 'doaToolsVerbose')
+    verbose = logical(getappdata(0, 'doaToolsVerbose'));
+  end
+catch
+  verbose = false;
+end
+
+if verbose
+  return;
+end
+
+try
+  hasVerbose = evalin('base', "exist(''doaToolsVerbose'', ''var'')");
+  if isequal(hasVerbose, 1)
+    verbose = logical(evalin('base', 'doaToolsVerbose'));
+  end
+catch
+  verbose = false;
+end
+end
+

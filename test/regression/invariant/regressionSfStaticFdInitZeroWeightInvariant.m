@@ -1,3 +1,4 @@
+function regressionSfStaticFdInitZeroWeightInvariant(varargin)
 % Regression check for SF static zero-weight fdRef initializer invariance.
 % This script guards one narrow contract only:
 %   1) with the same fixed DoA anchor, the multi-sat static fdRef initializer
@@ -5,12 +6,13 @@
 %      initializer;
 %   2) the zero-weight reduction must hold at the initializer stage as well,
 %      not only after the final free solve.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionSfStaticFdInitZeroWeightInvariant ...\n');
+  fprintf('Running regressionSfStaticFdInitZeroWeightInvariant ...\n');
 
 msDoaAnchor = fixture.caseBundle.caseMsDoa.estResult.doaParamEst(:);
 
@@ -43,17 +45,10 @@ if abs(fdRefInitDiffHz) > tolHz
      'initializer must reduce to the ref-only initializer.']);
 end
 
-fprintf('  fixed DoA anchor (deg)         : [%0.6f, %0.6f]\n', msDoaAnchor(1), msDoaAnchor(2));
-fprintf('  ref-only fdRef init (Hz)       : %.12f\n', fdRefInitRefHz);
-fprintf('  zero-weight fdRef init (Hz)    : %.12f\n', fdRefInitMsZeroHz);
-fprintf('  zero-weight init diff (Hz)     : %.6g\n', fdRefInitDiffHz);
-fprintf('PASS: regressionSfStaticFdInitZeroWeightInvariant\n');
+  fprintf('  fixed DoA anchor (deg)         : [%0.6f, %0.6f]\n', msDoaAnchor(1), msDoaAnchor(2));
+  fprintf('  ref-only fdRef init (Hz)       : %.12f\n', fdRefInitRefHz);
+  fprintf('  zero-weight fdRef init (Hz)    : %.12f\n', fdRefInitMsZeroHz);
+  fprintf('  zero-weight init diff (Hz)     : %.6g\n', fdRefInitDiffHz);
+  fprintf('PASS: regressionSfStaticFdInitZeroWeightInvariant\n');
 
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

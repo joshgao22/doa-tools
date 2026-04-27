@@ -18,26 +18,38 @@ end
 rng(opt.baseSeed);
 
 wavelen = 299792458 / opt.carrierFreq;
-elemSpace = wavelen / 2;
-arrUpa = createUpa([4, 4], elemSpace);
+elemSpace = opt.elemSpacingWavelength * wavelen;
+arrUpa = createUpa(opt.arraySize, elemSpace);
 E = referenceEllipsoid('sphere');
-usrLla = [37.78; 36.59; 0];
+usrLla = reshape(opt.usrLla, [], 1);
 truthLatlon = usrLla(1:2, 1);
 searchRange = [truthLatlon(1) - opt.searchMarginDeg, truthLatlon(1) + opt.searchMarginDeg; ...
                truthLatlon(2) - opt.searchMarginDeg, truthLatlon(2) + opt.searchMarginDeg];
 
-utcRef = datetime([2026, 03, 18, 17, 08, 0], ...
-  'TimeZone', 'UTC', ...
-  'Format', 'yyyy-MM-dd HH:mm:ss.SSSSSS');
+utcRef = localNormalizeUtcRef(opt.utcRef);
 utcVecMaster = utcRef + seconds(opt.masterOffsetIdx * opt.frameIntvlSec);
 
-tle = tleread(resolveTestDataPath("starlink_pair_4154_1165_20260318_170800.tle", "tle"));
+tle = tleread(resolveTestDataPath(char(opt.tleFileName), "tle"));
 [~, satAccessRef] = findVisibleSatFromTle(utcRef, tle, usrLla);
-[selectedSatIdxGlobal, satPickAux] = pickVisibleSatByElevation(satAccessRef, 2, 1, "available");
-refSatIdxGlobal = selectedSatIdxGlobal(1);
+if isempty(opt.selectedSatIdxGlobal)
+  [selectedSatIdxGlobal, satPickAux] = pickVisibleSatByElevation( ...
+    satAccessRef, opt.satPickCount, opt.satPickAnchorIdx, opt.satPickMode);
+else
+  selectedSatIdxGlobal = reshape(double(opt.selectedSatIdxGlobal), 1, []);
+  satPickAux = struct('source', "explicit-selectedSatIdxGlobal");
+end
+if isempty(opt.refSatIdxGlobal)
+  refSatIdxGlobal = selectedSatIdxGlobal(1);
+else
+  refSatIdxGlobal = double(opt.refSatIdxGlobal);
+end
+if ~any(selectedSatIdxGlobal == refSatIdxGlobal)
+  error('buildDynamicDualSatEciContext:InvalidReferenceSat', ...
+    'refSatIdxGlobal must be one of selectedSatIdxGlobal.');
+end
 
 sceneSeqMaster = genMultiFrameScene(utcVecMaster, tle, usrLla, selectedSatIdxGlobal, [], arrUpa, ...
-  15, 55, "satellite", refSatIdxGlobal, find(opt.masterOffsetIdx == 0, 1, 'first'));
+  opt.satElevationMaskDeg(1), opt.satElevationMaskDeg(2), "satellite", refSatIdxGlobal, find(opt.masterOffsetIdx == 0, 1, 'first'));
 linkParamCellMaster = cell(1, sceneSeqMaster.numFrame);
 for iFrame = 1:sceneSeqMaster.numFrame
   linkParamCellMaster{iFrame} = getLinkParam(sceneSeqMaster.sceneCell{iFrame}, wavelen);
@@ -72,8 +84,16 @@ simOpt.wave.carrierPhaseModel = 'none';
 simOpt.precomp.linkParamCell = linkParamCellMaster;
 
 [primarySubsetOffsetCell, primarySubsetLabelList] = getDynamicCuratedSubsetBank();
-subsetOffsetCell = primarySubsetOffsetCell;
-subsetLabelList = primarySubsetLabelList;
+if isfield(opt, 'subsetOffsetCell') && ~isempty(opt.subsetOffsetCell)
+  subsetOffsetCell = opt.subsetOffsetCell;
+  subsetLabelList = reshape(string(opt.subsetLabelList), [], 1);
+  if isempty(subsetLabelList)
+    subsetLabelList = "subset" + string((1:numel(subsetOffsetCell)).');
+  end
+else
+  subsetOffsetCell = primarySubsetOffsetCell;
+  subsetLabelList = primarySubsetLabelList;
+end
 
 context = struct();
 context.frameIntvlSec = opt.frameIntvlSec;
@@ -84,6 +104,13 @@ context.symbolRate = opt.symbolRate;
 context.numSym = opt.numSym;
 context.carrierFreq = opt.carrierFreq;
 context.baseSeed = opt.baseSeed;
+context.tleFileName = string(opt.tleFileName);
+context.arraySize = opt.arraySize;
+context.elemSpacingWavelength = opt.elemSpacingWavelength;
+context.satElevationMaskDeg = opt.satElevationMaskDeg;
+context.satPickCount = opt.satPickCount;
+context.satPickAnchorIdx = opt.satPickAnchorIdx;
+context.satPickMode = string(opt.satPickMode);
 context.gridSize = opt.gridSize;
 context.searchRange = searchRange;
 context.fdRangeDefault = opt.fdRangeDefault;
@@ -126,12 +153,27 @@ opt.symbolRate = 128e6;
 opt.numSym = 512;
 opt.carrierFreq = 11.7e9;
 opt.baseSeed = 253;
+opt.usrLla = [37.78; 36.59; 0];
+opt.utcRef = datetime([2026, 03, 18, 17, 08, 0], ...
+  'TimeZone', 'UTC', ...
+  'Format', 'yyyy-MM-dd HH:mm:ss.SSSSSS');
+opt.tleFileName = "starlink_pair_4154_1165_20260318_170800.tle";
+opt.selectedSatIdxGlobal = [];
+opt.refSatIdxGlobal = [];
+opt.satPickCount = 2;
+opt.satPickAnchorIdx = 1;
+opt.satPickMode = "available";
+opt.satElevationMaskDeg = [15, 55];
+opt.arraySize = [4, 4];
+opt.elemSpacingWavelength = 0.5;
 opt.gridSize = [50, 50];
 opt.searchMarginDeg = 5;
 opt.fdRangeDefault = [-2e5, 2e5];
 opt.fdRateRangeDefault = [-1e4, 0];
 opt.numUsr = 1;
 opt.numSubsetRandomTrial = 0;
+opt.subsetOffsetCell = {};
+opt.subsetLabelList = strings(0, 1);
 opt.parallelOpt = struct('enableSubsetEvalParfor', true, 'minSubsetEvalParfor', 4);
 
 if nargin == 1 && isstruct(varargin{1})
@@ -150,6 +192,27 @@ elseif nargin ~= 0
   error('buildDynamicDualSatEciContext:InvalidInput', ...
     'Use either one override struct or name-value pairs.');
 end
+end
+
+function utcRef = localNormalizeUtcRef(utcInput)
+if isa(utcInput, 'datetime')
+  utcRef = utcInput;
+elseif isnumeric(utcInput) && numel(utcInput) >= 6
+  utcRef = datetime(reshape(utcInput(1:6), 1, []), ...
+    'TimeZone', 'UTC', ...
+    'Format', 'yyyy-MM-dd HH:mm:ss.SSSSSS');
+elseif ischar(utcInput) || (isstring(utcInput) && isscalar(utcInput))
+  utcRef = datetime(char(utcInput), ...
+    'TimeZone', 'UTC', ...
+    'Format', 'yyyy-MM-dd HH:mm:ss.SSSSSS');
+else
+  error('buildDynamicDualSatEciContext:InvalidUtcRef', ...
+    'utcRef must be a datetime, date vector, or datetime string.');
+end
+if isempty(utcRef.TimeZone)
+  utcRef.TimeZone = 'UTC';
+end
+utcRef.Format = 'yyyy-MM-dd HH:mm:ss.SSSSSS';
 end
 
 function outStruct = localMergeStruct(baseStruct, overrideStruct)

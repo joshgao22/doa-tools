@@ -1,15 +1,17 @@
+function regressionMsSfStaticW0EqualsSsStatic(varargin)
 % Regression check for the MS-SF-Static zero-weight anchor.
 % Contract:
 %   1) MS-SF-Static-W0.00 must match SS-SF-Static when both use the same
 %      ref-sat DoA initializer;
 %   2) the same zero-weight case must also match the ref-only ablation
 %      branch kept in the shared transition bundle.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionMsSfStaticW0EqualsSsStatic ...\n');
+  fprintf('Running regressionMsSfStaticW0EqualsSsStatic ...\n');
 
 caseBundle = fixture.caseBundle;
 caseRefOnly = caseBundle.caseStaticRefOnly;
@@ -54,14 +56,16 @@ if fvalDiffRefVsW0 > tolFval || fvalDiffAblVsW0 > tolFval
     'MS-SF-Static-W0.00 must preserve the ref-only objective value exactly.');
 end
 
-fprintf('  SS-SF-Static angle err (deg)      : %.6g\n', angleErrRefDeg);
-fprintf('  ref-sat ablation angle err (deg)  : %.6g\n', angleErrAblDeg);
-fprintf('  W0 angle err (deg)                : %.6g\n', angleErrW0Deg);
-fprintf('  ref-vs-W0 angle diff (deg)        : %.6g\n', angleDiffRefVsW0Deg);
-fprintf('  ref-vs-W0 fdRef diff (Hz)         : %.6g\n', fdDiffRefVsW0Hz);
-fprintf('  ref-vs-W0 objective diff          : %.6g\n', fvalDiffRefVsW0);
-fprintf('PASS: regressionMsSfStaticW0EqualsSsStatic\n');
+  fprintf('  SS-SF-Static angle err (deg)      : %.6g\n', angleErrRefDeg);
+  fprintf('  ref-sat ablation angle err (deg)  : %.6g\n', angleErrAblDeg);
+  fprintf('  W0 angle err (deg)                : %.6g\n', angleErrW0Deg);
+  fprintf('  ref-vs-W0 angle diff (deg)        : %.6g\n', angleDiffRefVsW0Deg);
+  fprintf('  ref-vs-W0 fdRef diff (Hz)         : %.6g\n', fdDiffRefVsW0Hz);
+  fprintf('  ref-vs-W0 objective diff          : %.6g\n', fvalDiffRefVsW0);
+  fprintf('PASS: regressionMsSfStaticW0EqualsSsStatic\n');
 
+
+end
 
 function localAssertResolved(caseInfo, displayName)
 %LOCALASSERTRESOLVED Ensure one regression case resolved successfully.
@@ -86,12 +90,4 @@ fval = NaN;
 if isstruct(caseInfo) && isfield(caseInfo, 'estResult') && isstruct(caseInfo.estResult)
   fval = getDoaDopplerFieldOrDefault(caseInfo.estResult, 'fval', NaN);
 end
-end
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

@@ -23,6 +23,7 @@ end
 if numel(initParam) < 4
   return;
 end
+verbose = localResolveVerbose(model);
 
 fdRateSeed = initParam(end);
 Aeq = zeros(1, numel(initParam));
@@ -43,52 +44,55 @@ if numDoa >= 1 && numel(lbAnchor) >= numDoa && numel(ubAnchor) >= numDoa
   ubAnchor(1:numDoa) = doaUbAnchor;
 end
 
-fdRateReleaseSeed = localBuildUnknownFdRateWarmStartSet(model, fdRateSeed);
+fdRateReleaseHalfWidth = localResolveUnknownWarmAnchorFdRateReleaseHalfWidth(model, lbAnchor(end), ubAnchor(end));
+fdRateReleaseSeed = localBuildUnknownFdRateWarmStartSet(model, fdRateSeed, lbAnchor(end), ubAnchor(end), fdRateReleaseHalfWidth);
 if isempty(fdRateReleaseSeed)
   fdRateReleaseSeed = fdRateSeed;
 end
 fdRateReleaseSeed = reshape(fdRateReleaseSeed, 1, []);
 
+if verbose
+  fprintf('[WarmAnchorTrace] freezeDoa=%d seedFdRate=%.6f releaseSeedCount=%d\n', ...
+    localGetModelLogical(model, 'freezeDoa', false), fdRateSeed, numel(fdRateReleaseSeed));
+  localPrintSolveSummary('warm', solveWarm);
+end
+
+numReleaseSeed = numel(fdRateReleaseSeed);
+seedSolveCell = cell(numReleaseSeed, 1);
+useReleaseParfor = localShouldUseReleaseParfor(model, numReleaseSeed, verbose);
+
+if useReleaseParfor
+  parfor iSeed = 1:numReleaseSeed
+    seedSolveCell{iSeed} = localRunUnknownWarmReleaseSeed(model, warmInit, ...
+      lbAnchor, ubAnchor, fdRateSeed, fdRateReleaseSeed, iSeed, ...
+      solveWarm, baseOptimOpt, warmSolveOpt);
+  end
+else
+  for iSeed = 1:numReleaseSeed
+    seedSolveCell{iSeed} = localRunUnknownWarmReleaseSeed(model, warmInit, ...
+      lbAnchor, ubAnchor, fdRateSeed, fdRateReleaseSeed, iSeed, ...
+      solveWarm, baseOptimOpt, warmSolveOpt);
+
+    if verbose
+      seedSolve = seedSolveCell{iSeed};
+      fprintf('[WarmAnchorTrace] releaseSeed[%d/%d]=%.6f halfWidth=%.6f\n', ...
+        iSeed, numReleaseSeed, fdRateReleaseSeed(iSeed), seedSolve.releaseHalfWidth);
+      localPrintSolveSummary('local', seedSolve.solveLocal);
+      localPrintSolveSummary('full', seedSolve.solveFull);
+      localPrintSolveSummary('pick', seedSolve.solveCandUse);
+    end
+  end
+end
+
 solveBest = struct([]);
 totalRunTimeSec = solveWarm.runTimeSec;
-for iSeed = 1:numel(fdRateReleaseSeed)
-  initRelease = warmInit;
-  initRelease(end) = fdRateReleaseSeed(iSeed);
-
-  [lbLocal, ubLocal, releaseHalfWidth] = localBuildUnknownFdRateReleaseBounds( ...
-    model, lbAnchor, ubAnchor, fdRateReleaseSeed(iSeed), fdRateReleaseSeed);
-  solveLocal = runDoaDopplerMfOptimization(model, initRelease, lbLocal, ubLocal, [], [], baseOptimOpt, warmSolveOpt);
-  solveFull = runDoaDopplerMfOptimization(model, solveLocal.optVar(:), lbAnchor, ubAnchor, [], [], baseOptimOpt, warmSolveOpt);
-
-  totalRunTimeSec = totalRunTimeSec + solveLocal.runTimeSec + solveFull.runTimeSec;
-  solveLocal.output = localMergeOptimOutput(solveWarm.output, solveLocal.output);
-  solveLocal.warmStart = struct( ...
-    'fdRateFixed', fdRateSeed, ...
-    'warmFval', solveWarm.fval, ...
-    'warmExitflag', solveWarm.exitflag, ...
-    'warmIsResolved', solveWarm.isResolved, ...
-    'warmVariant', "mainWarmFixedFdRate", ...
-    'releaseSeedFdRate', fdRateReleaseSeed(iSeed), ...
-    'releaseHalfWidth', releaseHalfWidth, ...
-    'releaseLb', lbLocal(end), ...
-    'releaseUb', ubLocal(end), ...
-    'selectedReleaseStage', "local");
-  solveLocal.runTimeSec = solveWarm.runTimeSec + solveLocal.runTimeSec;
-
-  solveFull.output = localMergeOptimOutput(solveLocal.output, solveFull.output);
-  solveFull.warmStart = struct( ...
-    'fdRateFixed', fdRateSeed, ...
-    'warmFval', solveWarm.fval, ...
-    'warmExitflag', solveWarm.exitflag, ...
-    'warmIsResolved', solveWarm.isResolved, ...
-    'warmVariant', "mainWarmFixedFdRate", ...
-    'releaseSeedFdRate', fdRateReleaseSeed(iSeed), ...
-    'releaseHalfWidth', releaseHalfWidth, ...
-    'releaseLb', lbLocal(end), ...
-    'releaseUb', ubLocal(end), ...
-    'selectedReleaseStage', "full");
-
-  solveCandUse = localSelectUnknownWarmReleaseSolve(model, solveLocal, solveFull);
+for iSeed = 1:numReleaseSeed
+  seedSolve = seedSolveCell{iSeed};
+  if isempty(seedSolve) || ~isstruct(seedSolve)
+    continue;
+  end
+  totalRunTimeSec = totalRunTimeSec + seedSolve.runTimeSec;
+  solveCandUse = seedSolve.solveCandUse;
   if isempty(solveBest) || preferDoaDopplerMfSolveResult(solveCandUse, solveBest)
     solveBest = solveCandUse;
   end
@@ -99,14 +103,117 @@ if isempty(solveBest)
 end
 
 solveBest.runTimeSec = totalRunTimeSec;
-solveBest.output = localMergeOptimOutput(solveWarm.output, solveBest.output);
 if isfield(model, 'freezeDoa') && logical(model.freezeDoa)
   solveBest.solveVariant = "mainWarmAnchorFixedDoa";
 else
   solveBest.solveVariant = "mainWarmAnchor";
 end
 solveBest.warmStart.fdRateReleaseSeedList = fdRateReleaseSeed(:);
+if verbose
+  localPrintSolveSummary('familyFinal', solveBest);
+end
 solveCand = solveBest;
+end
+
+
+function seedSolve = localRunUnknownWarmReleaseSeed(model, warmInit, lbAnchor, ubAnchor, ...
+  fdRateSeed, fdRateReleaseSeed, iSeed, solveWarm, baseOptimOpt, warmSolveOpt)
+%LOCALRUNUNKNOWNWARMRELEASESEED Solve one independent warm-anchor release seed.
+
+initRelease = warmInit;
+initRelease(end) = fdRateReleaseSeed(iSeed);
+
+[lbLocal, ubLocal, releaseHalfWidth] = localBuildUnknownFdRateReleaseBounds( ...
+  model, lbAnchor, ubAnchor, fdRateReleaseSeed(iSeed), fdRateReleaseSeed);
+solveLocal = runDoaDopplerMfOptimization(model, initRelease, lbLocal, ubLocal, [], [], ...
+  baseOptimOpt, warmSolveOpt);
+solveFull = runDoaDopplerMfOptimization(model, solveLocal.optVar(:), lbAnchor, ubAnchor, [], [], ...
+  baseOptimOpt, warmSolveOpt);
+releaseRunTimeSec = solveLocal.runTimeSec + solveFull.runTimeSec;
+
+solveLocal.output = localMergeOptimOutput(solveWarm.output, solveLocal.output);
+solveLocal.warmStart = struct( ...
+  'fdRateFixed', fdRateSeed, ...
+  'warmFval', solveWarm.fval, ...
+  'warmExitflag', solveWarm.exitflag, ...
+  'warmIsResolved', solveWarm.isResolved, ...
+  'warmVariant', "mainWarmFixedFdRate", ...
+  'releaseSeedFdRate', fdRateReleaseSeed(iSeed), ...
+  'releaseHalfWidth', releaseHalfWidth, ...
+  'releaseLb', lbLocal(end), ...
+  'releaseUb', ubLocal(end), ...
+  'selectedReleaseStage', "local");
+solveLocal.runTimeSec = solveWarm.runTimeSec + solveLocal.runTimeSec;
+
+solveFull.output = localMergeOptimOutput(solveLocal.output, solveFull.output);
+solveFull.warmStart = struct( ...
+  'fdRateFixed', fdRateSeed, ...
+  'warmFval', solveWarm.fval, ...
+  'warmExitflag', solveWarm.exitflag, ...
+  'warmIsResolved', solveWarm.isResolved, ...
+  'warmVariant', "mainWarmFixedFdRate", ...
+  'releaseSeedFdRate', fdRateReleaseSeed(iSeed), ...
+  'releaseHalfWidth', releaseHalfWidth, ...
+  'releaseLb', lbLocal(end), ...
+  'releaseUb', ubLocal(end), ...
+  'selectedReleaseStage', "full");
+
+solveCandUse = localSelectUnknownWarmReleaseSolve(model, solveLocal, solveFull);
+
+seedSolve = struct();
+seedSolve.solveLocal = solveLocal;
+seedSolve.solveFull = solveFull;
+seedSolve.solveCandUse = solveCandUse;
+seedSolve.releaseHalfWidth = releaseHalfWidth;
+seedSolve.runTimeSec = releaseRunTimeSec;
+end
+
+
+function tf = localShouldUseReleaseParfor(model, numReleaseSeed, verbose)
+%LOCALSHOULDUSERELEASEPARFOR Decide whether the warm-anchor family should use parfor.
+
+tf = shouldUseDoaDopplerMfWarmAnchorParfor(model, numReleaseSeed, verbose);
+end
+
+
+function fdRateSeedList = localBuildUnknownFdRateWarmStartSet(model, fdRateSeed, fdRateLb, fdRateUb, releaseHalfWidth)
+%LOCALBUILDUNKNOWNFDRATEWARMSTARTSET Build one compact multi-seed release set.
+%
+% The default CP-U family should not silently collapse to one warm-rate seed.
+% When the caller does not provide explicit offsets, build a compact
+% symmetric multi-start set around the warm seed so the local release can
+% actually leave the CP-K tooth. Explicit offsets still override this
+% default and preserve the same data flow through modelOpt.
+
+fdRateSeedList = [];
+if ~isfinite(fdRateSeed)
+  return;
+end
+
+offsetList = reshape(localGetStructField(model, 'unknownWarmAnchorFdRateReleaseOffsetList', []), [], 1);
+if isempty(offsetList)
+  if ~(isfinite(releaseHalfWidth) && releaseHalfWidth > 0)
+    fdRateSeedList = fdRateSeed;
+    return;
+  end
+  offsetList = releaseHalfWidth * [-1.0; -0.5; 0.0; 0.5; 1.0];
+end
+
+offsetList = offsetList(isfinite(offsetList));
+if isempty(offsetList)
+  fdRateSeedList = fdRateSeed;
+  return;
+end
+
+fdRateSeedList = fdRateSeed + offsetList;
+fdRateSeedList = [fdRateSeed; fdRateSeedList];
+if isfinite(fdRateLb)
+  fdRateSeedList = max(fdRateSeedList, fdRateLb);
+end
+if isfinite(fdRateUb)
+  fdRateSeedList = min(fdRateSeedList, fdRateUb);
+end
+fdRateSeedList = unique(fdRateSeedList(isfinite(fdRateSeedList)), 'stable');
 end
 
 
@@ -233,14 +340,16 @@ function [lbLocal, ubLocal, releaseHalfWidth] = localBuildUnknownFdRateReleaseBo
 
 lbLocal = lb;
 ubLocal = ub;
-releaseHalfWidth = localGetModelScalar(model, 'unknownWarmAnchorFdRateReleaseHalfWidth', 0);
 if numel(lbLocal) < 4 || numel(ubLocal) < 4
+  releaseHalfWidth = 0;
   return;
 end
+
+fdRateIdx = 4;
+releaseHalfWidth = localResolveUnknownWarmAnchorFdRateReleaseHalfWidth(model, lb(fdRateIdx), ub(fdRateIdx));
 if releaseHalfWidth <= 0
   return;
 end
-fdRateIdx = 4;
 fdRateCenter = fdRateCand;
 fdRateLb = max(lb(fdRateIdx), fdRateCenter - releaseHalfWidth);
 fdRateUb = min(ub(fdRateIdx), fdRateCenter + releaseHalfWidth);
@@ -248,215 +357,251 @@ if fdRateLb > fdRateUb
   fdRateLb = lb(fdRateIdx);
   fdRateUb = ub(fdRateIdx);
 end
-if nargin >= 5 && ~isempty(fdRateCandList)
-  nearestGap = min(abs(fdRateCenter - fdRateCandList(abs(fdRateCenter - fdRateCandList) > 0)));
-  if isfinite(nearestGap)
-    halfGap = 0.45 * nearestGap;
-    fdRateLb = max(fdRateLb, fdRateCenter - halfGap);
-    fdRateUb = min(fdRateUb, fdRateCenter + halfGap);
-  end
-end
+% Keep overlapping local boxes. The CP-U family is intentionally tiny, and
+% allowing overlap is preferable to shrinking every release box back into a
+% near-singleton neighborhood around the original seed.
 if fdRateLb <= fdRateUb
   lbLocal(fdRateIdx) = fdRateLb;
   ubLocal(fdRateIdx) = fdRateUb;
-  releaseHalfWidth = 0.5 * (ubLocal(fdRateIdx) - lbLocal(fdRateIdx));
+  releaseHalfWidth = 0.5 * (fdRateUb - fdRateLb);
 end
 end
 
 
-function outputMerge = localMergeOptimOutput(outputWarm, outputRelease)
-%LOCALMERGEOPTIMOUTPUT Merge warm-start and release optimization summaries.
+function releaseHalfWidth = localResolveUnknownWarmAnchorFdRateReleaseHalfWidth(model, fdRateLb, fdRateUb)
+%LOCALRESOLVEUNKNOWNWARMANCHORFDRATERELEASEHALFWIDTH Resolve one nondegenerate CP-U rate-release box.
+%
+% The default must stay local, but it must not silently collapse to zero.
+% A compact half width of about 250 Hz/s is enough to release the biased
+% CP-K seeds used by the regression guards while still staying well inside
+% the full fdRate search range.
 
-outputMerge = outputRelease;
-outputMerge.iterations = localGetStructField(outputWarm, 'iterations', 0) + ...
-  localGetStructField(outputRelease, 'iterations', 0);
-outputMerge.funcCount = localGetStructField(outputWarm, 'funcCount', 0) + ...
-  localGetStructField(outputRelease, 'funcCount', 0);
-outputMerge.constrviolation = localGetStructField(outputRelease, 'constrviolation', NaN);
-outputMerge.stepsize = localGetStructField(outputRelease, 'stepsize', NaN);
-outputMerge.firstorderopt = localGetStructField(outputRelease, 'firstorderopt', NaN);
-outputMerge.algorithm = localGetStructField(outputRelease, 'algorithm', '');
-outputMerge.message = localGetStructField(outputRelease, 'message', '');
-outputMerge.usedScaledSolve = logical(localGetStructField(outputWarm, 'usedScaledSolve', false) || ...
-  localGetStructField(outputRelease, 'usedScaledSolve', false));
-outputMerge.fallbackTriggered = logical(localGetStructField(outputWarm, 'fallbackTriggered', false) || ...
-  localGetStructField(outputRelease, 'fallbackTriggered', false));
-fallbackAlgRelease = localGetStructField(outputRelease, 'usedFallbackAlgorithm', '');
-fallbackAlgWarm = localGetStructField(outputWarm, 'usedFallbackAlgorithm', '');
-if ~isempty(fallbackAlgRelease)
-  outputMerge.usedFallbackAlgorithm = fallbackAlgRelease;
+releaseHalfWidth = localGetModelScalar(model, 'unknownWarmAnchorFdRateReleaseHalfWidth', NaN);
+if isfinite(releaseHalfWidth)
+  releaseHalfWidth = max(releaseHalfWidth, 0);
 else
-  outputMerge.usedFallbackAlgorithm = fallbackAlgWarm;
-end
-end
-
-
-function fdRateCand = localBuildUnknownFdRateWarmStartSet(model, fdRateSeed)
-%LOCALBUILDUNKNOWNFDRATEWARMSTARTSET Build local fdRate anchors for CP-U.
-
-fdRateCand = [];
-if isempty(model.fdRateRange) || numel(model.fdRateRange) ~= 2
-  return;
-end
-
-fdMin = model.fdRateRange(1);
-fdMax = model.fdRateRange(2);
-if ~(isfinite(fdMin) && isfinite(fdMax) && fdMin <= fdMax)
-  return;
-end
-
-rangeSpan = fdMax - fdMin;
-if rangeSpan <= 0
-  fdRateCand = fdMin;
-  return;
-end
-if ~isfinite(fdRateSeed)
-  fdRateSeed = 0.5 * (fdMin + fdMax);
-end
-
-localHalfWidth = min(0.08 * rangeSpan, max(25, 0.03 * max(abs(fdRateSeed), rangeSpan)));
-candidateVec = [fdRateSeed - localHalfWidth, fdRateSeed, fdRateSeed + localHalfWidth];
-fdRateCand = candidateVec(isfinite(candidateVec));
-if isempty(fdRateCand)
-  return;
-end
-fdRateCand = min(max(fdRateCand, fdMin), fdMax);
-fdRateCand = localUniqueStableTol(fdRateCand(:).', 1e-9);
-end
-
-
-function uniqueVec = localUniqueStableTol(valVec, tol)
-%LOCALUNIQUESTABLETOL Stable unique with tolerance for warm-start seeds.
-
-if nargin < 2 || isempty(tol)
-  tol = 0;
-end
-valVec = reshape(valVec, 1, []);
-if isempty(valVec)
-  uniqueVec = valVec;
-  return;
-end
-
-keepMask = false(size(valVec));
-uniqueList = zeros(1, 0);
-for iVal = 1:numel(valVec)
-  if isempty(uniqueList) || all(abs(valVec(iVal) - uniqueList) > tol)
-    uniqueList(end + 1) = valVec(iVal); %#ok<AGROW>
-    keepMask(iVal) = true;
+  fdRateSpan = fdRateUb - fdRateLb;
+  if ~(isfinite(fdRateSpan) && fdRateSpan > 0)
+    releaseHalfWidth = 0;
+    return;
   end
+  releaseHalfWidth = min(max(250, 0.01 * fdRateSpan), 0.45 * fdRateSpan);
 end
-uniqueVec = valVec(keepMask);
 end
 
 
-function [doaLb, doaUb] = localApplyUnknownDoaReleaseFloor(model, doaLb, doaUb, centerOverride)
-%LOCALAPPLYUNKNOWNDOARELEASEFLOOR Local copy for warm-anchor recentering.
+function [doaLb, doaUb] = localApplyUnknownDoaReleaseFloor(model, doaLb, doaUb, doaCenter)
+%LOCALAPPLYUNKNOWNDOARELEASEFLOOR Apply the minimum CP-U DoA release box.
 
-if nargin < 4
-  centerOverride = [];
-end
-if ~strcmp(model.fdRateMode, 'unknown')
+if localGetModelLogical(model, 'freezeDoa', false)
   return;
 end
-if isfield(model, 'freezeDoa') && logical(model.freezeDoa)
+if localGetModelLogical(model, 'disableUnknownDoaReleaseFloor', false)
   return;
 end
-if isfield(model, 'disableUnknownDoaReleaseFloor') && logical(model.disableUnknownDoaReleaseFloor)
-  return;
-end
-if model.numSat <= 1 || ~strcmp(model.phaseMode, 'continuous')
-  return;
-end
-if isempty(model.initDoaParam) && isempty(centerOverride)
+if isempty(doaLb) || isempty(doaUb)
   return;
 end
 
-baseRange = model.doaGrid{1}.range;
-if isempty(baseRange) || any(size(baseRange) ~= [2, 2])
-  return;
-end
-releaseHalfWidth = localResolveUnknownDoaReleaseHalfWidth(model);
+releaseHalfWidth = localResolveUnknownDoaReleaseHalfWidth(model, doaLb, doaUb);
 if isempty(releaseHalfWidth)
   return;
 end
 
-currentWidth = doaUb - doaLb;
-targetWidth = 2 * releaseHalfWidth;
-if ~isempty(centerOverride)
-  center = reshape(centerOverride, [], 1);
-else
-  center = reshape(model.initDoaParam, [], 1);
-end
-needRecenter = false;
-if ~isempty(centerOverride)
-  centerTol = 1e-12;
-  needRecenter = any(center < doaLb + releaseHalfWidth - centerTol) || ...
-    any(center > doaUb - releaseHalfWidth + centerTol);
-end
-if all(currentWidth >= targetWidth - 1e-12) && ~needRecenter
+doaCenter = reshape(doaCenter, [], 1);
+numDoa = min([numel(doaLb), numel(doaUb), numel(doaCenter), numel(releaseHalfWidth)]);
+if numDoa <= 0
   return;
 end
 
-doaLbFloor = center - releaseHalfWidth;
-doaUbFloor = center + releaseHalfWidth;
-if strcmp(model.doaType, 'angle')
-  center(1) = mod(center(1), 2 * pi);
-  doaLbFloor(1) = center(1) - releaseHalfWidth(1);
-  doaUbFloor(1) = center(1) + releaseHalfWidth(1);
-  if doaLbFloor(1) < baseRange(1, 1) || doaUbFloor(1) > baseRange(1, 2)
-    doaLbFloor(1) = baseRange(1, 1);
-    doaUbFloor(1) = baseRange(1, 2);
-  end
-end
-for iDim = 1:numel(doaLb)
-  if needRecenter || currentWidth(iDim) < targetWidth(iDim)
-    doaLb(iDim) = max(baseRange(iDim, 1), doaLbFloor(iDim));
-    doaUb(iDim) = min(baseRange(iDim, 2), doaUbFloor(iDim));
-  end
-end
-invalidMask = doaLb > doaUb;
-doAResetLb = reshape(baseRange(invalidMask, 1), [], 1);
-doAResetUb = reshape(baseRange(invalidMask, 2), [], 1);
-doAIdx = find(invalidMask);
-for iIdx = 1:numel(doAIdx)
-  doaLb(doAIdx(iIdx)) = doAResetLb(iIdx);
-  doaUb(doAIdx(iIdx)) = doAResetUb(iIdx);
+for iDoa = 1:numDoa
+  centerUse = doaCenter(iDoa);
+  lbTarget = centerUse - releaseHalfWidth(iDoa);
+  ubTarget = centerUse + releaseHalfWidth(iDoa);
+  doaLb(iDoa) = min(doaLb(iDoa), lbTarget);
+  doaUb(iDoa) = max(doaUb(iDoa), ubTarget);
 end
 end
 
 
-function releaseHalfWidth = localResolveUnknownDoaReleaseHalfWidth(model)
-%LOCALRESOLVEUNKNOWNDOARELEASEHALFWIDTH Resolve the CP-U DoA box floor.
+function releaseHalfWidth = localResolveUnknownDoaReleaseHalfWidth(model, doaLb, doaUb)
+%LOCALRESOLVEUNKNOWNDOARELEASEHALFWIDTH Resolve the minimum DoA release box.
 
-if isfield(model, 'unknownDoaReleaseHalfWidth') && ~isempty(model.unknownDoaReleaseHalfWidth)
-  releaseHalfWidth = reshape(model.unknownDoaReleaseHalfWidth, [], 1);
-else
-  if strcmp(model.doaType, 'angle')
-    defaultHalfWidth = deg2rad(0.03);
+releaseHalfWidth = reshape(localGetStructField(model, 'unknownDoaReleaseHalfWidth', []), [], 1);
+if isempty(releaseHalfWidth)
+  if strcmp(model.doaType, 'latlon')
+    releaseHalfWidth = [0.03; 0.03];
   else
-    defaultHalfWidth = 0.03;
+    releaseHalfWidth = deg2rad([0.03; 0.03]);
   end
-  releaseHalfWidth = repmat(defaultHalfWidth, 2, 1);
 end
-if numel(releaseHalfWidth) == 1
-  releaseHalfWidth = repmat(releaseHalfWidth, 2, 1);
+if isscalar(releaseHalfWidth)
+  releaseHalfWidth = repmat(releaseHalfWidth, numel(doaLb), 1);
 end
-releaseHalfWidth = reshape(releaseHalfWidth, [], 1);
-if numel(releaseHalfWidth) ~= 2 || any(~isfinite(releaseHalfWidth)) || any(releaseHalfWidth < 0)
-  releaseHalfWidth = [];
+numDoa = min([numel(releaseHalfWidth), numel(doaLb), numel(doaUb)]);
+releaseHalfWidth = releaseHalfWidth(1:numDoa);
 end
+
+
+function outputUse = localMergeOptimOutput(outputA, outputB)
+%LOCALMERGEOPTIMOUTPUT Merge one warm-start stage into the final solver stats.
+
+outputUse = outputB;
+if ~isstruct(outputUse)
+  outputUse = struct();
+end
+for fieldName = ["iterations", "funcCount"]
+  fieldChar = char(fieldName);
+  valueA = localGetOutputScalar(outputA, fieldChar, 0);
+  valueB = localGetOutputScalar(outputUse, fieldChar, 0);
+  outputUse.(fieldChar) = valueA + valueB;
+end
+for fieldName = ["constrviolation", "stepsize", "firstorderopt"]
+  fieldChar = char(fieldName);
+  valueB = localGetOutputScalar(outputUse, fieldChar, NaN);
+  if ~isfinite(valueB)
+    outputUse.(fieldChar) = localGetOutputScalar(outputA, fieldChar, NaN);
+  end
+end
+if ~isfield(outputUse, 'algorithm') || isempty(outputUse.algorithm)
+  outputUse.algorithm = localGetOutputString(outputA, 'algorithm', '');
+end
+if ~isfield(outputUse, 'message') || isempty(outputUse.message)
+  outputUse.message = localGetOutputString(outputA, 'message', '');
+end
+outputUse.usedScaledSolve = localGetOutputLogical(outputUse, 'usedScaledSolve', false) || ...
+  localGetOutputLogical(outputA, 'usedScaledSolve', false);
+outputUse.fallbackTriggered = localGetOutputLogical(outputUse, 'fallbackTriggered', false) || ...
+  localGetOutputLogical(outputA, 'fallbackTriggered', false);
+if ~isfield(outputUse, 'usedFallbackAlgorithm') || isempty(outputUse.usedFallbackAlgorithm)
+  outputUse.usedFallbackAlgorithm = localGetOutputString(outputA, 'usedFallbackAlgorithm', '');
+end
+end
+
+
+function value = localGetOutputScalar(outputStruct, fieldName, defaultValue)
+%LOCALGETOUTPUTSCALAR Read one optimization-output scalar.
+
+value = defaultValue;
+if ~isstruct(outputStruct) || ~isfield(outputStruct, fieldName)
+  return;
+end
+rawValue = outputStruct.(fieldName);
+if isempty(rawValue) || ~isscalar(rawValue) || ~isfinite(rawValue)
+  return;
+end
+value = rawValue;
+end
+
+
+function value = localGetOutputString(outputStruct, fieldName, defaultValue)
+%LOCALGETOUTPUTSTRING Read one optimization-output string.
+
+value = defaultValue;
+if ~isstruct(outputStruct) || ~isfield(outputStruct, fieldName)
+  return;
+end
+rawValue = outputStruct.(fieldName);
+if isempty(rawValue)
+  return;
+end
+value = rawValue;
+end
+
+
+function value = localGetOutputLogical(outputStruct, fieldName, defaultValue)
+%LOCALGETOUTPUTLOGICAL Read one optimization-output logical flag.
+
+value = defaultValue;
+if ~isstruct(outputStruct) || ~isfield(outputStruct, fieldName)
+  return;
+end
+rawValue = outputStruct.(fieldName);
+if isempty(rawValue) || ~isscalar(rawValue)
+  return;
+end
+value = logical(rawValue);
 end
 
 
 function fieldValue = localGetStructField(dataStruct, fieldName, defaultValue)
-%LOCALGETSTRUCTFIELD Read one struct/object field with a default value.
+%LOCALGETSTRUCTFIELD Read one struct field with default fallback.
 
 fieldValue = defaultValue;
 if isstruct(dataStruct) && isfield(dataStruct, fieldName)
-  fieldValue = dataStruct.(fieldName);
+  rawValue = dataStruct.(fieldName);
+  if ~isempty(rawValue)
+    fieldValue = rawValue;
+  end
+end
+end
+
+
+function value = localGetModelLogical(model, fieldName, defaultValue)
+%LOCALGETMODELLOGICAL Read one logical model flag with default fallback.
+
+value = defaultValue;
+if ~isstruct(model) || ~isfield(model, fieldName) || isempty(model.(fieldName))
   return;
 end
-if isobject(dataStruct) && isprop(dataStruct, fieldName)
-  fieldValue = dataStruct.(fieldName);
+value = logical(model.(fieldName));
+end
+
+
+function verbose = localResolveVerbose(model)
+%LOCALRESOLVEVERBOSE Resolve one helper-local verbose flag.
+
+verbose = false;
+if isstruct(model) && isfield(model, 'verbose') && ~isempty(model.verbose)
+  verbose = logical(model.verbose);
+end
+verbose = verbose || localResolveInheritedVerbose();
+end
+
+
+function localPrintSolveSummary(tag, solveInfo)
+%LOCALPRINTSOLVESUMMARY Print one compact solve summary for warm-anchor tracing.
+
+if isempty(solveInfo) || ~isstruct(solveInfo)
+  fprintf('  %-12s : <empty>\n', tag);
+  return;
+end
+fprintf(['  %-12s : variant=%s resolved=%d exit=%d fval=%.6e ', ...
+         'resid=%.6e fit=%.6e support=%.6e iter=%d\n'], ...
+  tag, ...
+  string(localGetStructField(solveInfo, 'solveVariant', "")), ...
+  localGetStructField(solveInfo, 'isResolved', false), ...
+  localGetStructField(solveInfo, 'exitflag', NaN), ...
+  localGetStructField(solveInfo, 'fval', NaN), ...
+  localGetEvalDiagField(localGetStructField(solveInfo, 'finalEvalDiag', struct()), 'residualNorm', NaN), ...
+  localGetEvalDiagField(localGetStructField(solveInfo, 'finalEvalDiag', struct()), 'nonRefFitRatioFloor', NaN), ...
+  localGetEvalDiagField(localGetStructField(solveInfo, 'finalEvalDiag', struct()), 'nonRefSupportRatioFloor', NaN), ...
+  localGetOutputScalar(localGetStructField(solveInfo, 'output', struct()), 'iterations', -1));
+end
+
+function verbose = localResolveInheritedVerbose()
+%LOCALRESOLVEINHERITEDVERBOSE Inherit one repo-level verbose flag.
+
+verbose = false;
+try
+  if isappdata(0, 'doaToolsVerbose')
+    verbose = logical(getappdata(0, 'doaToolsVerbose'));
+  end
+catch
+  verbose = false;
+end
+
+if verbose
+  return;
+end
+
+try
+  hasVerbose = evalin('base', "exist(''doaToolsVerbose'', ''var'')");
+  if isequal(hasVerbose, 1)
+    verbose = logical(evalin('base', 'doaToolsVerbose'));
+  end
+catch
+  verbose = false;
 end
 end
+

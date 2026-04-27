@@ -37,6 +37,12 @@ arguments (Input)
   modelOpt (1,1) struct = struct()
 end
 
+if isfield(modelOpt, 'verbose') && ~isempty(modelOpt.verbose)
+  verbose = verbose || logical(modelOpt.verbose);
+end
+verbose = verbose || localResolveInheritedVerbose();
+modelOpt.verbose = verbose;
+
 [model, ~, ~, modelOpt] = buildDoaDopplerMfModel(sceneSeq, rxSig, pilotWave, ...
   carrierFreq, sampleRate, doaGrid, fdRange, fdRateRange, modelOpt);
 [initParam, initDiag, model] = buildDoaDopplerMfInit(model, initParam);
@@ -79,6 +85,12 @@ estResult.optVarEst = solveUse.optVar(:);
 estResult.fval = solveUse.fval;
 estResult.exitflag = solveUse.exitflag;
 estResult.isResolved = logical(localGetStructField(solveUse, 'isResolved', false));
+% Expose the final branch identity directly on estResult so downstream
+% flow-level summary / regression code does not need to re-open optimInfo
+% just to learn which CP-U branch won the final selection.
+estResult.solveVariant = string(localGetStructField(optimInfo, 'solveVariant', ""));
+estResult.candidateVariant = localGetStructField(optimInfo, 'candidateVariant', strings(0, 1));
+estResult.candidateObjective = localGetStructField(optimInfo, 'candidateObjective', []);
 estResult.optimInfo = optimInfo;
 estResult.aux = localBuildAux(model, estAux, solveUse.pathGain, solveUse.noiseVar, ...
   initDiag, initEvalDiag, solveUse.finalEvalDiag, solveUse.debugTrace, debugAux);
@@ -154,6 +166,21 @@ aux.residualNorm = estAux.residualNorm;
 aux.residualSatEst = localGetStructField(estAux, 'residualSat', []);
 aux.fitValueSatEst = localGetStructField(estAux, 'fitValueSat', []);
 aux.objectiveSatEst = localGetStructField(estAux, 'objectiveSat', []);
+aux.effectiveFrameSupportSat = localGetStructField(estAux, 'effectiveFrameSupportSat', []);
+aux.effectiveFrameSupportRatioSat = localGetStructField(estAux, 'effectiveFrameSupportRatioSat', []);
+aux.negativeProjectionRatioSat = localGetStructField(estAux, 'negativeProjectionRatioSat', []);
+aux.collapsedFrameCountSat = localGetStructField(estAux, 'collapsedFrameCountSat', []);
+aux.satFitRatio = localGetStructField(estAux, 'satFitRatio', []);
+aux.refFitRatio = localGetStructField(estAux, 'refFitRatio', NaN);
+aux.nonRefFitRatioFloor = localGetStructField(estAux, 'nonRefFitRatioFloor', NaN);
+aux.refSupportRatio = localGetStructField(estAux, 'refSupportRatio', NaN);
+aux.nonRefSupportRatioFloor = localGetStructField(estAux, 'nonRefSupportRatioFloor', NaN);
+aux.refConsistencyNorm = localGetStructField(estAux, 'refConsistencyNorm', NaN);
+aux.nonRefConsistencyRatioFloor = localGetStructField(estAux, 'nonRefConsistencyRatioFloor', NaN);
+aux.maxNonRefNegativeProjectionRatio = localGetStructField(estAux, 'maxNonRefNegativeProjectionRatio', NaN);
+aux.nonRefFitFloorPenalty = localGetStructField(estAux, 'nonRefFitFloorPenalty', 0);
+aux.nonRefSupportFloorPenalty = localGetStructField(estAux, 'nonRefSupportFloorPenalty', 0);
+aux.additionalObjectivePenalty = localGetStructField(estAux, 'additionalObjectivePenalty', 0);
 aux.noiseVarGlobal = estAux.noiseVarGlobal;
 aux.countPerSat = estAux.countPerSat;
 aux.pathGain = pathGain;
@@ -183,3 +210,30 @@ if isobject(dataStruct) && isprop(dataStruct, fieldName)
   fieldValue = dataStruct.(fieldName);
 end
 end
+
+function verbose = localResolveInheritedVerbose()
+%LOCALRESOLVEINHERITEDVERBOSE Inherit one repo-level verbose flag.
+
+verbose = false;
+try
+  if isappdata(0, 'doaToolsVerbose')
+    verbose = logical(getappdata(0, 'doaToolsVerbose'));
+  end
+catch
+  verbose = false;
+end
+
+if verbose
+  return;
+end
+
+try
+  hasVerbose = evalin('base', "exist(''doaToolsVerbose'', ''var'')");
+  if isequal(hasVerbose, 1)
+    verbose = logical(evalin('base', 'doaToolsVerbose'));
+  end
+catch
+  verbose = false;
+end
+end
+

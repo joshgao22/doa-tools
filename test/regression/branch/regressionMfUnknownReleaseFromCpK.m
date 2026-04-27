@@ -1,14 +1,15 @@
+function regressionMfUnknownReleaseFromCpK(varargin)
 % Regression check for CP-U release from one CP-K seed.
-% This script focuses on one narrow contract only:
+% This regression focuses on one narrow contract only:
 %   1) a CP-K seed with a deliberately biased fixed fdRate must remain a
 %      valid warm start for CP-U;
 %   2) after release, CP-U must actually move away from that fixed-rate
 %      seed instead of copying it unchanged;
 %   3) the released CP-U solution must improve the biased CP-K objective and
 %      move fdRate closer to truth.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
 fprintf('Running regressionMfUnknownReleaseFromCpK ...\n');
@@ -22,6 +23,7 @@ commonOpt.initDoaParam = fixture.truth.latlonTrueDeg(:) + [0.05; -0.04];
 commonOpt.initDoaHalfWidth = [0.10; 0.10];
 commonOpt.optimOpt = struct('MaxIterations', 80, 'StepTolerance', 1e-10, ...
   'OptimalityTolerance', 1e-10);
+commonOpt.verbose = verbose;
 
 fdRateBiasHzPerSec = 150;
 fdRateSeed = min(max(fixture.truth.fdRateFit + fdRateBiasHzPerSec, ...
@@ -35,7 +37,7 @@ optKnown.fdRateKnown = fdRateSeed;
   fixture.carrierFreq, fixture.sampleRate, fixture.viewMs.doaGrid, ...
   fixture.fdRange, fixture.fdRateRange, optKnown);
 [initParamKnown, ~] = buildDoaDopplerMfInit(modelKnown, []);
-[solveKnown, optimInfoKnown, initEvalDiagKnown] = solveDoaDopplerMfBranches(modelKnown, initParamKnown, false);
+[solveKnown, optimInfoKnown, initEvalDiagKnown] = solveDoaDopplerMfBranches(modelKnown, initParamKnown, verbose);
 
 optUnknown = commonOpt;
 optUnknown.fdRateMode = 'unknown';
@@ -44,7 +46,7 @@ optUnknown.fdRateMode = 'unknown';
   fixture.carrierFreq, fixture.sampleRate, fixture.viewMs.doaGrid, ...
   fixture.fdRange, fixture.fdRateRange, optUnknown);
 initParamRelease = [solveKnown.optVar(:); fdRateSeed];
-[solveUnknown, optimInfoUnknown] = solveDoaDopplerMfBranches(modelUnknown, initParamRelease, false);
+[solveUnknown, optimInfoUnknown] = solveDoaDopplerMfBranches(modelUnknown, initParamRelease, verbose);
 
 objTol = max(1e-8, 1e-8 * max(abs([solveKnown.fval, solveUnknown.fval, initEvalDiagKnown.obj])));
 moveNorm = norm(solveUnknown.optVar(:) - initParamRelease(:));
@@ -90,6 +92,7 @@ fprintf('  angle err (deg)             : %.6f\n', angleErrDeg);
 fprintf('  fdRef err (Hz)              : %.6f\n', fdRefErrHz);
 fprintf('PASS: regressionMfUnknownReleaseFromCpK\n');
 
+end
 
 function fixture = localBuildRegressionFixture()
 %LOCALBUILDREGRESSIONFIXTURE Build one noiseless dynamic multi-sat case.
@@ -186,13 +189,4 @@ spanTruth = max(maxTruth - minTruth, eps);
 pad = max(absPad, fracPad * spanTruth);
 value = [min(defaultRange(1), minTruth - pad), ...
          max(defaultRange(2), maxTruth + pad)];
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

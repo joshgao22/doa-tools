@@ -1,3 +1,4 @@
+function regressionMfUnknownNoisyWrongToothGuard(varargin)
 % Regression check for one noisy MF CP-U guard against wrong-tooth collapse.
 % This guard should follow the same fast subset-recovery flow used by the
 % dynamic dev/perf scripts: curated primary subsets first, then one fixed
@@ -5,14 +6,16 @@
 % periodic full-data window. The goal is to keep the noisy wrong-tooth case
 % pinned to the correct tooth neighborhood without relying on true-random
 % fallback schedules.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
 fprintf('Running regressionMfUnknownNoisyWrongToothGuard ...%s', newline);
+  fprintf('  verbose trace enabled for noisy wrong-tooth guard regression.%s', newline);
 
 flowOpt = fixture.flowOpt;
+flowOpt.verbose = verbose;
 bundle = buildDoaDopplerDynamicTransitionBundle( ...
   fixture.periodicFixture, fixture.subsetFixtureCell, fixture.pilotWave, ...
   fixture.carrierFreq, fixture.sampleRate, false, flowOpt);
@@ -72,6 +75,7 @@ fprintf('  CP-U fdRate err (Hz/s)   : %.6f%s', fdRateErrUnknownHzPerSec, newline
 fprintf('  CP-U solveVariant        : %s%s', solveVariantUnknown, newline);
 fprintf('PASS: regressionMfUnknownNoisyWrongToothGuard%s', newline);
 
+end
 
 function fixture = localBuildRegressionFixture()
 %LOCALBUILDREGRESSIONFIXTURE Build one noisy fast-flow dynamic case.
@@ -248,13 +252,4 @@ if isstruct(dataStruct) && isfield(dataStruct, fieldName)
     value = rawValue;
   end
 end
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

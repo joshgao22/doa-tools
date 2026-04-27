@@ -1,3 +1,4 @@
+function regressionSfStaticFixedDoaFdRefSolve(varargin)
 % Regression check for SF static fixed-DoA fdRef solves.
 % This script focuses on one diagnostic contract only:
 %   1) when DoA is fixed to a trusted anchor, the multi-sat static 1-D fdRef
@@ -5,12 +6,12 @@
 %   2) if this fixed-DoA solve stays healthy while the free multi-sat static
 %      solve is worse, the remaining issue is in the joint DoA-fdRef coupling
 %      rather than in the static reference-Doppler chain itself.
-clear(); close all;
-
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+localPrint = @(varargin) fprintf(varargin{:});
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionSfStaticFixedDoaFdRefSolve ...\n');
+localPrint('Running regressionSfStaticFixedDoaFdRefSolve ...\n');
 
 caseBundle = fixture.caseBundle;
 freeSsCase = caseBundle.caseStaticRefOnly;
@@ -43,16 +44,18 @@ end
 freeMsAngleErrDeg = calcLatlonAngleError(freeMsCase.estResult.doaParamEst(:), fixture.truth.latlonTrueDeg(:));
 freeSsAngleErrDeg = calcLatlonAngleError(freeSsCase.estResult.doaParamEst(:), fixture.truth.latlonTrueDeg(:));
 
-fprintf('  free SS angle err (deg)        : %.6g\n', freeSsAngleErrDeg);
-fprintf('  free MS angle err (deg)        : %.6g\n', freeMsAngleErrDeg);
-fprintf('  free SS fdRef err (Hz)         : %.6f\n', freeSsCase.estResult.fdRefEst - fixture.truth.fdRefTrueHz);
-fprintf('  free MS fdRef err (Hz)         : %.6f\n', freeMsCase.estResult.fdRefEst - fixture.truth.fdRefTrueHz);
-fprintf('  fixed truth DoA fdRef err SS   : %.6f\n', solveSsTruth.fdRefErrHz);
-fprintf('  fixed truth DoA fdRef err MS   : %.6f\n', solveMsTruth.fdRefErrHz);
-fprintf('  fixed MS-SF-DoA fdRef err SS   : %.6f\n', solveSsMsDoa.fdRefErrHz);
-fprintf('  fixed MS-SF-DoA fdRef err MS   : %.6f\n', solveMsMsDoa.fdRefErrHz);
-fprintf('PASS: regressionSfStaticFixedDoaFdRefSolve\n');
+localPrint('  free SS angle err (deg)        : %.6g\n', freeSsAngleErrDeg);
+localPrint('  free MS angle err (deg)        : %.6g\n', freeMsAngleErrDeg);
+localPrint('  free SS fdRef err (Hz)         : %.6f\n', freeSsCase.estResult.fdRefEst - fixture.truth.fdRefTrueHz);
+localPrint('  free MS fdRef err (Hz)         : %.6f\n', freeMsCase.estResult.fdRefEst - fixture.truth.fdRefTrueHz);
+localPrint('  fixed truth DoA fdRef err SS   : %.6f\n', solveSsTruth.fdRefErrHz);
+localPrint('  fixed truth DoA fdRef err MS   : %.6f\n', solveMsTruth.fdRefErrHz);
+localPrint('  fixed MS-SF-DoA fdRef err SS   : %.6f\n', solveSsMsDoa.fdRefErrHz);
+localPrint('  fixed MS-SF-DoA fdRef err MS   : %.6f\n', solveMsMsDoa.fdRefErrHz);
+localPrint('PASS: regressionSfStaticFixedDoaFdRefSolve\n');
 
+
+end
 
 function solveInfo = localSolveFixedDoaFdRef(view, fixture, doaAnchor, satWeight)
 %LOCALSOLVEFIXEDDOAFDREF Solve one 1-D static fdRef fit with DoA fixed.
@@ -82,13 +85,4 @@ function obj = localEvalFixedDoaObjective(model, doaAnchor, fdRef)
 %LOCALEVALFIXEDDOAOBJECTIVE Evaluate one fixed-DoA static objective slice.
 
 obj = evalDoaDopplerSfProfileLike(model, [doaAnchor(:); fdRef]);
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

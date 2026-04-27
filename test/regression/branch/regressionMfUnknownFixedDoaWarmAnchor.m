@@ -1,5 +1,6 @@
+function regressionMfUnknownFixedDoaWarmAnchor(varargin)
 % Regression check for the fixed-DoA CP-U warm-anchor branch.
-% This script checks one narrow contract only:
+% This regression checks one narrow contract only:
 %   1) when the caller marks one CP-U solve as freezeDoa, the solver must
 %      represent that intent with an exact DoA constraint rather than a
 %      nearly collapsed DoA box;
@@ -8,12 +9,13 @@
 %   3) the final DoA must stay exactly on the trusted warm anchor;
 %   4) the frozen-DoA solve must keep a valid resolved fit. This regression
 %      guards solver-path semantics rather than truth-monotonic improvement.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
 fprintf('Running regressionMfUnknownFixedDoaWarmAnchor ...\n');
+  fprintf('  verbose trace enabled for fixed-DoA warm-anchor regression.\n');
 
 commonOpt = struct();
 commonOpt.useLogObjective = false;
@@ -24,6 +26,7 @@ commonOpt.initDoaParam = fixture.truth.latlonTrueDeg(:) + [0.05; -0.04];
 commonOpt.initDoaHalfWidth = [0.10; 0.10];
 commonOpt.optimOpt = struct('MaxIterations', 80, 'StepTolerance', 1e-10, ...
   'OptimalityTolerance', 1e-10);
+commonOpt.verbose = verbose;
 
 fdRateBiasHzPerSec = 150;
 fdRateSeed = min(max(fixture.truth.fdRateFit + fdRateBiasHzPerSec, ...
@@ -37,7 +40,7 @@ optKnown.fdRateKnown = fdRateSeed;
   fixture.carrierFreq, fixture.sampleRate, fixture.viewMs.doaGrid, ...
   fixture.fdRange, fixture.fdRateRange, optKnown);
 [initParamKnown, ~] = buildDoaDopplerMfInit(modelKnown, []);
-[solveKnown, ~] = solveDoaDopplerMfBranches(modelKnown, initParamKnown, false);
+[solveKnown, ~] = solveDoaDopplerMfBranches(modelKnown, initParamKnown, verbose);
 
 doAAnchor = solveKnown.optVar(1:2);
 optUnknown = commonOpt;
@@ -50,7 +53,7 @@ optUnknown.freezeDoa = true;
   fixture.carrierFreq, fixture.sampleRate, fixture.viewMs.doaGrid, ...
   fixture.fdRange, fixture.fdRateRange, optUnknown);
 initParamRelease = [doAAnchor(:); solveKnown.optVar(3); fdRateSeed];
-[solveUnknown, optimInfoUnknown] = solveDoaDopplerMfBranches(modelUnknown, initParamRelease, false);
+[solveUnknown, optimInfoUnknown] = solveDoaDopplerMfBranches(modelUnknown, initParamRelease, verbose);
 
 objTol = max(1e-8, 1e-8 * max(abs([solveKnown.fval, solveUnknown.fval])));
 doaMove = norm(solveUnknown.optVar(1:2) - doAAnchor(:));
@@ -90,6 +93,7 @@ fprintf('  seed gap to truth (Hz/s)    : %.6f\n', seedTruthGap);
 fprintf('  final gap to truth (Hz/s)   : %.6f\n', finalTruthGap);
 fprintf('PASS: regressionMfUnknownFixedDoaWarmAnchor\n');
 
+end
 
 function fixture = localBuildRegressionFixture()
 %LOCALBUILDREGRESSIONFIXTURE Build one noiseless dynamic multi-sat case.
@@ -186,15 +190,6 @@ spanTruth = max(maxTruth - minTruth, eps);
 pad = max(absPad, fracPad * spanTruth);
 value = [min(defaultRange(1), minTruth - pad), ...
          max(defaultRange(2), maxTruth + pad)];
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end
 
 

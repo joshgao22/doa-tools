@@ -1,3 +1,4 @@
+function regressionSfStaticTruthReplayMultiSat(varargin)
 % Regression check for SF static multi-satellite truth replay.
 % This script focuses on one narrow contract only:
 %   1) the multi-sat static truth point must replay both satellites with a
@@ -5,12 +6,13 @@
 %   2) the static reference-Doppler semantics must satisfy
 %         fdSat = fdRef + deltaFd
 %      at the truth point.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionSfStaticTruthReplayMultiSat ...\n');
+  fprintf('Running regressionSfStaticTruthReplayMultiSat ...\n');
 
 truthOptVar = [fixture.truth.latlonTrueDeg(:); fixture.truth.fdRefTrueHz];
 baseOpt = struct();
@@ -77,18 +79,11 @@ if abs(auxAll.deltaFd(fixture.truth.refSatIdxLocal)) > 1e-9
     'The reference satellite must satisfy deltaFdRef(refSat)=0 at the truth point.');
 end
 
-fprintf('  total truth objective    : %.6f\n', objAll);
-fprintf('  per-sat objective slices : [%.6f, %.6f]\n', auxAll.objectiveSat(1), auxAll.objectiveSat(2));
-fprintf('  additivity error         : %.6g\n', objAddErr);
-fprintf('  fd composition error (Hz): %.6g\n', fdComposeErr);
-fprintf('  fd truth error max (Hz)  : %.6g\n', fdTruthErr);
-fprintf('PASS: regressionSfStaticTruthReplayMultiSat\n');
+  fprintf('  total truth objective    : %.6f\n', objAll);
+  fprintf('  per-sat objective slices : [%.6f, %.6f]\n', auxAll.objectiveSat(1), auxAll.objectiveSat(2));
+  fprintf('  additivity error         : %.6g\n', objAddErr);
+  fprintf('  fd composition error (Hz): %.6g\n', fdComposeErr);
+  fprintf('  fd truth error max (Hz)  : %.6g\n', fdTruthErr);
+  fprintf('PASS: regressionSfStaticTruthReplayMultiSat\n');
 
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

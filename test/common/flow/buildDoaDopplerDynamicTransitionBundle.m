@@ -16,7 +16,7 @@ arguments
   flowOpt (1, 1) struct = struct()
 end
 
-flowOpt = localApplyDynamicFlowDefaults(flowOpt);
+flowOpt = applyDynamicTransitionFlowDefaults(flowOpt);
 bundleTimer = tic;
 stageTiming = struct();
 truth = periodicFixture.truth;
@@ -46,17 +46,13 @@ initParamStaticRef = buildDynamicInitParamFromCase(caseStaticRefOnly, true, trut
 
 periodicFixture.debugTruthRef = buildTruthDebugForView(viewRefOnly, truth);
 periodicFixture.debugTruthMs = buildTruthDebugForView(viewMs, truth);
-stageTimer = tic;
-caseDynRefKnown = localRunRefKnownCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
-  optVerbose, flowOpt, initParamStaticRef);
-stageTiming.refKnownSec = toc(stageTimer);
-stageTimer = tic;
-caseDynRefUnknown = localRunRefUnknownCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
-  optVerbose, flowOpt, caseDynRefKnown, caseStaticRefOnly);
-stageTiming.refUnknownSec = toc(stageTimer);
+[caseDynRefKnown, caseDynRefUnknown, refRunMeta] = runDynamicReferenceTransitionCases(periodicFixture, ...
+  pilotWave, carrierFreq, sampleRate, optVerbose, flowOpt, initParamStaticRef, caseStaticRefOnly);
+stageTiming.refKnownSec = refRunMeta.refKnownSec;
+stageTiming.refUnknownSec = refRunMeta.refUnknownSec;
 
 stageTimer = tic;
-caseDynMsKnown = localRunMsKnownCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
+caseDynMsKnown = runDynamicMsKnownTransitionCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
   optVerbose, flowOpt, bestStaticMsCase);
 stageTiming.msKnownSec = toc(stageTimer);
 knownSummaryForRecovery = localBuildUnknownCaseSummary(caseDynMsKnown, truth, ...
@@ -90,7 +86,7 @@ stageTimer = tic;
 [subsetCaseCell, subsetSummaryCell, subsetRunTimeSec] = evaluateDynamicSubsetBank( ...
   subsetFixtureCell, pilotWave, carrierFreq, sampleRate, optVerbose, flowOpt, ...
   periodicFixture.fdRange, periodicFixture.fdRateRange, subsetSeedInfo, truth, toothStepHz, ...
-  @localRunMsUnknownCaseFromFixture, @localBuildUnknownCaseSummary);
+  @runDynamicMsUnknownSubsetCase, @localBuildUnknownCaseSummary);
 
 [subsetFixtureCell, subsetCaseCell, subsetSummaryCell, subsetRunTimeSec, ...
   bestSubsetIdx, subsetIsTrusted, subsetSelectReason, selectedSubsetFixture, ...
@@ -100,7 +96,7 @@ stageTimer = tic;
   subsetRunTimeSec, pilotWave, carrierFreq, sampleRate, optVerbose, flowOpt, ...
   subsetSeedInfo, truth, toothStepHz, runWideBranches, caseDynMsUnknownFdWide, ...
   fdWideUnknownSummary, caseDynMsKnown, knownSummaryForRecovery, ...
-  @localRunMsUnknownCaseFromFixture, @localBuildUnknownCaseSummary);
+  @runDynamicMsUnknownSubsetCase, @localBuildUnknownCaseSummary);
 stageTiming.subsetSelectTotalSec = toc(stageTimer);
 stageTiming.subsetRankingSec = 0;
 
@@ -309,307 +305,6 @@ bundle.timingTable = tableBundle.timingTable;
 bundle.subsetTimingTable = tableBundle.subsetTimingTable;
 end
 
-function flowOpt = localApplyDynamicFlowDefaults(flowOpt)
-%LOCALAPPLYDYNAMICFLOWDEFAULTS Fill one dynamic-flow option struct.
-
-flowOpt = localMergeStruct(struct( ...
-  'enableWeightSweep', true, ...
-  'weightSweepAlpha', [0; 0.25; 0.5; 1], ...
-  'staticMsHalfWidth', [0.002; 0.002], ...
-  'doaOnlyOpt', struct('useLogObjective', true), ...
-  'staticBaseOpt', struct('useLogObjective', true), ...
-  'dynBaseOpt', struct( ...
-    'useLogObjective', true, ...
-    'initFdCount', 81, ...
-    'useAccessMask', false, ...
-    'phaseMode', 'continuous', ...
-    'steeringMode', 'framewise', ...
-    'debugEnable', true, ...
-    'debugStoreEvalTrace', false, ...
-    'debugMaxEvalTrace', 120), ...
-  'msContinuousPhaseConsistencyWeight', 0.2, ...
-  'msContinuousPhaseCollapsePenaltyWeight', 0.10, ...
-  'msContinuousPhaseNegativeProjectionPenaltyWeight', 0.10, ...
-  'msContinuousPhaseNonRefFitFloorWeight', 0.02, ...
-  'msContinuousPhaseNonRefSupportFloorWeight', 0.02, ...
-  'msFinalSelectPreferReleasedSameTooth', false, ...
-  'msFinalSelectSameToothObjectiveToleranceAbs', 50, ...
-  'msFinalSelectSameToothResidualToleranceAbs', 50, ...
-  'msFinalSelectSameToothObjectiveToleranceRel', 1e-6, ...
-  'msFinalSelectSameToothResidualToleranceRel', 1e-6, ...
-  'enableUnknownWideBranches', true, ...
-  'enableUnknownWideRefine', true, ...
-  'deferUnknownWideBranches', false, ...
-  'enableFastWideFallback', false, ...
-  'fastWideToothIdxThreshold', 0, ...
-  'fastWideToothResidualHzThreshold', 50, ...
-  'fastWideFdDriftHzThreshold', 500, ...
-  'fastWideDoaDriftDegThreshold', 0.003, ...
-  'parallelOpt', struct('enableSubsetEvalParfor', true, 'minSubsetEvalParfor', 4), ...
-  'enableSubsetInToothRefine', true, ...
-  'enableSubsetCaseSeedReuse', true, ...
-  'enableSubsetRandomEarlyStop', true, ...
-  'subsetRandomEarlyStopMinEvaluated', 4, ...
-  'subsetRandomEarlyStopMaxToothResidualHz', 20, ...
-  'subsetRandomEarlyStopMaxHealthBucket', 0, ...
-  'enableFastSubsetEscalation', false, ...
-  'fastNumRandomSubsetTrialFallback', 0, ...
-  'fastRandomSeedOffset', 0, ...
-  'fastEscalateOnToothDisagreement', true, ...
-  'fastToothIdxThreshold', 0, ...
-  'fastToothResidualHzThreshold', 50, ...
-  'fastUnknownFdDriftHzThreshold', 500, ...
-  'fastUnknownDoaDriftDegThreshold', 0.003, ...
-  'enableConditionalRandomSubsetRescue', false, ...
-  'conditionalRandomSubsetTrialCount', 1, ...
-  'conditionalRandomToothResidualHzThreshold', 20, ...
-  'conditionalRandomMaxHealthBucket', 1, ...
-  'conditionalRandomMaxFdDriftHz', 250, ...
-  'conditionalRandomMaxDoaDriftDeg', 0.003, ...
-  'conditionalRandomRescueOnToothDisagreement', true, ...
-  'conditionalRandomMinResolvedOffToothCount', 2, ...
-  'subsetRandomRescuePromoteResidualHz', 20, ...
-  'refKnownDoaHalfWidth', [0.005; 0.005], ...
-  'refUnknownDoaHalfWidth', [0.003; 0.003], ...
-  'msKnownDoaHalfWidth', [0.003; 0.003], ...
-  'msUnknownDoaHalfWidth', [0.002; 0.002], ...
-  'subsetSelectDoaHalfWidthDeg', [0.01; 0.01], ...
-  'subsetAnchorFdHalfWidthHz', 50, ...
-  'subsetAnchorFdRateHalfWidthHzPerSec', 100, ...
-  'subsetAnchorDoaHalfWidthDeg', [1e-8; 1e-8], ...
-  'subsetAnchorFreezeDoa', true, ...
-  'enableAnchorDoaPolish', false, ...
-  'anchorDoaPolishDoaHalfWidthDeg', [0.005; 0.005], ...
-  'anchorDoaPolishFdHalfWidthHz', 20, ...
-  'anchorDoaPolishFdRateHalfWidthHzPerSec', 20, ...
-  'anchorDoaPolishCentralResidualTolHz', 50, ...
-  'anchorDoaPolishMinNonRefFitFloorToSkip', 0.9, ...
-  'anchorDoaPolishMinNonRefSupportFloorToSkip', 0.8, ...
-  'anchorDoaPolishDisableUnknownDoaReleaseFloor', true, ...
-  'inToothFreezeDoa', false, ...
-  'fdWideFreezeDoa', true, ...
-  'wideRefineFdHalfWidthHz', 100, ...
-  'wideRefineFdRateHalfWidthHzPerSec', 200, ...
-  'wideRefineDoaHalfWidthDeg', [0.003; 0.003], ...
-  'wideRefineDisableUnknownDoaReleaseFloor', true, ...
-  'inToothFdHalfWidthHz', 50, ...
-  'inToothFdRateHalfWidthHzPerSec', 100, ...
-  'inToothDoaHalfWidthDeg', [2e-4; 2e-4], ...
-  'inToothDisableUnknownDoaReleaseFloor', true, ...
-  'inToothOptimOpt', struct('MaxIterations', 120, 'MaxFunctionEvaluations', 1200), ...
-  'enableAdaptiveInToothDoaEscalation', false, ...
-  'inToothEscalateWhenRandomSelected', true, ...
-  'inToothEscalateMinAnchorDoaDriftFromKnownDeg', 0.006, ...
-  'inToothEscalateMaxAnchorHealthBucket', 0, ...
-  'inToothEscalateMaxSelectedResidualHz', 20, ...
-  'inToothEscalatedDoaHalfWidthDeg', [0.01; 0.01], ...
-  'inToothEscalatedOptimOpt', struct('MaxIterations', 180, 'MaxFunctionEvaluations', 1800), ...
-  'enableInToothCentralSkip', true, ...
-  'inToothCentralResidualTolHz', 5, ...
-  'enableInToothHealthyAnchorSkip', true, ...
-  'inToothSkipMinNonRefFitFloor', 0.95, ...
-  'inToothSkipMinNonRefSupportFloor', 0.999, ...
-  'inToothSkipMinNonRefConsistencyFloor', 0.999, ...
-  'inToothSkipMinNonRefCoherenceFloor', 0.999, ...
-  'inToothSkipMaxRmsPhaseResidRad', 0.003, ...
-  'inToothSkipMaxAbsPhaseResidRad', 0.005, ...
-  'inToothSkipMaxAnchorDoaDriftFromKnownDeg', 0.005, ...
-  'finalSelectMaxFdRefDriftHz', 100, ...
-  'finalSelectMaxFdRateDriftHzPerSec', 100, ...
-  'finalSelectMaxDoaDriftDeg', 0.01, ...
-  'finalSelectMinObjGainToLeaveAnchor', 1e4, ...
-  'finalSelectMinResidualGainToLeaveAnchor', 1e3), flowOpt);
-
-flowOpt.weightSweepAlpha = reshape(flowOpt.weightSweepAlpha, [], 1);
-if ~logical(flowOpt.enableWeightSweep)
-  flowOpt.weightSweepAlpha = zeros(0, 1);
-end
-flowOpt.staticMsHalfWidth = reshape(flowOpt.staticMsHalfWidth, [], 1);
-flowOpt.refKnownDoaHalfWidth = reshape(flowOpt.refKnownDoaHalfWidth, [], 1);
-flowOpt.refUnknownDoaHalfWidth = reshape(flowOpt.refUnknownDoaHalfWidth, [], 1);
-flowOpt.msKnownDoaHalfWidth = reshape(flowOpt.msKnownDoaHalfWidth, [], 1);
-flowOpt.msUnknownDoaHalfWidth = reshape(flowOpt.msUnknownDoaHalfWidth, [], 1);
-flowOpt.subsetSelectDoaHalfWidthDeg = reshape(flowOpt.subsetSelectDoaHalfWidthDeg, [], 1);
-flowOpt.subsetAnchorDoaHalfWidthDeg = reshape(flowOpt.subsetAnchorDoaHalfWidthDeg, [], 1);
-flowOpt.anchorDoaPolishDoaHalfWidthDeg = reshape(flowOpt.anchorDoaPolishDoaHalfWidthDeg, [], 1);
-flowOpt.wideRefineDoaHalfWidthDeg = reshape(flowOpt.wideRefineDoaHalfWidthDeg, [], 1);
-flowOpt.inToothDoaHalfWidthDeg = reshape(flowOpt.inToothDoaHalfWidthDeg, [], 1);
-flowOpt.inToothEscalatedDoaHalfWidthDeg = reshape(flowOpt.inToothEscalatedDoaHalfWidthDeg, [], 1);
-if ~isstruct(flowOpt.inToothOptimOpt)
-  error('buildDoaDopplerDynamicTransitionBundle:InvalidInToothOptimOpt', ...
-    'flowOpt.inToothOptimOpt must be a struct.');
-end
-if ~isstruct(flowOpt.inToothEscalatedOptimOpt)
-  error('buildDoaDopplerDynamicTransitionBundle:InvalidInToothEscalatedOptimOpt', ...
-    'flowOpt.inToothEscalatedOptimOpt must be a struct.');
-end
-end
-
-
-function caseDynRefKnown = localRunRefKnownCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
-  optVerbose, flowOpt, initParamStaticRef)
-%LOCALRUNREFKNOWNCASE Run one SS-MF-CP-K case.
-
-dynRefKnownOpt = flowOpt.dynBaseOpt;
-dynRefKnownOpt.steeringRefFrameIdx = periodicFixture.sceneSeq.refFrameIdx;
-dynRefKnownOpt.initDoaHalfWidth = flowOpt.refKnownDoaHalfWidth;
-dynRefKnownOpt.initDoaParam = reshape(initParamStaticRef(1:2), [], 1);
-
-caseDynRefKnown = runDynamicDoaDopplerCase("SS-MF-CP-K", "single", ...
-  periodicFixture.viewRefOnly, periodicFixture.truth, pilotWave, carrierFreq, sampleRate, ...
-  periodicFixture.fdRange, periodicFixture.fdRateRange, optVerbose, dynRefKnownOpt, true, ...
-  periodicFixture.debugTruthRef, initParamStaticRef);
-end
-
-
-function caseDynRefUnknown = localRunRefUnknownCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
-  optVerbose, flowOpt, caseDynRefKnown, caseStaticRefOnly)
-%LOCALRUNREFUNKNOWNCASE Run one SS-MF-CP-U case.
-
-dynRefUnknownOpt = flowOpt.dynBaseOpt;
-dynRefUnknownOpt.steeringRefFrameIdx = periodicFixture.sceneSeq.refFrameIdx;
-dynRefUnknownOpt.initDoaParam = caseStaticRefOnly.estResult.doaParamEst(:);
-dynRefUnknownOpt.initDoaHalfWidth = flowOpt.refUnknownDoaHalfWidth;
-
-initParamRefUnknownCpK = buildDynamicInitParamFromCase(caseDynRefKnown, false, caseDynRefKnown.estResult.fdRateEst);
-initParamRefUnknownStatic = buildDynamicInitParamFromCase(caseStaticRefOnly, false, periodicFixture.truth.fdRateFit);
-refUnknownCand = buildUnknownInitCandidateSet( ...
-  caseDynRefKnown, caseStaticRefOnly, initParamRefUnknownCpK, initParamRefUnknownStatic, ...
-  dynRefUnknownOpt.initDoaHalfWidth, flowOpt.refKnownDoaHalfWidth);
-caseDynRefUnknown = runDynamicDoaDopplerCase("SS-MF-CP-U", "single", ...
-  periodicFixture.viewRefOnly, periodicFixture.truth, pilotWave, carrierFreq, sampleRate, ...
-  periodicFixture.fdRange, periodicFixture.fdRateRange, optVerbose, dynRefUnknownOpt, false, ...
-  periodicFixture.debugTruthRef, refUnknownCand);
-end
-
-
-function caseDynMsKnown = localRunMsKnownCase(periodicFixture, pilotWave, carrierFreq, sampleRate, ...
-  optVerbose, flowOpt, bestStaticMsCase)
-%LOCALRUNMSKNOWNCASE Run one MS-MF-CP-K case.
-
-dynMsKnownOpt = flowOpt.dynBaseOpt;
-dynMsKnownOpt.steeringRefFrameIdx = periodicFixture.sceneSeq.refFrameIdx;
-dynMsKnownOpt.initDoaParam = bestStaticMsCase.estResult.doaParamEst(:);
-dynMsKnownOpt.initDoaHalfWidth = flowOpt.msKnownDoaHalfWidth;
-dynMsKnownOpt.enableFdAliasUnwrap = true;
-dynMsKnownOpt.continuousPhaseConsistencyWeight = flowOpt.msContinuousPhaseConsistencyWeight;
-dynMsKnownOpt.continuousPhaseCollapsePenaltyWeight = localGetFieldOrDefault(flowOpt, 'msContinuousPhaseCollapsePenaltyWeight', 0);
-dynMsKnownOpt.continuousPhaseNegativeProjectionPenaltyWeight = localGetFieldOrDefault(flowOpt, 'msContinuousPhaseNegativeProjectionPenaltyWeight', 0);
-dynMsKnownOpt.continuousPhaseNonRefFitFloorWeight = localGetFieldOrDefault(flowOpt, 'msContinuousPhaseNonRefFitFloorWeight', 0);
-dynMsKnownOpt.continuousPhaseNonRefSupportFloorWeight = localGetFieldOrDefault(flowOpt, 'msContinuousPhaseNonRefSupportFloorWeight', 0);
-dynMsKnownOpt.unknownWarmAnchorUseScaledSolve = localGetFieldOrDefault(flowOpt, 'unknownWarmAnchorUseScaledSolve', true);
-dynMsKnownOpt.unknownWarmAnchorFallbackSqp = localGetFieldOrDefault(flowOpt, 'unknownWarmAnchorFallbackSqp', true);
-
-caseDynMsKnown = runDynamicDoaDopplerCase("MS-MF-CP-K", "multi", ...
-  periodicFixture.viewMs, periodicFixture.truth, pilotWave, carrierFreq, sampleRate, ...
-  periodicFixture.fdRange, periodicFixture.fdRateRange, optVerbose, dynMsKnownOpt, true, ...
-  periodicFixture.debugTruthMs, buildDynamicInitParamFromCase(bestStaticMsCase, true, periodicFixture.truth.fdRateFit));
-end
-
-function caseDynMsUnknown = localRunMsUnknownCaseFromFixture(fixture, pilotWave, carrierFreq, sampleRate, ...
-  optVerbose, flowOpt, fdRangeUse, fdRateRangeUse, subsetSeedInfo)
-%LOCALRUNMSUNKNOWNCASEFROMFIXTURE Run one MS-MF-CP-U case on one frame subset.
-
-if nargin < 9
-  subsetSeedInfo = struct();
-end
-reusePeriodicSeed = logical(localGetFieldOrDefault(subsetSeedInfo, 'reusePeriodicSeeds', false));
-if reusePeriodicSeed
-  bestStaticMsCase = localGetFieldOrDefault(subsetSeedInfo, 'bestStaticMsCase', struct());
-  knownSeedCase = localGetFieldOrDefault(subsetSeedInfo, 'knownSeedCase', struct());
-  staticInitDoaHalfWidth = localGetFieldOrDefault(subsetSeedInfo, 'staticInitDoaHalfWidth', [0.01; 0.01]);
-else
-  caseBundle = buildDoaDopplerStaticTransitionBundle( ...
-    fixture.viewRefOnly, fixture.viewOtherOnly, fixture.viewMs, fixture.wavelen, ...
-    pilotWave, carrierFreq, sampleRate, fdRangeUse, fixture.truth, ...
-    fixture.otherSatIdxGlobal, optVerbose, flowOpt.doaOnlyOpt, ...
-    flowOpt.staticBaseOpt, flowOpt.weightSweepAlpha(:), flowOpt.staticMsHalfWidth(:));
-  bestStaticMsCase = caseBundle.bestStaticMsCase;
-  knownSeedCase = struct();
-  staticInitDoaHalfWidth = localGetFieldOrDefault(caseBundle.staticMsOpt, 'initDoaHalfWidth', [0.01; 0.01]);
-end
-
-dynMsUnknownOpt = flowOpt.dynBaseOpt;
-dynMsUnknownOpt.steeringRefFrameIdx = fixture.sceneSeq.refFrameIdx;
-dynMsUnknownOpt.initDoaParam = bestStaticMsCase.estResult.doaParamEst(:);
-dynMsUnknownOpt.initDoaHalfWidth = flowOpt.subsetSelectDoaHalfWidthDeg;
-dynMsUnknownOpt.enableFdAliasUnwrap = true;
-dynMsUnknownOpt.continuousPhaseConsistencyWeight = flowOpt.msContinuousPhaseConsistencyWeight;
-dynMsUnknownOpt.continuousPhaseCollapsePenaltyWeight = localGetFieldOrDefault(flowOpt, 'msContinuousPhaseCollapsePenaltyWeight', 0);
-dynMsUnknownOpt.continuousPhaseNegativeProjectionPenaltyWeight = localGetFieldOrDefault(flowOpt, 'msContinuousPhaseNegativeProjectionPenaltyWeight', 0);
-dynMsUnknownOpt.continuousPhaseNonRefFitFloorWeight = localGetFieldOrDefault(flowOpt, 'msContinuousPhaseNonRefFitFloorWeight', 0);
-dynMsUnknownOpt.continuousPhaseNonRefSupportFloorWeight = localGetFieldOrDefault(flowOpt, 'msContinuousPhaseNonRefSupportFloorWeight', 0);
-dynMsUnknownOpt.unknownWarmAnchorUseScaledSolve = localGetFieldOrDefault(flowOpt, 'unknownWarmAnchorUseScaledSolve', true);
-dynMsUnknownOpt.unknownWarmAnchorFallbackSqp = localGetFieldOrDefault(flowOpt, 'unknownWarmAnchorFallbackSqp', true);
-
-initParamMsUnknownStatic = buildDynamicInitParamFromCase(bestStaticMsCase, false, fixture.truth.fdRateFit);
-initSeed = initParamMsUnknownStatic;
-if reusePeriodicSeed && localCaseHasUsableEstimate(knownSeedCase)
-  fdRateSeedKnown = localGetCaseFdRateEst(knownSeedCase, fixture.truth.fdRateFit);
-  initParamMsUnknownCpK = buildDynamicInitParamFromCase(knownSeedCase, false, fdRateSeedKnown);
-  initSeed = buildUnknownInitCandidateSet( ...
-    knownSeedCase, bestStaticMsCase, initParamMsUnknownCpK, initParamMsUnknownStatic, ...
-    dynMsUnknownOpt.initDoaHalfWidth, staticInitDoaHalfWidth);
-end
-caseDynMsUnknown = runDynamicDoaDopplerCase("MS-MF-CP-U", "multi", ...
-  fixture.viewMs, fixture.truth, pilotWave, carrierFreq, sampleRate, ...
-  fdRangeUse, fdRateRangeUse, optVerbose, dynMsUnknownOpt, false, fixture.debugTruthMs, initSeed);
-end
-
-
-
-function bucket = localBuildSubsetHealthBucket(summary)
-%LOCALBUILDSUBSETHEALTHBUCKET Count coarse non-reference quality failures.
-
-bucket = 0;
-bucket = bucket + double(localGetFieldOrDefault(summary, 'nonRefSupportRatioFloor', 1) < 0.995);
-bucket = bucket + double(localGetFieldOrDefault(summary, 'nonRefFitRatioFloor', 1) < 0.95);
-bucket = bucket + double(localGetFieldOrDefault(summary, 'nonRefConsistencyRatioFloor', 1) < 0.995);
-bucket = bucket + double(localGetFieldOrDefault(summary, 'nonRefCoherenceFloor', 1) < 0.995);
-rmsPhaseResid = localGetFieldOrDefault(summary, 'nonRefRmsPhaseResidRad', NaN);
-if isfinite(rmsPhaseResid)
-  bucket = bucket + double(rmsPhaseResid > 0.003);
-end
-maxPhaseResid = localGetFieldOrDefault(summary, 'nonRefMaxAbsPhaseResidRad', NaN);
-if isfinite(maxPhaseResid)
-  bucket = bucket + double(maxPhaseResid > 0.005);
-end
-negativeRatio = localGetFieldOrDefault(summary, 'maxNonRefNegativeProjectionRatio', NaN);
-if isfinite(negativeRatio)
-  bucket = bucket + double(negativeRatio > 0.05);
-end
-end
-
-function tf = localSummaryNeedsTrustedCentralRescue(summaryUse, residualTolHz, maxHealthBucket)
-%LOCALSUMMARYNEEDSTRUSTEDCENTRALRESCUE Return true when one summary still looks unsafe.
-%
-% Subset schedules are tooth selectors first. Treat the current winner as
-% unsafe whenever it is unresolved, still off-tooth, or only weakly central.
-% Optionally gate on one coarse non-reference health bucket so random rescue
-% can also replace a fragile same-tooth curated winner.
-
-tf = true;
-if ~(isstruct(summaryUse) && ~isempty(summaryUse) && ...
-    logical(localGetFieldOrDefault(summaryUse, 'isResolved', false)))
-  return;
-end
-toothIdx = localGetFieldOrDefault(summaryUse, 'toothIdx', NaN);
-if ~(isfinite(toothIdx) && abs(toothIdx) == 0)
-  return;
-end
-toothResidualHz = abs(localGetFieldOrDefault(summaryUse, 'toothResidualHz', inf));
-if ~(isfinite(toothResidualHz) && toothResidualHz <= residualTolHz)
-  return;
-end
-if nargin >= 3 && isfinite(maxHealthBucket)
-  if localBuildSubsetHealthBucket(summaryUse) > maxHealthBucket
-    return;
-  end
-end
-tf = false;
-end
-
-
 function tf = localHasResolvedCentralTooth(summaryCell, residualTolHz)
 %LOCALHASRESOLVEDCENTRALTOOTH Return true when one resolved subset already sits on tooth 0.
 % Fast statistics should not promote wide fallback once the subset bank
@@ -628,18 +323,6 @@ for iCase = 1:numel(summaryCell)
     tf = true;
     return;
   end
-end
-end
-
-
-function fdDriftHz = localCalcSummaryFdDrift(summaryA, summaryB)
-%LOCALCALCSUMMARYFDDRIFT Build one fdRef drift metric between compact summaries.
-
-fdDriftHz = NaN;
-fdA = localGetFieldOrDefault(summaryA, 'fdRefEst', NaN);
-fdB = localGetFieldOrDefault(summaryB, 'fdRefEst', NaN);
-if isfinite(fdA) && isfinite(fdB)
-  fdDriftHz = abs(fdA - fdB);
 end
 end
 
@@ -737,27 +420,6 @@ end
 end
 
 
-function optimOpt = localMergeOptimOpt(baseOptimOpt, overrideOptimOpt)
-%LOCALMERGEOPTIMOPT Merge one local optimizer override struct.
-
-optimOpt = baseOptimOpt;
-if nargin < 1 || isempty(optimOpt)
-  optimOpt = struct();
-end
-if nargin < 2 || isempty(overrideOptimOpt)
-  return;
-end
-if ~isstruct(overrideOptimOpt)
-  error('buildDoaDopplerDynamicTransitionBundle:InvalidLocalOptimOpt', ...
-    'Optimizer overrides must be provided as a struct.');
-end
-fieldList = fieldnames(overrideOptimOpt);
-for iField = 1:numel(fieldList)
-  optimOpt.(fieldList{iField}) = overrideOptimOpt.(fieldList{iField});
-end
-end
-
-
 function summary = localBuildUnknownCaseSummary(caseUse, truth, toothStepHz)
 %LOCALBUILDUNKNOWNCASESUMMARY Build one compact tooth-selection summary.
 
@@ -842,26 +504,6 @@ tf = isfinite(fdRefEst) && isfinite(fdRateEst) && all(isfinite(doaParamEst(:)));
 end
 
 
-function fdRateEst = localGetCaseFdRateEst(caseUse, defaultValue)
-%LOCALGETCASEFDRATEEST Safely read fdRateEst from one case struct.
-
-if nargin < 2 || isempty(defaultValue)
-  defaultValue = 0;
-end
-fdRateEst = defaultValue;
-if isempty(caseUse) || ~isstruct(caseUse)
-  return;
-end
-estResult = localGetFieldOrDefault(caseUse, 'estResult', struct());
-if isempty(estResult)
-  return;
-end
-fdRateEst = localGetFieldOrDefault(estResult, 'fdRateEst', defaultValue);
-if isempty(fdRateEst) || ~isscalar(fdRateEst) || ~isfinite(fdRateEst)
-  fdRateEst = defaultValue;
-end
-end
-
 function [refCoherence, nonRefCoherenceFloor, nonRefMaxAbsPhaseResidRad, nonRefRmsPhaseResidRad] = localExtractNonRefEvalMetrics(finalEval)
 %LOCALEXTRACTNONREFEVALMETRICS Build compact truth-free non-reference metrics.
 
@@ -907,73 +549,6 @@ function tf = localIsFrozenLikeSummary(solveVariant)
 
 solveVariant = lower(strtrim(string(solveVariant)));
 tf = contains(solveVariant, "fixeddoa");
-end
-
-
-function fdLocalTrue = localBuildTruthFdLocalForView(sceneRef, truth)
-%LOCALBUILDTRUTHFDLOCALFORVIEW Build one single-frame truth local-frequency vector.
-
-numSat = sceneRef.numSat;
-fdLocalTrue = nan(numSat, 1);
-selectedSatIdxGlobal = reshape(localGetFieldOrDefault(truth, 'selectedSatIdxGlobal', []), 1, []);
-fdSatTrueHz = reshape(localGetFieldOrDefault(truth, 'fdSatTrueHz', []), [], 1);
-if isempty(selectedSatIdxGlobal) || isempty(fdSatTrueHz)
-  return;
-end
-
-sceneSatIdx = reshape(localGetFieldOrDefault(sceneRef, 'satIdx', []), 1, []);
-for iSat = 1:min(numSat, numel(sceneSatIdx))
-  matchIdx = find(selectedSatIdxGlobal == sceneSatIdx(iSat), 1, 'first');
-  if ~isempty(matchIdx) && matchIdx <= numel(fdSatTrueHz)
-    fdLocalTrue(iSat) = fdSatTrueHz(matchIdx);
-  end
-end
-end
-
-
-function truthLocalDoa = localExtractSceneLocalDoa(sceneSeq)
-%LOCALEXTRACTSCENELOCALDOA Stack one scene sequence local-DoA tensor.
-
-numSat = sceneSeq.numSat;
-numFrame = sceneSeq.numFrame;
-truthLocalDoa = nan(2, numSat, numFrame);
-for iFrame = 1:numFrame
-  sceneUse = sceneSeq.sceneCell{iFrame};
-  if isfield(sceneUse, 'localDoa') && ~isempty(sceneUse.localDoa)
-    localDoaUse = sceneUse.localDoa;
-    truthLocalDoa(:, 1:size(localDoaUse, 2), iFrame) = localDoaUse;
-  end
-end
-end
-
-
-function out = localMergeStruct(base, override)
-%LOCALMERGESTRUCT Merge two scalar structs with override precedence.
-
-out = base;
-if nargin < 2 || isempty(override)
-  return;
-end
-if ~isstruct(override)
-  error('buildDoaDopplerDynamicTransitionBundle:InvalidOverride', ...
-    'Override data must be a struct.');
-end
-fieldList = fieldnames(override);
-for iField = 1:numel(fieldList)
-  out.(fieldList{iField}) = override.(fieldList{iField});
-end
-end
-
-
-function textOut = localFormatIntegerRow(valueRow)
-%LOCALFORMATINTEGERROW Format one integer row compactly.
-
-if isempty(valueRow)
-  textOut = '[]';
-  return;
-end
-valueRow = reshape(valueRow, 1, []);
-textOut = ['[', strjoin(arrayfun(@(x) sprintf('%d', x), valueRow, 'UniformOutput', false), ', '), ']'];
 end
 
 

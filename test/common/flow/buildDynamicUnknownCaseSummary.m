@@ -10,14 +10,33 @@ arguments
   truth (1,1) struct = struct()
 end
 
-summary = struct();
+summary = localBuildSummarySkeleton();
+summary.stageTag = localInferStageTag(caseUse);
+summary.startTag = string(localGetFieldOrDefault(caseUse, 'startTag', ""));
+summary.routeFamily = string(localGetFieldOrDefault(caseUse, 'routeFamily', ""));
+
 estResult = localGetFieldOrDefault(caseUse, 'estResult', struct());
-summary.solveVariant = string(localGetFieldOrDefault(estResult, 'solveVariant', "unknown"));
+if isempty(estResult) || ~isstruct(estResult)
+  return;
+end
+
+summary.solveVariant = string(localGetFieldOrDefault(estResult, 'solveVariant', summary.solveVariant));
 summary.isResolved = logical(localGetFieldOrDefault(estResult, 'isResolved', false));
 summary.doaParamEst = reshape(localGetFieldOrDefault(estResult, 'doaParamEst', nan(2, 1)), 1, []);
 summary.fdRefEst = localGetFieldOrDefault(estResult, 'fdRefEst', NaN);
 summary.fdRateEst = localGetFieldOrDefault(estResult, 'fdRateEst', NaN);
 summary.runTimeMs = localGetFieldOrDefault(estResult, 'runTimeMs', NaN);
+
+if strlength(summary.stageTag) == 0
+  summary.stageTag = string(localGetFieldOrDefault(estResult, 'stageTag', summary.solveVariant));
+end
+
+if strlength(summary.startTag) == 0
+  summary.startTag = string(localGetFieldOrDefault(estResult, 'startTag', ""));
+end
+if strlength(summary.routeFamily) == 0
+  summary.routeFamily = string(localGetFieldOrDefault(estResult, 'routeFamily', ""));
+end
 
 debugAux = localGetFieldOrDefault(localGetFieldOrDefault(estResult, 'aux', struct()), 'debug', struct());
 finalEval = localGetFieldOrDefault(debugAux, 'finalEval', struct());
@@ -33,30 +52,96 @@ summary.nonRefSupportFloorPenalty = localGetFieldOrDefault(finalEval, 'nonRefSup
 summary.additionalObjectivePenalty = localGetFieldOrDefault(finalEval, 'additionalObjectivePenalty', 0);
 summary.refConsistencyNorm = localGetFieldOrDefault(finalEval, 'refConsistencyNorm', NaN);
 summary.nonRefConsistencyRatioFloor = localGetFieldOrDefault(finalEval, 'nonRefConsistencyRatioFloor', NaN);
-summary.isDoaFrozenLike = contains(lower(strtrim(summary.solveVariant)), "fixeddoa");
+summary.isDoaFrozenLike = localIsFrozenLikeSummary(summary.solveVariant, summary.stageTag);
 [summary.refCoherence, summary.nonRefCoherenceFloor, summary.nonRefMaxAbsPhaseResidRad, ...
   summary.nonRefRmsPhaseResidRad] = localExtractNonRefEvalMetrics(finalEval);
 
+if isempty(fieldnames(truth))
+  return;
+end
+
+truthLatlon = reshape(localGetFieldOrDefault(truth, 'latlonTrueDeg', []), [], 1);
+if numel(truthLatlon) >= 2 && numel(summary.doaParamEst) >= 2 && all(isfinite(summary.doaParamEst(1:2)))
+  summary.angleErrDeg = calcLatlonAngleError(summary.doaParamEst(1:2).', truthLatlon(1:2));
+end
+truthFdRef = localGetFieldOrDefault(truth, 'fdRefTrueHz', localGetFieldOrDefault(truth, 'fdRefFit', NaN));
+truthFdRate = localGetFieldOrDefault(truth, 'fdRateTrueHzPerSec', localGetFieldOrDefault(truth, 'fdRateFit', NaN));
+summary.fdRefErrHz = summary.fdRefEst - truthFdRef;
+summary.fdRateErrHzPerSec = summary.fdRateEst - truthFdRate;
+if isfinite(toothStepHz) && toothStepHz > 0 && isfinite(summary.fdRefErrHz)
+  summary.toothIdx = round(summary.fdRefErrHz / toothStepHz);
+  summary.toothResidualHz = summary.fdRefErrHz - summary.toothIdx * toothStepHz;
+end
+end
+
+
+function summary = localBuildSummarySkeleton()
+%LOCALBUILDSUMMARYSKELETON Build one stable default summary shape.
+
+summary = struct();
+summary.solveVariant = "skipped";
+summary.isResolved = false;
+summary.doaParamEst = nan(1, 2);
+summary.fdRefEst = NaN;
+summary.fdRateEst = NaN;
+summary.runTimeMs = NaN;
+summary.finalObj = NaN;
+summary.finalResidualNorm = NaN;
+summary.refFitRatio = NaN;
+summary.nonRefFitRatioFloor = NaN;
+summary.refSupportRatio = NaN;
+summary.nonRefSupportRatioFloor = NaN;
+summary.maxNonRefNegativeProjectionRatio = NaN;
+summary.nonRefFitFloorPenalty = 0;
+summary.nonRefSupportFloorPenalty = 0;
+summary.additionalObjectivePenalty = 0;
+summary.refConsistencyNorm = NaN;
+summary.nonRefConsistencyRatioFloor = NaN;
+summary.isDoaFrozenLike = false;
+summary.refCoherence = NaN;
+summary.nonRefCoherenceFloor = NaN;
+summary.nonRefMaxAbsPhaseResidRad = NaN;
+summary.nonRefRmsPhaseResidRad = NaN;
 summary.angleErrDeg = NaN;
 summary.fdRefErrHz = NaN;
 summary.fdRateErrHzPerSec = NaN;
 summary.toothIdx = NaN;
 summary.toothResidualHz = NaN;
-if ~isempty(fieldnames(truth))
-  truthLatlon = reshape(localGetFieldOrDefault(truth, 'latlonTrueDeg', []), [], 1);
-  if numel(truthLatlon) >= 2 && numel(summary.doaParamEst) >= 2 && all(isfinite(summary.doaParamEst(1:2)))
-    summary.angleErrDeg = calcLatlonAngleError(summary.doaParamEst(1:2).', truthLatlon(1:2));
-  end
-  truthFdRef = localGetFieldOrDefault(truth, 'fdRefTrueHz', localGetFieldOrDefault(truth, 'fdRefFit', NaN));
-  truthFdRate = localGetFieldOrDefault(truth, 'fdRateTrueHzPerSec', localGetFieldOrDefault(truth, 'fdRateFit', NaN));
-  summary.fdRefErrHz = summary.fdRefEst - truthFdRef;
-  summary.fdRateErrHzPerSec = summary.fdRateEst - truthFdRate;
-  if isfinite(toothStepHz) && toothStepHz > 0 && isfinite(summary.fdRefErrHz)
-    summary.toothIdx = round(summary.fdRefErrHz / toothStepHz);
-    summary.toothResidualHz = summary.fdRefErrHz - summary.toothIdx * toothStepHz;
-  end
+summary.stageTag = "";
+summary.startTag = "";
+summary.routeFamily = "";
 end
+
+
+function stageTag = localInferStageTag(caseUse)
+%LOCALINFERSTAGETAG Infer one stable stage tag from a case or summary struct.
+
+stageTag = "";
+if ~isstruct(caseUse)
+  return;
 end
+stageTag = string(localGetFieldOrDefault(caseUse, 'stageTag', stageTag));
+if strlength(stageTag) > 0
+  return;
+end
+estResult = localGetFieldOrDefault(caseUse, 'estResult', struct());
+stageTag = string(localGetFieldOrDefault(estResult, 'stageTag', stageTag));
+if strlength(stageTag) > 0
+  return;
+end
+stageTag = string(localGetFieldOrDefault(estResult, 'solveVariant', stageTag));
+end
+
+
+function tf = localIsFrozenLikeSummary(solveVariant, stageTag)
+%LOCALISFROZENLIKESUMMARY Return true when one summary looks fixed-DoA.
+
+solveVariant = lower(string(solveVariant));
+stageTag = lower(string(stageTag));
+tf = contains(solveVariant, "fixeddoa") || ...
+  (contains(stageTag, "anchor") && ~contains(stageTag, "polish") && ~contains(stageTag, "wide"));
+end
+
 
 function [refCoherence, nonRefCoherenceFloor, nonRefMaxAbsPhaseResidRad, nonRefRmsPhaseResidRad] = ...
   localExtractNonRefEvalMetrics(finalEval)

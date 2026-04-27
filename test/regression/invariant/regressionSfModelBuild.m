@@ -1,13 +1,15 @@
+function regressionSfModelBuild(varargin)
 % Regression check for SF model construction.
 % This script focuses on one narrow contract only: the SF model builder must
 % preserve the resolved reference-satellite identity, pass satWeight into
 % the model, and enforce the requested local DoA box through its bounds.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = localBuildRegressionFixture();
 
-fprintf('Running regressionSfModelBuild ...\n');
+  fprintf('Running regressionSfModelBuild ...\n');
 
 satWeight = [1; 0.35];
 initDoaParam = fixture.truth.latlonTrueDeg(:) + [0.10; -0.07];
@@ -64,12 +66,14 @@ if abs(lbMulti(3) - fixture.fdRange(1)) > 1e-12 || abs(ubMulti(3) - fixture.fdRa
     'The SF fdRef bounds must match the configured fdRange.');
 end
 
-fprintf('  refSatIdxLocal (full) : %d\n', modelMulti.refSatIdxLocal);
-fprintf('  satWeight             : [%.3f, %.3f]\n', modelMulti.satWeight(1), modelMulti.satWeight(2));
-fprintf('  DoA bounds            : [%.6f, %.6f] x [%.6f, %.6f]\n', ...
-  lbMulti(1), ubMulti(1), lbMulti(2), ubMulti(2));
-fprintf('PASS: regressionSfModelBuild\n');
+  fprintf('  refSatIdxLocal (full) : %d\n', modelMulti.refSatIdxLocal);
+  fprintf('  satWeight             : [%.3f, %.3f]\n', modelMulti.satWeight(1), modelMulti.satWeight(2));
+  fprintf('  DoA bounds            : [%.6f, %.6f] x [%.6f, %.6f]\n', ...
+    lbMulti(1), ubMulti(1), lbMulti(2), ubMulti(2));
+  fprintf('PASS: regressionSfModelBuild\n');
 
+
+end
 
 function localCheckBounds(doaLb, doaUb, expDoaLb, expDoaUb, caseTag)
 %LOCALCHECKBOUNDS Check the enforced local DoA box.
@@ -147,13 +151,4 @@ fixture.refSatIdxLocal = refSatIdxLocal;
 fixture.gridSize = gridSize;
 fixture.searchRange = searchRange;
 fixture.E = E;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

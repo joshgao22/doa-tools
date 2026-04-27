@@ -1,15 +1,18 @@
+function regressionMfUnknownBestStartSelection(varargin)
 % Regression check for CP-U multi-start best-start selection.
-% This script focuses on one narrow contract only:
+% This regression focuses on one narrow contract only:
 %   1) the outer CP-U multi-start wrapper must evaluate both fromCpK and
 %      fromStatic warm starts;
 %   2) the selected candidate must match the documented selection rule that
 %      prefers near-best resolved fits with real release motion;
 %   3) the selected start tag reported by runDynamicDoaDopplerCase must agree
 %      with summarizeDynamicMultiStart.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
+fixture.dynMsKnownOpt.verbose = verbose;
+fixture.dynMsUnknownOpt.verbose = verbose;
 
 fprintf('Running regressionMfUnknownBestStartSelection ...\n');
 
@@ -83,6 +86,7 @@ fprintf('  selected start tag       : %s\n', actualStartTag);
 fprintf('  summary selected start tag: %s\n', summarySelectedStartTag);
 fprintf('PASS: regressionMfUnknownBestStartSelection\n');
 
+end
 
 function selectedIdx = localSelectBestDynamicCandidateContract(fvalList, isResolvedList, startTagList, iterationList, objImproveList, moveNormList)
 %LOCALSELECTBESTDYNAMICCANDIDATECONTRACT Rebuild the documented selection rule.
@@ -299,13 +303,4 @@ spanTruth = max(maxTruth - minTruth, eps);
 pad = max(absPad, fracPad * spanTruth);
 value = [min(defaultRange(1), minTruth - pad), ...
          max(defaultRange(2), maxTruth + pad)];
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

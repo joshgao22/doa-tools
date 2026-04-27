@@ -1,3 +1,4 @@
+function regressionUserStateFromLatlon(varargin)
 % Regression check for buildUserStateFromLatlon.
 % This script focuses on two narrow contracts only:
 %   1) with a motion-perturbed sceneSeq, buildUserStateFromLatlon must
@@ -5,14 +6,15 @@
 %      to Earth-fixed nominal motion only;
 %   2) datetime, UTC datevec, and datenum inputs must all yield the same
 %      nominal single-epoch state.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = localBuildRegressionFixture();
 sceneSeq = fixture.sceneSeq;
 latlonTrueDeg = fixture.usrLla(1:2, 1);
 
-fprintf('Running regressionUserStateFromLatlon ...\n');
+  fprintf('Running regressionUserStateFromLatlon ...\n');
 
 [userPosSeq, userVelSeq, auxSeq] = buildUserStateFromLatlon(latlonTrueDeg, sceneSeq);
 userPosTruth = reshape(sceneSeq.usrPosEci(:, 1, :), 3, []);
@@ -67,14 +69,16 @@ if max([posDatetimeErr, velDatetimeErr, posDatevecErr, velDatevecErr, posDatenum
     'datetime / datevec / datenum inputs do not reproduce the same nominal state.');
 end
 
-fprintf('  max sceneSeq pos err (m)    : %.3e\n', posSeqErr);
-fprintf('  max sceneSeq vel err (m/s)  : %.3e\n', velSeqErr);
-fprintf('  max nominal gap (m)         : %.3e\n', nominalGap);
-fprintf('  offset source               : %s\n', string(auxSeq.offsetSource));
-fprintf('  UTC compatibility max err   : %.3e\n', ...
-  max([posDatetimeErr, velDatetimeErr, posDatevecErr, velDatevecErr, posDatenumErr, velDatenumErr]));
-fprintf('PASS: regressionUserStateFromLatlon\n');
+  fprintf('  max sceneSeq pos err (m)    : %.3e\n', posSeqErr);
+  fprintf('  max sceneSeq vel err (m/s)  : %.3e\n', velSeqErr);
+  fprintf('  max nominal gap (m)         : %.3e\n', nominalGap);
+  fprintf('  offset source               : %s\n', string(auxSeq.offsetSource));
+  fprintf('  UTC compatibility max err   : %.3e\n', ...
+    max([posDatetimeErr, velDatetimeErr, posDatevecErr, velDatevecErr, posDatenumErr, velDatenumErr]));
+  fprintf('PASS: regressionUserStateFromLatlon\n');
 
+
+end
 
 function fixture = localBuildRegressionFixture()
 %LOCALBUILDREGRESSIONFIXTURE Build one motion-aware dynamic scene sequence.
@@ -110,13 +114,4 @@ sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, [1, 2], [], arrUpa, ...
 fixture = struct();
 fixture.sceneSeq = sceneSeq;
 fixture.usrLla = usrLla;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

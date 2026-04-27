@@ -1,3 +1,4 @@
+function regressionSfStaticRefOnlyEquivalence(varargin)
 % Regression check for SF static ref-only equivalence.
 % This script focuses on one narrow contract only:
 %   1) the dedicated SS-SF-Static case and the multi-sat static case with
@@ -6,12 +7,13 @@
 %   2) adding the second satellite with zero weight must not perturb the
 %      reference-only static objective value when the initialization is held
 %      fixed.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionSfStaticRefOnlyEquivalence ...\n');
+  fprintf('Running regressionSfStaticRefOnlyEquivalence ...\n');
 
 caseRefOnly = fixture.caseBundle.caseStaticRefOnly;
 caseWeightZero = fixture.caseStaticZeroWeightRefInit;
@@ -48,19 +50,12 @@ if estRefOnly.exitflag ~= estWeightZero.exitflag
     'Zero-weight multi-sat static must keep the same exitflag as ref-only static.');
 end
 
-fprintf('  ref-only angle err (deg) : %.6g\n', ...
-  calcLatlonAngleError(estRefOnly.doaParamEst(:), fixture.truth.latlonTrueDeg(:)));
-fprintf('  zero-weight angle err    : %.6g\n', ...
-  calcLatlonAngleError(estWeightZero.doaParamEst(:), fixture.truth.latlonTrueDeg(:)));
-fprintf('  fdRef diff (Hz)          : %.6g\n', fdRefDiffHz);
-fprintf('  fval diff                : %.6g\n', fvalDiff);
-fprintf('PASS: regressionSfStaticRefOnlyEquivalence\n');
+  fprintf('  ref-only angle err (deg) : %.6g\n', ...
+    calcLatlonAngleError(estRefOnly.doaParamEst(:), fixture.truth.latlonTrueDeg(:)));
+  fprintf('  zero-weight angle err    : %.6g\n', ...
+    calcLatlonAngleError(estWeightZero.doaParamEst(:), fixture.truth.latlonTrueDeg(:)));
+  fprintf('  fdRef diff (Hz)          : %.6g\n', fdRefDiffHz);
+  fprintf('  fval diff                : %.6g\n', fvalDiff);
+  fprintf('PASS: regressionSfStaticRefOnlyEquivalence\n');
 
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

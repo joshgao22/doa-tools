@@ -1,13 +1,14 @@
+function regressionMfCpSupportCollapsePenalty(varargin)
 % Regression check for MF continuous-phase support-collapse penalties.
 % The wrong-tooth candidate should expose worse support-collapse
 % diagnostics and a smaller continuous-phase consistency score in the
 % shared-phase summary.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
-fprintf('Running regressionMfCpSupportCollapsePenalty ...\n');
+  fprintf('Running regressionMfCpSupportCollapsePenalty ...\n');
 
 modelOpt = struct();
 modelOpt.useLogObjective = false;
@@ -64,17 +65,20 @@ if ~(supportCollapsed || negativeIncreased || consistencyDegraded || objectivePe
      '(support collapse, negative projection, consistency score, or objective loss).']);
 end
 
-fprintf('  truth obj                 : %.6f\n', objTruth);
-fprintf('  wrong-tooth obj           : %.6f\n', objWrong);
-fprintf('  truth min support ratio   : %.6f\n', truthSupport);
-fprintf('  wrong min support ratio   : %.6f\n', wrongSupport);
-fprintf('  truth max neg ratio       : %.6f\n', truthNegRatio);
-fprintf('  wrong max neg ratio       : %.6f\n', wrongNegRatio);
-fprintf('  truth min consistency     : %.6f\n', truthConsistency);
-fprintf('  wrong min consistency     : %.6f\n', wrongConsistency);
-fprintf('PASS: regressionMfCpSupportCollapsePenalty\n');
+  fprintf('  truth obj                 : %.6f\n', objTruth);
+  fprintf('  wrong-tooth obj           : %.6f\n', objWrong);
+  fprintf('  truth min support ratio   : %.6f\n', truthSupport);
+  fprintf('  wrong min support ratio   : %.6f\n', wrongSupport);
+  fprintf('  truth max neg ratio       : %.6f\n', truthNegRatio);
+  fprintf('  wrong max neg ratio       : %.6f\n', wrongNegRatio);
+  fprintf('  truth min consistency     : %.6f\n', truthConsistency);
+  fprintf('  wrong min consistency     : %.6f\n', wrongConsistency);
+  fprintf('PASS: regressionMfCpSupportCollapsePenalty\n');
 
 
+
+
+end
 
 function tf = localHasPenaltyMetric(profStruct, auxStruct, fieldName)
 %LOCALHASPENALTYMETRIC Check whether one CP penalty metric is exposed.
@@ -207,13 +211,4 @@ spanTruth = max(maxTruth - minTruth, eps);
 pad = max(absPad, fracPad * spanTruth);
 value = [min(defaultRange(1), minTruth - pad), ...
          max(defaultRange(2), maxTruth + pad)];
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
 end

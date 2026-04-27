@@ -1,3 +1,4 @@
+function regressionSfStaticDoaAnchorFallback(varargin)
 % Regression check for the SF static DoA-anchor fallback candidate.
 % This script verifies one branch-level contract only:
 %   1) the multi-sat static estimator may compare one fixed-DoA anchor
@@ -5,12 +6,12 @@
 %   2) when the objective gap stays within the configured tolerance, the
 %      selected candidate should not degrade angle or fdRef relative to the
 %      pure free solve.
-clear(); close all;
-
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+localPrint = @(varargin) fprintf(varargin{:});
 fixture = buildSfStaticRegressionFixture();
 
-fprintf('Running regressionSfStaticDoaAnchorFallback ...\n');
+localPrint('Running regressionSfStaticDoaAnchorFallback ...\n');
 
 optFree = fixture.caseBundle.staticMsOpt;
 optFree.initDoaHalfWidth = [];
@@ -52,18 +53,12 @@ if ~all(isfinite([freeAngleErr, fallbackAngleErr, freeFdErr, fallbackFdErr]))
     'The fallback comparison metrics must stay finite.');
 end
 
-fprintf('  selected candidate tag        : %s\n', selectedTag);
-fprintf('  free angle err (deg)          : %.6g\n', freeAngleErr);
-fprintf('  fallback angle err (deg)      : %.6g\n', fallbackAngleErr);
-fprintf('  free fdRef err (Hz)           : %.6f\n', freeFdErr);
-fprintf('  fallback fdRef err (Hz)       : %.6f\n', fallbackFdErr);
-fprintf('  fallback obj gap              : %.6g\n', objGap);
-fprintf('  fallback obj tol              : %.6g\n', objTol);
-fprintf('PASS: regressionSfStaticDoaAnchorFallback\n');
-
-
-function localAddProjectPath()
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(fileparts(scriptDir)));
-addpath(genpath(projectRoot));
+localPrint('  selected candidate tag        : %s\n', selectedTag);
+localPrint('  free angle err (deg)          : %.6g\n', freeAngleErr);
+localPrint('  fallback angle err (deg)      : %.6g\n', fallbackAngleErr);
+localPrint('  free fdRef err (Hz)           : %.6f\n', freeFdErr);
+localPrint('  fallback fdRef err (Hz)       : %.6f\n', fallbackFdErr);
+localPrint('  fallback obj gap              : %.6g\n', objGap);
+localPrint('  fallback obj tol              : %.6g\n', objTol);
+localPrint('PASS: regressionSfStaticDoaAnchorFallback\n');
 end

@@ -1,15 +1,16 @@
+function regressionMfInitFdLine(varargin)
 % Regression check for the MF fd-line initializer.
 % This script isolates buildDoaDopplerMfInit and checks one narrow contract:
 % with a trusted DoA anchor, the reference-satellite fd-line initializer
 % should stay near the dynamic truth, should avoid range clipping, and
 % should give nearly the same answer for the ref-only and multi-satellite
 % views because the current initializer is reference-satellite-only.
-clear(); close all;
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
 
-localAddProjectPath();
 fixture = localBuildRegressionFixture();
 
-fprintf('Running regressionMfInitFdLine ...\n');
+  fprintf('Running regressionMfInitFdLine ...\n');
 
 initFdCountList = [65, 81];
 resultCell = cell(numel(initFdCountList), 1);
@@ -20,16 +21,19 @@ for iCase = 1:numel(initFdCountList)
   localCheckInitCase(resultCell{iCase}, fixture.truth, fixture.fdRange, fixture.fdRateRange);
 end
 
-for iCase = 1:numel(resultCell)
-  resultCur = resultCell{iCase};
-  fprintf('  initFdCount = %d\n', resultCur.initFdCount);
-  fprintf('    ref-only fdRefInit (Hz) : %.6f\n', resultCur.fdRefInitRefOnly);
-  fprintf('    multi-sat fdRefInit (Hz): %.6f\n', resultCur.fdRefInitMulti);
-  fprintf('    ref-only fdRateInit     : %.6f\n', resultCur.fdRateInitRefOnly);
-  fprintf('    multi-sat fdRateInit    : %.6f\n', resultCur.fdRateInitMulti);
-end
-fprintf('PASS: regressionMfInitFdLine\n');
+  for iCase = 1:numel(resultCell)
+    resultCur = resultCell{iCase};
+    fprintf('  initFdCount = %d\n', resultCur.initFdCount);
+    fprintf('    ref-only fdRefInit (Hz) : %.6f\n', resultCur.fdRefInitRefOnly);
+    fprintf('    multi-sat fdRefInit (Hz): %.6f\n', resultCur.fdRefInitMulti);
+    fprintf('    ref-only fdRateInit     : %.6f\n', resultCur.fdRateInitRefOnly);
+    fprintf('    multi-sat fdRateInit    : %.6f\n', resultCur.fdRateInitMulti);
+  end
+  fprintf('PASS: regressionMfInitFdLine\n');
 
+
+
+end
 
 function result = localRunOneInitCase(fixture, initFdCount)
 %LOCALRUNONEINITCASE Run one pair of ref-only / multi-sat fd-line inits.
@@ -218,13 +222,4 @@ fixture.sampleRate = waveInfo.sampleRate;
 fixture.carrierFreq = carrierFreq;
 fixture.fdRange = fdRange;
 fixture.fdRateRange = fdRateRange;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end

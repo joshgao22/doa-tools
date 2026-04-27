@@ -1,3 +1,4 @@
+function regressionLocalDoaMapping(varargin)
 % Regression check for global-to-local DoA mapping.
 % This script focuses on one narrow contract only:
 %   1) truth localDoa stored in sceneSeq must match direct recomputation by
@@ -5,14 +6,15 @@
 %      and satellite local rotation;
 %   2) the implied local unit direction must rotate back to the original
 %      global line-of-sight direction.
-clear(); close all;
 
-localAddProjectPath();
+opt = parseRegressionCaseOpt(varargin{:});
+verbose = opt.verbose;
+
 fixture = localBuildRegressionFixture();
 sceneSeq = fixture.sceneSeq;
 localDoaTruth = localExtractTruthLocalDoa(sceneSeq);
 
-fprintf('Running regressionLocalDoaMapping ...\n');
+  fprintf('Running regressionLocalDoaMapping ...\n');
 
 maxAbsAzErrDeg = 0;
 maxAbsElErrDeg = 0;
@@ -71,14 +73,16 @@ if isfinite(refAzErrDeg) && (refAzErrDeg > tolDoaDeg || refElErrDeg > tolDoaDeg)
     refAzErrDeg, refElErrDeg);
 end
 
-fprintf('  max azimuth error (deg)  : %.3e\n', maxAbsAzErrDeg);
-fprintf('  max elevation error (deg): %.3e\n', maxAbsElErrDeg);
+  fprintf('  max azimuth error (deg)  : %.3e\n', maxAbsAzErrDeg);
+  fprintf('  max elevation error (deg): %.3e\n', maxAbsElErrDeg);
 if isfinite(refAzErrDeg)
-  fprintf('  ref-frame localDoaRef err: [%.3e, %.3e] deg\n', refAzErrDeg, refElErrDeg);
+    fprintf('  ref-frame localDoaRef err: [%.3e, %.3e] deg\n', refAzErrDeg, refElErrDeg);
 end
-fprintf('  max direction closure err: %.3e\n', maxDirClosureErr);
-fprintf('PASS: regressionLocalDoaMapping\n');
+  fprintf('  max direction closure err: %.3e\n', maxDirClosureErr);
+  fprintf('PASS: regressionLocalDoaMapping\n');
 
+
+end
 
 function localDoa = localExtractTruthLocalDoa(sceneSeq)
 %LOCALEXTRACTTRUTHLOCALDOA Extract 2 x Ns x Nf local DoA truth.
@@ -130,13 +134,4 @@ sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, [1, 2], [], arrUpa, ...
 
 fixture = struct();
 fixture.sceneSeq = sceneSeq;
-end
-
-
-function localAddProjectPath()
-%LOCALADDPROJECTPATH Add the repository folders to the MATLAB path.
-
-scriptDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(scriptDir));
-addpath(genpath(projectRoot));
 end
