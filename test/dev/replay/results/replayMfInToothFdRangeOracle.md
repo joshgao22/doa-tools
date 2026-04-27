@@ -103,7 +103,7 @@ Worst tail cases：
 
 ### 对主流程的影响
 
-- `scanMfCuratedSubsetScheduleSearch` 仍有必要，因为 wide baseline 的 wrong-tooth 风险仍明显；但它只能解决 tooth selection，不能解决 same-tooth tail。
+- 仍需要运行 / 增强已有 `scanMfSubsetBankCoverage`，因为 wide baseline 的 wrong-tooth 风险仍明显；但它只能解决 tooth selection，不能解决 same-tooth tail，不再另建 `scanMfCuratedSubsetScheduleSearch`。
 - 下一步应先用固定 hard seeds 验证 gated joint local refine：建议 seed `277, 283, 298, 256, 268`。
 - replay 对照建议至少包含 disabled / DoA-only polish / joint DoA-fdRef local refine，并用 no-truth 指标触发，例如 `nonRefCoherenceFloor`、multi-sat block coherence、`fd` 已健康但 final objective 异常等。
 - 只有 same-tooth tail 被压住后，`MS-MF-CP-U-in-tooth` 的 majority / median 增益才可能转化为稳定 RMSE 增益。

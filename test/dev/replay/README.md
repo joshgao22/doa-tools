@@ -97,6 +97,16 @@ clear; close all; clc;
 - 分类口径：区分 `wrong-tooth`、`same-tooth + fd not healthy`、`same-tooth + fd healthy + non-ref coherence collapsed`、`same-tooth + fd healthy + DoA/local-state basin` 与轻微/不明确 tail。
 - 当前结论：只用于 tail 定位和 gated refine 前置分类；候选 objective probe 用于决定下一步是 conditional DoA polish、wide-centered gated refine、single-MF-centered basin-entry，还是更宽的 basin 进入机制；rescue bank 只模拟候选选择，不改变 solver adoption；line probe 含 truth 只作 replay 机制定位，不进入 regression，不改变默认 flow。
 
+#### `replayMfInToothGatedRescueEffectiveness.m`
+
+- 作用：在更多 repeat 上验证 in-tooth 条件下的 no-truth gated rescue 是否稳定救回 same-tooth collapse，并确认 easy / fd-not-healthy 负样本是否被误伤。
+- 选帧与初始化口径：使用 truth-centered half-tooth `fdRef` 范围，只验证 tooth 已正确时的 basin-entry rescue；不做 subset tooth selection，也不改变默认 flow。
+- 候选口径：`caseRole / isHardRescued / isDamaged` 可用 truth 做离线评价；`rescueTriggered / triggerReason / selectedCandidateFamily` 只能由默认估计的 non-ref coherence、phase residual、candidate objective 和卫星几何回代诊断决定。当前 gate 采用 coherence-collapse 或 phase-residual-large 的 OR 触发；phase residual 缺失只能记录为 unavailable，不能 veto coherence trigger。
+- 主要输出：`rescueEffectAggregateTable`、`rescueEffectVerdictTable`、`rescueEffectCaseTable`、`rescueBankDecisionTable`、`triggerReasonTable`、`candidateProbeTable`、method / range / timing summary，以及按 task seed 画出的 default / gated / blanket / truth-DoA oracle angle / coherence 线图和 trigger / case-role 线图。
+- 对照 bank：`disabled`、`gated-wide-only`、`gated-single-mf-only`、`gated-wide-single-bank`，并保留 `blanket-wide-single-bank` 作为误伤参考。
+- 当前结论：只作为 gated rescue 批量验证 replay；2026-04-27 的 100-repeat confirmation 显示 `gated-wide-single-bank` 是唯一通过 verdict 的 bank，hard rescue rate 为 `0.85714`，easy / fd-not-healthy 负样本无误伤，overall P95 从 disabled 的 `0.0036204 deg` 降到 `0.0020833 deg`。下一步进入 flow-like replay 验证，不直接接入默认 flow。
+- 详细结果：`results/replayMfInToothGatedRescueEffectiveness.md`。
+
 #### `replayMfSameToothHardCase.m`
 
 - 作用：追踪 `fdRef/fdRate` 健康且 same-tooth 已成立，但 DoA 仍停在坏盆地的样本。

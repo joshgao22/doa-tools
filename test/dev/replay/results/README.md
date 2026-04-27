@@ -44,6 +44,7 @@ results/<scriptName>/<caseName>.md
 | `replayMfPeriodicVsSubsetToothSelect.m` | `replayMfPeriodicVsSubsetToothSelect.md` | `test/data/cache/replay/replayMfPeriodicVsSubsetToothSelect_20260425-182612.mat` | subset 负责选齿，periodic 主要负责同齿 refine；warning 只作为诊断元数据保留。 |
 | `replayMfInToothFdRangeOracle.m` | `replayMfInToothFdRangeOracle.md` | `test/data/cache/replay/replayMfInToothFdRangeOracle_20260426-104249.mat` | half-tooth oracle 下频率链健康，但少数 same-tooth non-ref coherence tail 拉坏 RMSE。 |
 | `replayMfInToothTailCaseDiagnose.m` | `replayMfInToothTailCaseDiagnose.md` | `test/data/cache/replay/replayMfInToothTailCaseDiagnose_20260427-102008.mat` | gated `wide+single-MF` rescue bank 能全救 fixed hard-collapse seeds，并避开 easy / fd-not-healthy 负样本。 |
+| `replayMfInToothGatedRescueEffectiveness.m` | `replayMfInToothGatedRescueEffectiveness.md` | `test/data/cache/replay/replayMfInToothGatedRescueEffectiveness_20260427-132413.mat` | 100-repeat confirmation 中 `gated-wide-single-bank` 是唯一通过 verdict 的 bank，能显著降低 P95 / max 且 easy / fd-negative 无误伤；下一步进入 flow-like replay。 |
 
 ## 维护规则
 
