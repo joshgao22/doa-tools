@@ -35,8 +35,9 @@ clear; close all; clc;
 #### `scanMfRegimeMapByWindow.m`
 
 - 作用：扫描窗口长度、帧间隔和帧数下的 DoA-slow / Doppler-dynamic 区间。
-- 用途：说明为什么当前论文路线不是 full dynamic state，也不是 static Doppler。
-- 主要输出：窗口量级、DoA drift、Doppler drift、二次相位强度。
+- 用途：说明为什么当前论文路线不是 full dynamic state，也不是 static Doppler，并解释固定 DoA、静态 Doppler、一阶 Doppler 三种模型层级的适用边界。
+- 主要输出：窗口量级、DoA drift、Doppler drift、静态 Doppler 相位失配、一阶 Doppler 残差、DoA 容忍度敏感性表、model boundary summary 与连续曲线图。
+- 阈值口径：`primaryDoaSlowTolDeg` 只用于当前 target regime 判定；`doaSlowTolDegList` 用于同时给出更严格和更宽松的 DoA static 容忍度边界，避免把某个角度阈值误写成 estimator 精度指标。
 
 #### `scanMfBlockLength.m`
 
@@ -120,9 +121,13 @@ clear; close all; clc;
 
 #### `scanMfSubsetBankCoverage.m`
 
-- 作用：观察 subset bank 覆盖率。
-- 用途：判断 curated bank 是否覆盖 hard case，random/rescue 是否有必要。
-- 主要输出：subset label coverage、selected/evaluated 统计。
+- 作用：观察 subset bank 覆盖率；这是当前 curated / random bank 系统比较入口，不再另建 `scanMfCuratedSubsetScheduleSearch.m`。
+- 用途：判断 `curated3`、`curated4`、`random1` 与 full rescue bank 是否覆盖 hard case，random/rescue 是否有必要。
+- 默认策略：默认 `strategyPreset="cheapScreen"`，只跑 `curated12`、`curated123`、`curated124`、`curated1234`、`curated12_random1`、`fullRescue`；需要完整二轮确认时把 `strategyPreset` 改为 `"full"`，再比较 `curated12_random{1,2,4}`、`curated123_random1`、`curated124_random1` 等更重组合。
+- 主要输出：`aggregateTable`、`scanTable`、`candidateTable`、`toothHistogramTable`、subset label selected/evaluated 统计、`tooth=0` 命中率、`|toothIdx|<=1` 近邻命中率、相对 `curated12` 的 easy-case damage、候选评估成本、angle RMSE/P95/max、tooth 分布图与 runtime Pareto 图。
+- 评价口径：truth 只用于离线评价 schedule/bank 覆盖，不进入 selector；`easyDamageRate` 以 `curated12` 的 easy seed 为基准，衡量扩大 bank 是否误伤已经健康的样本。该 scan 复用 `runSimpleDynamicFlowReplayBatch` 以保持 repeat 构造、static seed 和 simple-flow 执行与 replay 完全一致；命令行只打印 aggregate、checkpoint summary 与预览，完整候选表、repeat 表、checkpoint summary 和 histogram 保存在 `scanData`。
+- 加速口径：默认使用 cheap screen，不在第一轮直接跑完整 bank；若 cheap screen 中 `curated123` / `curated124` 已接近 `fullRescue`，后续只对 top 2-3 个 strategy 增大 repeat 做 confirmation，不继续扩大 random 数量。
+- checkpoint：默认开启 per-strategy repeat checkpoint，路径为仓库根目录 `tmp/scanMfSubsetBankCoverage/<stableRunKey>/`。中断后可用同一配置直接重跑恢复；成功构造 `scanData` 后默认清理 checkpoint 目录，失败时 `catch` 打印保留路径。
 
 #### `scanMfSubsetRankingLandscape.m`
 
@@ -147,9 +152,13 @@ clear; close all; clc;
 ## 存储与画图规范
 
 - 默认画图，不再提供绘图开关。
-- 不保存图片文件，只保存可重画图的数据，例如 grid、curve、surface、summary table。
-- tmp 只作为运行时临时目录；正常完成后必须清理。失败时由 `catch` 打印现场路径并保留。
-- snapshot 默认只保存 `scanData`，保存路径为 `test/data/cache/scan/`；不要保存大体量原始观测、fixture 全量缓存或 transition bundle。
+- 多阶段、多策略或多 schedule 图必须给每个 subplot 配清楚图例；同一脚本内的 stage / strategy / bank 命名要和表格字段一致，避免图例和 summary 各叫一套。
+- 不保存图片文件，只保存可重画图的数据，例如 grid、curve、surface、summary table、candidate table、histogram table 和 representative case。
+- tmp 只作为运行时临时目录，且统一位于仓库根目录 `tmp/<scriptName>/<runKey>/`；不能写到 `test/tmp`、当前工作目录或脚本目录。正常完成后必须清理，失败时由 `catch` 打印现场路径并保留。
+- 重 scan 若单个 grid / repeat / strategy 很慢，可以在文件头保留一个 `checkpointEnable` 开关。开启时按独立任务写轻量 task 文件，manifest 记录 seed、grid、schedule、strategy、contextOpt 和影响分支行为的 flow signature；关闭时不创建 tmp，直接运行完整 scan。
+- checkpoint 只保存独立任务结果，不保存 `rxSigCell`、完整 `sceneSeq`、fixture cell、transition bundle、全量 objective map 或全量 debug trace；成功构造 `scanData` 后默认调用公共 cleanup 入口清理 checkpoint run 目录。scan 脚本不得为 checkpoint run 目录再写私有 cleanup helper。
+- 不需要中间落盘的短 scan 不创建 tmp 目录，也不打印 temporary run dir disabled 这类无信息输出；只保留真正影响运行和结果解释的配置。
+- snapshot 默认只保存 `scanData`，保存路径为 `test/data/cache/scan/`；不要保存大体量原始观测、fixture 全量缓存、完整 scene / transition bundle 或全量 objective map。
 - 详细运行结果、曲线/曲面观察和 snapshot 绑定记录在 `test/dev/scan/results/`，不写进本 README。
 
 ## 恢复后重出结果
@@ -162,11 +171,13 @@ loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'scanData'}}));
 
 ## 头部开关收敛规则
 
-- 不再写 `saveMaxVarBytes`、snapshot 输出目录或 snapshot 前缀；统一交给 `saveExpSnapshot` 的 scan task type 路径处理。
+- 不再写 `saveMaxVarBytes`。`saveExpSnapshot` 已有默认 `maxVarBytes`；scan 只通过 `includeVars={'scanData'}` 保存轻量结果，不需要每个脚本重复定义。
+- 不再写 snapshot 输出目录或 snapshot 前缀；目录使用 `saveExpSnapshot` 的 scan task type 路径，前缀使用脚本名。
 - 不再写并行开关、自动开池开关或最小并行网格阈值。scan 网格 / batch 默认优先用外层 `parfor`，不可用时自动串行。
-- 不再写进度条开关。长循环默认显示 progressbar。
-- figure 和 table 默认全部输出，不再维护 `showXXXFigure` 或 `showXXXTable`。
-- 不再使用通用 context / parallel override。scan 参数差异很大，真正需要改的实验参数应直接写在本脚本 `Scan configuration` 中。
+- 不再写进度条开关。长 grid / surface / repeat / strategy loop 默认显示 progressbar；找不到 progressbar 时只打印一次紧凑提示并继续运行。
+- figure 和 table 默认全部输出，不再维护 `showXXXFigure`、`showXXXTable` 或其它细碎显示开关。
+- 不再使用通用 context / parallel override。scan 参数差异很大，真正需要改的 seed、grid、schedule、bank、context 或内部并行策略应直接写在本脚本 `Scan configuration` 或对应构造逻辑中。
+- checkpoint / resume 只加在确实耗时的 scan 上；短 scan 不为了形式保留 checkpoint 外壳。
 - `tmp` 正常结束一定清理；失败时保留现场并打印路径。
 
 ## MATLAB 实现细节规则
@@ -189,3 +200,29 @@ loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'scanData'}}));
 - 没有 checkpoint / resume / 中间缓存需求的 scan 不创建 tmp；有 tmp 的 scan 必须正常结束 cleanup，失败时才保留现场。
 - 未使用字段、历史兼容分支、重复 table/plotData wrapper、只服务一处的短 helper 应直接删除。
 - 重 scan 的公共执行逻辑只有在两个以上入口复用时才提升到 `test/common/scan/`；不要为了“统一”提前增加配置 resolver。
+
+### local helper 注释规则
+
+- scan 脚本中的每个 local helper 至少在函数行后保留一句英文注释，说明它负责什么。
+- 注释只解释职责边界和关键语义，不重复逐行代码；短 glue 也要说明为什么存在。
+- 新增或清理 helper 时同步检查是否真的需要拆分：一次性短 glue 直接写在执行流程中，grid / surface scan、summary、plot、progress、checkpoint 这类块状逻辑才保留 local helper。
+
+### scan 统计输出规则
+
+- 比较多个 strategy / schedule / bank 的 scan，除了逐 seed / 逐 grid 表格，还应提供能体现分布收敛的 aggregate table。
+- tooth selection 类 scan 默认保存 `|toothIdx|` histogram table，并画 histogram 或 rate subplot，用 repeat count 或 rate 表示偏离中心 tooth 的样本数；若 tooth 分布跨度很大，可在脚本头部提供明确的 histogram bin count。
+- subset / rescue bank 类 scan 应同时保存 selected label、evaluated label、candidate cost、truth-tooth / near-tooth hit rate、easy-case damage 与 runtime / candidate Pareto 视图。
+- 长 histogram table、candidate table 和逐 grid 大表默认不在命令行完整打印；命令行只打印 aggregate table 与必要的紧凑预览，完整表进入 `scanData`。
+- histogram / aggregate / candidate table 只进入轻量 `scanData`，不保存大中间量，不改变 selection、ranking 或 final result。
+
+### progressbar 与运行日志规则
+
+- 长 scan 的外层 grid / repeat / strategy loop 必须默认显示 progressbar，不再提供 `progressEnable` 开关。
+- `progressbar('reset', totalCount)`、`progressbar('advance')`、`progressbar('end')` 必须成对维护；异常 fallback 只能关闭进度条，不能影响 scan 结果。
+- `parfor` 中不能直接调用 `progressbar`；必须在 client 侧创建 `parallel.pool.DataQueue`，用 `afterEach(queue, @(~) progressbar('advance'))` 更新。
+- 串行 `for` loop 可以在每个独立任务结束后直接 `progressbar('advance')`。
+- progressbar 是运行可视化，不写入 snapshot，不创建 tmp 文件，也不进入 `scanData`。
+- checkpointed scan 的 progressbar 只对未完成 task reset；已经完成的 task 通过 resume 计入日志，不再伪 advance。
+- progressbar 开始前的长耗时不能靠 `optVerbose` 解释；应默认打印紧凑 stage log，例如 context build、strategy resolve、grid build、repeat mode、enter parfor。
+- `optVerbose=true` 只用于 estimator / flow 内部 trace，不作为 scan orchestration 进度显示开关。
+- 清理只能删除无效工程外壳，不能改变默认数值路径、reference-sat 语义、subset 顺序、candidate ranking 或 final selection。

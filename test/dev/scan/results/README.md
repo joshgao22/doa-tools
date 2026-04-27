@@ -9,6 +9,11 @@
 - 如果 snapshot 文件未随仓库同步，本目录中的摘要仍作为人工排障和论文图候选记录。
 - 若本地有 snapshot，可恢复 `scanData` 后运行对应 scan 的 `Summary output and plotting` section 重出表格和图。
 
+## 当前结果文档
+
+- `scanMfRegimeMapByWindow.md`：多帧窗口下 fixed-DoA / static-Doppler / first-order-Doppler regime 量级分析。
+- `scanMfSubsetBankCoverage.md`：curated / random subset bank 的选齿覆盖与 runtime-cost scan。
+
 ## 单个结果文档结构
 
 每个 scan 默认一个结果文档：
