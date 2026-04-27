@@ -73,6 +73,7 @@ clear; close all; clc;
 - 主要输出：wrong-tooth rescue、easy-case damage、各 subset label evaluated / selected 次数、`replayData.toothHistogramTable` 中的 `|toothIdx|` 分布表与对应 histogram 图。
 - 命令行口径：逐 seed compare table 与 subset bank coverage 只打印预览，完整表保存在 `replayData`；长 histogram table 默认不在命令行打印。
 - 当前结论：random rescue 只能作为条件触发的 tooth rescue，不应 blanket 常驻。
+- 详细结果：`results/replayMfRandomRescueEffectiveness.md`。
 
 ### 4. tooth 已对后，检查 same-tooth DoA 坏盆地
 
