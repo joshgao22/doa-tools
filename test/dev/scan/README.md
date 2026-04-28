@@ -42,8 +42,11 @@ clear; close all; clc;
 #### `scanMfBlockLength.m`
 
 - 作用：扫描 pilot block length 对 comb 和动态可辨性的影响。
-- 用途：确认同步块长度变化是否改变 tooth 可辨性和 CP/IP 对比强度。
-- 主要输出：block-length summary、fdRef comb 曲线、known/unknown 对比。
+- 用途：确认同步块长度变化是否改变 tooth 可辨性、known/unknown-rate 中心差异和块内 Doppler 动态量级；默认保留 `2112` 样本基准，并新增 `2x/4x` 长块用于验证更长已知块的影响。
+- 默认波形：`sampleRate=512e6`、`symbolRate=128e6`、`osf=4`、`baseBlockLen=2112`，生成最长 `standardBlockLen=8448` 样本。
+- 主要输出：block-length aggregate summary、alias-tooth table、in-block Doppler drift/quadratic-phase 指标、相对最长块与相对 `2112` 基准的 block ratio、fdRef comb 曲线和 known/unknown 对比。
+- 存储口径：`scanData` 只保留轻量 summary、tooth table、center line plot data、checkpoint summary 和配置；不保存 `pilotWave`、`viewMs`、`rxSigCell` 或完整 fixture。
+- checkpoint：默认开启 block-length 级 checkpoint，路径为仓库根目录 `tmp/scanMfBlockLength/<stableRunKey>/`；中断后用同一配置直接重跑可恢复已完成 block，成功构造 `scanData` 后默认清理 checkpoint 目录。
 
 ### 2. 再看 CP/IP 与 known/unknown 的论文主线图
 
@@ -124,8 +127,8 @@ clear; close all; clc;
 - 作用：观察 subset bank 覆盖率；这是当前 curated / random bank 系统比较入口，不再另建 `scanMfCuratedSubsetScheduleSearch.m`。
 - 用途：判断 `curated3`、`curated4`、`random1` 与 full rescue bank 是否覆盖 hard case，random/rescue 是否有必要。
 - 默认策略：默认 `strategyPreset="cheapScreen"`，只跑 `curated12`、`curated123`、`curated124`、`curated1234`、`curated12_random1`、`fullRescue`；需要完整二轮确认时把 `strategyPreset` 改为 `"full"`，再比较 `curated12_random{1,2,4}`、`curated123_random1`、`curated124_random1` 等更重组合。
-- 主要输出：`aggregateTable`、`scanTable`、`candidateTable`、`toothHistogramTable`、subset label selected/evaluated 统计、`tooth=0` 命中率、`|toothIdx|<=1` 近邻命中率、相对 `curated12` 的 easy-case damage、候选评估成本、angle RMSE/P95/max、tooth 分布图与 runtime Pareto 图。
-- 评价口径：truth 只用于离线评价 schedule/bank 覆盖，不进入 selector；`easyDamageRate` 以 `curated12` 的 easy seed 为基准，衡量扩大 bank 是否误伤已经健康的样本。该 scan 复用 `runSimpleDynamicFlowReplayBatch` 以保持 repeat 构造、static seed 和 simple-flow 执行与 replay 完全一致；命令行只打印 aggregate、checkpoint summary 与预览，完整候选表、repeat 表、checkpoint summary 和 histogram 保存在 `scanData`。
+- 主要输出：`aggregateTable`、`scanTable`、`candidateTable`、`candidateSeedCoverageTable`、`transitionTable`、`toothHistogramTable`、subset label selected/evaluated 统计、integer-tooth / residual-aware strict 命中率、same-tooth residual fail、相对 `curated12` 的 rescue/damage transition、候选是否存在但未被 winner 接住、候选评估成本、angle RMSE/P95/max 和 tooth 分布图。
+- 评价口径：truth 只用于离线评价 schedule/bank 覆盖，不进入 selector；`truthToothIndexHitRate` 只看整数齿，`truthToothHitRate` 继续表示 residual-aware strict 命中，`sameToothResidualFailRate` 单独记录“已回到 tooth=0 但 residual 未收好”的样本；`transitionTable` 按 seed 对比 `curated12` 到其它 strategy 的 rescue / damage 类型；`candidateSeedCoverageTable` 用于判断好候选是否存在但没被 selector/adoption 接住。该 scan 复用 `runSimpleDynamicFlowReplayBatch` 以保持 repeat 构造、static seed 和 simple-flow 执行与 replay 完全一致；命令行只打印 aggregate、checkpoint summary 与预览，完整候选表、transition、candidate coverage、repeat 表、checkpoint summary 和 histogram 保存在 `scanData`。
 - 加速口径：默认使用 cheap screen，不在第一轮直接跑完整 bank；若 cheap screen 中 `curated123` / `curated124` 已接近 `fullRescue`，后续只对 top 2-3 个 strategy 增大 repeat 做 confirmation，不继续扩大 random 数量。
 - checkpoint：默认开启 per-strategy repeat checkpoint，路径为仓库根目录 `tmp/scanMfSubsetBankCoverage/<stableRunKey>/`。中断后可用同一配置直接重跑恢复；成功构造 `scanData` 后默认清理 checkpoint 目录，失败时 `catch` 打印保留路径。
 
