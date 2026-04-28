@@ -27,7 +27,13 @@ cleanupReport = cleanupRunArtifacts(runDir, struct( ...
 
 if opt.removeEmptyParent
   parentReport = localCleanupEmptyRunParent(runState, runDir, opt);
-  cleanupReport = [cleanupReport(:); parentReport(:)];
+  if ~isempty(parentReport)
+    if isempty(cleanupReport)
+      cleanupReport = parentReport(:);
+    else
+      cleanupReport = [cleanupReport(:); parentReport(:)];
+    end
+  end
 end
 end
 

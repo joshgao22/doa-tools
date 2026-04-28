@@ -1,8 +1,8 @@
 function [runPolish, gateReason, gateDiag] = shouldRunSimpleVerySmallDoaPolish(satMode, periodicDoaSeed, selectedReplaySummary, flowOpt)
 %SHOULDRUNSIMPLEVERYSMALLDOAPOLISH Gate the simple-flow hard-case DoA polish.
 % Keep the very-small DoA polish on a strict bypass. It should only run on
-% same-tooth hard cases where fd has already stabilized but a small DoA
-% disagreement still remains between trusted frozen seeds.
+% decision-safe hard cases where estimator-internal fd health is stable but
+% a small DoA disagreement remains between trusted frozen seeds.
 
 arguments
   satMode (1,1) string {mustBeMember(satMode,["single","multi"])}
@@ -20,8 +20,6 @@ gateDiag.subsetRankMarginRelative = localGetFieldOrDefault(periodicDoaSeed, 'sub
 gateDiag.frozenDoaDisagreementDeg = localGetFieldOrDefault(periodicDoaSeed, 'frozenDoaDisagreementDeg', NaN);
 gateDiag.frozenRelativeObjGap = localGetFieldOrDefault(periodicDoaSeed, 'frozenRelativeObjGap', NaN);
 gateDiag.selectedReplayHealthBucket = localBuildPeriodicHealthBucket(selectedReplaySummary);
-gateDiag.selectedReplayToothIdx = localGetFieldOrDefault(selectedReplaySummary, 'toothIdx', NaN);
-gateDiag.selectedReplayToothResidualHz = abs(localGetFieldOrDefault(selectedReplaySummary, 'toothResidualHz', inf));
 if satMode ~= "multi"
   gateReason = "single-mode";
   return;
@@ -36,15 +34,6 @@ if string(gateDiag.selectedReplaySeedSource) ~= "selected-subset"
 end
 if ~logical(localGetFieldOrDefault(selectedReplaySummary, 'isResolved', false))
   gateReason = "selected-replay-unresolved";
-  return;
-end
-if ~(isfinite(gateDiag.selectedReplayToothIdx) && abs(gateDiag.selectedReplayToothIdx) == 0)
-  gateReason = "selected-replay-not-central-tooth";
-  return;
-end
-maxToothResidualHz = localGetFieldOrDefault(flowOpt, 'periodicRefinePolishMaxSelectedToothResidualHz', 50);
-if ~(isfinite(gateDiag.selectedReplayToothResidualHz) && gateDiag.selectedReplayToothResidualHz <= maxToothResidualHz)
-  gateReason = "selected-replay-tooth-residual-too-large";
   return;
 end
 if localBuildPeriodicHealthBucket(selectedReplaySummary) > localGetFieldOrDefault(flowOpt, 'periodicRefinePolishMaxHealthBucket', 0)

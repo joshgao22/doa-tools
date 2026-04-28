@@ -1,12 +1,13 @@
-function [caseUse, periodicDoaSeed, periodicCaseCell, periodicSummaryCell] = selectSimpleDynamicFinalCase( ...
+function [caseUse, periodicDoaSeed, periodicCaseCell, periodicSummaryCell, periodicDecisionSummaryCell] = selectSimpleDynamicFinalCase( ...
   displayName, satMode, periodicFixture, selectedSubsetCase, subsetTrustDiag, toothStepHz, ...
-  seedCandidateList, periodicCaseCell, periodicSummaryCell, pilotWave, carrierFreq, ...
+  seedCandidateList, periodicCaseCell, periodicSummaryCell, periodicDecisionSummaryCell, pilotWave, carrierFreq, ...
   sampleRate, optVerbose, flowOpt, debugTruth, truthUse)
 %SELECTSIMPLEDYNAMICFINALCASE Select the final same-tooth replay winner.
 % This helper keeps the simplified flow entry focused on orchestration. It
 % chooses between frozen replay candidates, optionally runs one very-small
 % DoA polish, and returns the final flow case together with compact replay
-% diagnostics.
+% diagnostics. Selection and polish gates use decision summaries built
+% without truth; truth-aware summaries are only kept for reporting.
 
 arguments
   displayName (1,1) string
@@ -18,6 +19,7 @@ arguments
   seedCandidateList struct
   periodicCaseCell cell
   periodicSummaryCell cell
+  periodicDecisionSummaryCell cell
   pilotWave
   carrierFreq (1,1) double
   sampleRate (1,1) double
@@ -27,46 +29,52 @@ arguments
   truthUse (1,1) struct
 end
 
-scoreMat = nan(numel(periodicSummaryCell), 18);
-for iCand = 1:numel(periodicSummaryCell)
-  scoreMat(iCand, :) = buildDynamicSelectionScoreVector(periodicSummaryCell{iCand});
+scoreMat = nan(numel(periodicDecisionSummaryCell), 18);
+for iCand = 1:numel(periodicDecisionSummaryCell)
+  scoreMat(iCand, :) = buildDynamicSelectionScoreVector(periodicDecisionSummaryCell{iCand});
 end
 [~, orderIdx] = sortrows(scoreMat, 1:size(scoreMat, 2));
 bestFrozenIdx = orderIdx(1);
 runnerUpFrozenIdx = localGetRunnerUpIndex(orderIdx);
-periodicDoaSeed = localBuildPeriodicSeedDiag(seedCandidateList, periodicCaseCell, periodicSummaryCell, ...
+periodicDoaSeed = localBuildPeriodicSeedDiag(seedCandidateList, periodicCaseCell, periodicDecisionSummaryCell, ...
   bestFrozenIdx, runnerUpFrozenIdx, subsetTrustDiag);
 
 [selectedReplayIdx, replaySelectionReason] = localResolvePeriodicReplayWinner(seedCandidateList, periodicDoaSeed, flowOpt);
 selectedReplaySummary = periodicSummaryCell{selectedReplayIdx};
+selectedReplayDecisionSummary = periodicDecisionSummaryCell{selectedReplayIdx};
 periodicDoaSeed.selectedReplayIdx = selectedReplayIdx;
 periodicDoaSeed.selectedReplaySeedSource = string(seedCandidateList(selectedReplayIdx).seedSource);
 periodicDoaSeed.selectedReplayTag = string(seedCandidateList(selectedReplayIdx).startTag);
 periodicDoaSeed.selectedReplaySelectionReason = string(replaySelectionReason);
 periodicDoaSeed.selectedReplaySummary = selectedReplaySummary;
-periodicDoaSeed.selectedReplayToothIdx = localGetFieldOrDefault(selectedReplaySummary, 'toothIdx', NaN);
-periodicDoaSeed.selectedReplayToothResidualHz = localGetFieldOrDefault(selectedReplaySummary, 'toothResidualHz', NaN);
-periodicDoaSeed.selectedReplayHealthBucket = localBuildPeriodicHealthBucket(selectedReplaySummary);
+periodicDoaSeed.selectedReplayDecisionSummary = selectedReplayDecisionSummary;
+periodicDoaSeed.selectedReplayTruthToothIdx = localGetFieldOrDefault(selectedReplaySummary, 'truthToothIdx', ...
+  localGetFieldOrDefault(selectedReplaySummary, 'toothIdx', NaN));
+periodicDoaSeed.selectedReplayTruthToothResidualHz = localGetFieldOrDefault(selectedReplaySummary, 'truthToothResidualHz', ...
+  localGetFieldOrDefault(selectedReplaySummary, 'toothResidualHz', NaN));
+periodicDoaSeed.selectedReplayHealthBucket = localBuildPeriodicHealthBucket(selectedReplayDecisionSummary);
 
 caseUse = periodicCaseCell{selectedReplayIdx};
 periodicDoaSeed.usedDoaPolish = false;
 [runPolish, polishGateReason, polishGateDiag] = shouldRunSimpleVerySmallDoaPolish( ...
-  satMode, periodicDoaSeed, selectedReplaySummary, flowOpt);
+  satMode, periodicDoaSeed, selectedReplayDecisionSummary, flowOpt);
 periodicDoaSeed.polishGateReason = string(polishGateReason);
 periodicDoaSeed.polishGateDiag = polishGateDiag;
 if runPolish
-  [polishCase, polishSummary] = localRunPeriodicPolishCandidate( ...
+  [polishCase, polishSummary, polishDecisionSummary] = localRunPeriodicPolishCandidate( ...
     displayName, periodicFixture, caseUse, periodicDoaSeed.selectedReplaySeedSource, ...
     periodicDoaSeed.selectedReplayTag, pilotWave, carrierFreq, sampleRate, ...
     optVerbose, flowOpt, debugTruth, toothStepHz, truthUse);
   periodicCaseCell{end + 1, 1} = polishCase; %#ok<AGROW>
   periodicSummaryCell{end + 1, 1} = polishSummary; %#ok<AGROW>
-  candidateScore = buildDynamicSelectionScoreVector(polishSummary);
-  selectedScore = buildDynamicSelectionScoreVector(selectedReplaySummary);
+  periodicDecisionSummaryCell{end + 1, 1} = polishDecisionSummary; %#ok<AGROW>
+  candidateScore = buildDynamicSelectionScoreVector(polishDecisionSummary);
+  selectedScore = buildDynamicSelectionScoreVector(selectedReplayDecisionSummary);
   choosePolish = localIsScoreBetter(candidateScore, selectedScore);
   periodicDoaSeed.usedDoaPolish = true;
   periodicDoaSeed.polishSelected = logical(choosePolish);
   periodicDoaSeed.polishCandidateSummary = polishSummary;
+  periodicDoaSeed.polishCandidateDecisionSummary = polishDecisionSummary;
   if choosePolish
     caseUse = polishCase;
     periodicDoaSeed.selectedReplaySeedSource = string(localGetFieldOrDefault(polishSummary, 'seedSource', periodicDoaSeed.selectedReplaySeedSource));
@@ -81,7 +89,7 @@ else
 end
 end
 
-function [caseUse, summaryUse] = localRunPeriodicPolishCandidate(displayName, periodicFixture, selectedReplayCase, ...
+function [caseUse, summaryUse, decisionSummary] = localRunPeriodicPolishCandidate(displayName, periodicFixture, selectedReplayCase, ...
   replaySeedSource, replayTag, pilotWave, carrierFreq, sampleRate, optVerbose, ...
   flowOpt, debugTruth, toothStepHz, truthUse)
 fdRangeUse = [selectedReplayCase.estResult.fdRefEst - flowOpt.periodicRefineFdHalfWidthHz, ...
@@ -111,10 +119,15 @@ caseUse = runDynamicDoaDopplerCase(displayName, localInferSatMode(viewUse), ...
   viewUse, truthUse, pilotWave, carrierFreq, sampleRate, ...
   fdRangeUse, fdRateRangeUse, optVerbose, dynOpt, false, debugTruth, initCandidate);
 summaryUse = buildDynamicUnknownCaseSummary(caseUse, toothStepHz, truthUse);
+decisionSummary = buildDynamicUnknownCaseSummary(caseUse, toothStepHz, struct());
 summaryUse.seedSource = string(replaySeedSource) + "-polish";
 summaryUse.startTag = "periodic-polish-" + string(replaySeedSource);
 summaryUse.replayBaseTag = string(replayTag);
 summaryUse.subsetDriftFromStaticDeg = NaN;
+decisionSummary.seedSource = summaryUse.seedSource;
+decisionSummary.startTag = summaryUse.startTag;
+decisionSummary.replayBaseTag = summaryUse.replayBaseTag;
+decisionSummary.subsetDriftFromStaticDeg = NaN;
 end
 
 function viewUse = localGetViewUse(periodicFixture)

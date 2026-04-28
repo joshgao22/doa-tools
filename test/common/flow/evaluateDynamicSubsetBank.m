@@ -76,9 +76,10 @@ function tf = localShouldEarlyStopSubsetBank(subsetFixtureCell, subsetSummaryCel
 %LOCALSHOULDEARLYSTOPSUBSETBANK Skip late random fallback when curated bank is already healthy.
 % Fast statistics often append one or more random-labeled subset fixtures as
 % a last-resort tooth selector. When the deterministic curated bank has
-% already produced one trusted central-tooth candidate with healthy
-% non-reference phase metrics, evaluating the trailing random fallback
-% rarely changes the winner but still costs another full CP-U solve.
+% already produced one trusted candidate with healthy
+% non-reference phase metrics and a clear objective margin, evaluating the
+% trailing random fallback rarely changes the winner but still costs another
+% full CP-U solve. Do not use truth-relative tooth diagnostics here.
 
 tf = false;
 if numEval <= 0
@@ -106,21 +107,58 @@ if ~isTrusted || ~isfinite(bestIdx)
   return;
 end
 bestSummary = summaryEvalCell{bestIdx};
-toothIdx = localGetFieldOrDefault(bestSummary, 'toothIdx', NaN);
-toothResidualHz = abs(localGetFieldOrDefault(bestSummary, 'toothResidualHz', inf));
-if ~(isfinite(toothIdx) && abs(toothIdx) == 0)
-  return;
-end
-if ~(isfinite(toothResidualHz) && toothResidualHz <= ...
-    localGetFieldOrDefault(flowOpt, 'subsetRandomEarlyStopMaxToothResidualHz', 20))
-  return;
-end
 if localBuildSubsetHealthBucket(bestSummary) > ...
     localGetFieldOrDefault(flowOpt, 'subsetRandomEarlyStopMaxHealthBucket', 0)
   return;
 end
+if ~localHasReliableSubsetMargin(summaryEvalCell, bestIdx, flowOpt)
+  return;
+end
 
 tf = true;
+end
+
+
+function tf = localHasReliableSubsetMargin(summaryCell, bestIdx, flowOpt)
+%LOCALHASRELIABLESUBSETMARGIN Check a no-truth margin before skipping random fallback.
+
+tf = false;
+if numel(summaryCell) < 2 || ~isfinite(bestIdx) || bestIdx < 1 || bestIdx > numel(summaryCell)
+  return;
+end
+bestObj = localGetFieldOrDefault(summaryCell{bestIdx}, 'finalObj', NaN);
+if ~isfinite(bestObj)
+  return;
+end
+runnerObj = inf;
+for iSummary = 1:numel(summaryCell)
+  if iSummary == bestIdx
+    continue;
+  end
+  objUse = localGetFieldOrDefault(summaryCell{iSummary}, 'finalObj', NaN);
+  if isfinite(objUse)
+    runnerObj = min(runnerObj, objUse);
+  end
+end
+if ~isfinite(runnerObj)
+  return;
+end
+relGap = localCalcRelativeObjGap(bestObj, runnerObj);
+minMargin = localGetFieldOrDefault(flowOpt, 'subsetRandomEarlyStopMinRelativeMargin', ...
+  localGetFieldOrDefault(flowOpt, 'periodicRefineSubsetTrustMinRelativeMargin', 1e-4));
+tf = isfinite(relGap) && relGap >= minMargin;
+end
+
+
+function relGap = localCalcRelativeObjGap(objA, objB)
+%LOCALCALCRELATIVEOBJGAP Compute a scale-normalized objective gap.
+
+relGap = NaN;
+if ~isfinite(objA) || ~isfinite(objB)
+  return;
+end
+scale = max([1, abs(objA), abs(objB)]);
+relGap = abs(objA - objB) / scale;
 end
 
 

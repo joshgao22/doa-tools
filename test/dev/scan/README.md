@@ -60,8 +60,9 @@ clear; close all; clc;
 #### `scanMfCpIpPerfMap.m`
 
 - 作用：扫描 CP/IP 在 SNR 和 frame count 上的性能。
-- 用途：形成 CP/IP 性能图候选。
-- 主要输出：RMSE / hit-rate surface、summary table。
+- 用途：形成 CP/IP 性能图候选；只比较同一 static seed 下 CP-K / CP-U 与 IP-K / IP-U 的估计性能，不承担 dynamic flow 正确性验证；不同 frame count 使用本脚本内的 frame-count-aware subset schedule，避免复用 10 帧 curated bank 时越出当前 master window。
+- 主要输出：`perfTable`、`aggregateTable`、轻量 `repeatOutCell` 与可重画的 `plotData`；命令行只打印 aggregate table，完整逐 repeat 表留在 `scanData`。
+- 存储口径：默认不创建 tmp、不保存图片、不保存 snapshot；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。
 
 #### `scanMfKnownUnknownInformationLoss.m`
 
@@ -130,10 +131,10 @@ clear; close all; clc;
 
 - 作用：观察 subset bank / structured nonuniform schedule 覆盖率；这是当前 legacy curated、random rescue 与 staggered / sparse-ruler / coprime-like schedule 的系统比较入口，不再另建 `scanMfCuratedSubsetScheduleSearch.m`。
 - 用途：判断经验 `curated` 是否仍有价值，同时快速筛选更有信号处理解释的非均匀选帧 schedule 是否能生成更好的 Doppler tooth candidate。
-- 默认策略：默认 `strategyPreset="scheduleDesign"`，先跑 `curated12`、`curated124`、`curated12_random1`、`fullRescue` 和 `staggeredA / sparseRulerA / coprime34A`；需要只复查当前核心 bank 时改为 `"diagnosticCore"`，需要 legacy cheap screen 时改为 `"cheapScreen"`，完整 random 二轮确认时改为 `"full"`。
+- 默认策略：默认 `strategyPreset="scheduleComboQuick"`，只跑 `curated12`、`curated124`、`structuredCombo` 和 `curated12_structured`，用于快速验证 structured 多 schedule 组合是否比单 schedule 更有价值；需要保留 `fullRescue` 上限和 `curated124_structured` 时改为 `"scheduleComboConfirm"`，需要复查单条 structured schedule 时改为 `"scheduleDesign"`，只复查旧核心 bank 时改为 `"diagnosticCore"`，完整 random 二轮确认时改为 `"full"`。
 - 主要输出：`aggregateTable`、`scanTable`、`candidateTable`、`candidateSeedCoverageTable`、`consensusTable`、`consensusAggregateTable`、`scheduleFeatureTable`、`transitionTable`、`toothHistogramTable`、subset label selected/evaluated 统计、integer-tooth / residual-aware strict 命中率、same-tooth residual fail、相对 `curated12` 的 rescue/damage transition、候选是否存在但未被 winner 接住、候选评估成本、angle RMSE/P95/max、schedule lag feature 和 tooth 分布图。
 - 评价口径：truth 只用于离线评价 schedule/bank 覆盖，不进入 selector；`truthToothIndexHitRate` 只看整数齿，`truthToothHitRate` 继续表示 residual-aware strict 命中，`sameToothResidualFailRate` 单独记录“已回到 tooth=0 但 residual 未收好”的样本；`transitionTable` 按 seed 对比 `curated12` 到其它 strategy 的 rescue / damage 类型；`candidateSeedCoverageTable` 用于判断好候选是否存在但没被 selector/adoption 接住；`consensusTable` 只做 no-truth anchor-group diagnostic，使用 static-anchor residual soft penalty，不再用 residual hard gate 直接丢弃候选 group。该 scan 复用 `runSimpleDynamicFlowReplayBatch` 以保持 repeat 构造、static seed 和 simple-flow 执行与 replay 完全一致；命令行只打印 aggregate、schedule feature、checkpoint summary 与预览，完整候选表、transition、candidate coverage、repeat 表、checkpoint summary 和 histogram 保存在 `scanData`。
-- 加速口径：默认使用 schedule design quick screen，不在第一轮直接扩展更多 random；若 structured schedule 不能超过 `curated124` 或 `fullRescue` 的候选覆盖，应优先改 top-K / validation selector，而不是继续堆随机 schedule。
+- 加速口径：默认使用 schedule combo quick screen，不再第一轮逐个跑所有 structured 单 schedule，也不默认跑 `fullRescue`；先看 `structuredCombo` 与 `curated12_structured` 是否改善 candidate coverage 和 consensus hit，只有有效时再用 `scheduleComboConfirm` 或 24 repeats 做确认。
 - checkpoint：默认开启 per-strategy repeat checkpoint，路径为仓库根目录 `tmp/scanMfSubsetBankCoverage/<stableRunKey>/`。中断后可用同一配置直接重跑恢复；成功构造 `scanData` 后默认清理 checkpoint 目录，失败时 `catch` 打印保留路径。
 
 #### `scanMfSubsetRankingLandscape.m`

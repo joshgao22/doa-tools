@@ -197,7 +197,8 @@
 ### `regressionMfSubsetSelectNoTruthLeak.m`
 
 - 唯一契约：subset selection 不能使用 truth leak。
-- 额外覆盖：same-tooth 内 phase-health gate 优先于 objective 的排序契约。
+- 重点检查：只改变 `angleErrDeg / fdRefErrHz / toothIdx / truthToothIdx` 等 truth-aware 字段时，selected subset 与 trust flag 必须完全不变。
+- 额外覆盖：phase-health gate 优先于 objective 的排序契约。
 - 不再另建重复的 same-tooth ranking regression。
 
 ### `regressionMfFastSubsetEscalation.m`
@@ -269,6 +270,7 @@
 
 - fast subset escalation 与 rescue gate 归 `regressionMfFastSubsetEscalation.m`。
 - 不另建只改名字的 random rescue regression。
+- curated3 / curated4 / random1 的性能和成本比较属于 scan，归 `test/dev/scan/scanMfSubsetBankCoverage.m`，不进入 regression。
 
 ### warm-anchor parfor
 

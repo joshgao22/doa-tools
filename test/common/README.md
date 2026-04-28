@@ -47,6 +47,12 @@
 - `runSimpleDynamicSubsetPeriodicFlow.m`
 - `evaluateDynamicSubsetBank.m`
 
+当前约束：
+
+- flow 决策必须使用 decision summary，只允许读取 objective、residual、health、candidate margin、DoA drift 等接收数据 / estimator 内部量；
+- truth-aware evaluation summary 只用于 replay / scan 表格和离线结果分析，`truthTooth*`、`toothIdx`、`fdRefErrHz`、`angleErrDeg` 等字段不能进入 selector、rescue gate 或 polish gate；
+- `runSimpleDynamicSubsetPeriodicFlow.m` 同时保存 `subsetDecisionSummaryCell / periodicDecisionSummaryCell` 与 truth-aware summary，前者用于决策，后者用于输出。
+
 不应包含：
 
 - 正式 objective evaluator；
@@ -113,7 +119,7 @@
 
 ### `replay/`
 
-负责 replay batch、header、finalize。
+负责 replay batch、flow-like scan batch、header、finalize。
 
 典型文件：
 
@@ -126,14 +132,14 @@
 使用边界：
 
 - 顶层 replay 是脚本，文件头固定为英文说明 + `clear; close all; clc;` + `Replay configuration`，默认参数写在配置 section；
-- common/replay helper 只负责 batch 执行、header、progressbar 和 checkpoint glue；checkpoint run 目录清理由 `test/common/flow/cleanupPerfTaskGridCheckpoint.m` 统一处理，replay 脚本不再维护私有 cleanup helper；固定单样本 replay 如果没有中间落盘需求，不创建 tmp，也不打印占位行；checkpoint/tmp 统一位于仓库根目录 `tmp/`；
-- 数据落盘由 replay 脚本的 `Data storage` section 调用 `saveExpSnapshot` 完成；
-- summary 与画图由 replay 脚本的 `Summary output and plotting` section 完成，且应只依赖 `replayData`；
+- common/replay helper 只负责 replay / scan 的 batch 执行、header、progressbar 和 checkpoint glue；checkpoint run 目录清理由 `test/common/flow/cleanupPerfTaskGridCheckpoint.m` 统一处理，replay / scan 脚本不再维护私有 cleanup helper；固定单样本 replay 或短 scan 如果没有中间落盘需求，不创建 tmp，也不打印占位行；checkpoint/tmp 统一位于仓库根目录 `tmp/`；
+- 数据落盘由 replay / scan 脚本的 `Data storage` section 调用 `saveExpSnapshot` 完成；
+- summary 与画图由 replay / scan 脚本的 `Summary output and plotting` section 完成，且应只依赖 `replayData` 或 `scanData`；
 - common/replay 不保存图片，也不维护具体 replay 的 plot helper。
 
 不应包含：
 
-- 具体 replay 的实验默认参数；
+- 具体 replay / scan 的实验默认参数；
 - regression contract；
 - 正式 estimator path；
 - 长期策略规则。
@@ -209,9 +215,9 @@
 
 ### `runSimpleDynamicFlowReplayBatch.m`
 
-- 作用：运行 replay 的小 MC repeat batch。
+- 作用：运行 replay / scan 共用的小 MC repeat batch。
 - 特点：支持外层 parfor、progressbar，以及可选 per-repeat checkpoint / resume。`progressbar` 只覆盖外层 repeat loop；并行时必须通过 `parallel.pool.DataQueue` 在 client 侧更新，worker 内不直接调用 `progressbar`。checkpoint `runState` 会记录 `runName`、`runKey`、`runDir` 与 cleanup 状态。
-- checkpoint：只在 replay 显式传入 `checkpointOpt.enable=true` 时启用；每个 repeat 保存一个 task 文件，manifest 校验 seed、SNR、contextOpt 和 flow signature；默认根目录为仓库根目录 `tmp/`。关闭 checkpoint 时不创建 tmp、不打印 checkpoint dir、不写空状态字段；恢复时只重跑缺失 task，成功后由 `cleanupPerfTaskGridCheckpoint` 清理 checkpoint run 目录；若脚本级 tmp 父目录已经为空，也由该 helper 删除该空父目录。
+- checkpoint：只在 replay / scan 显式传入 `checkpointOpt.enable=true` 时启用；每个 repeat 保存一个 task 文件，manifest 校验 seed、SNR、contextOpt 和 flow signature；默认根目录为仓库根目录 `tmp/`。关闭 checkpoint 时不创建 tmp、不打印 checkpoint dir、不写空状态字段；恢复时只重跑缺失 task，成功后由 `cleanupPerfTaskGridCheckpoint` 清理 checkpoint run 目录；若脚本级 tmp 父目录已经为空，也由该 helper 删除该空父目录。
 - 日志：进入 repeat loop 前默认打印紧凑 stage log 与耗时，覆盖 option resolve、shared context build、repeat mode、resume 进度和 enter parfor；这些不是 estimator verbose，不受 `optVerbose` 控制。
 - 不做：硬性 pass/fail assert。
 

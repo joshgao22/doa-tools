@@ -28,30 +28,31 @@ toothStepHz = localResolveToothStepHz(periodicFixture);
 [truthUse, debugTruth] = localResolveFlowRole(satMode, periodicFixture);
 
 stageTimer = tic;
-[subsetCaseCell, subsetSummaryCell, subsetRunTimeSec, useParfor] = localEvaluateSubsetBank( ...
+[subsetCaseCell, subsetSummaryCell, subsetDecisionSummaryCell, subsetRunTimeSec, useParfor] = localEvaluateSubsetBank( ...
   displayName, satMode, subsetFixtureCell, staticSeedCase, pilotWave, carrierFreq, ...
   sampleRate, optVerbose, flowOpt, debugTruth, truthUse, toothStepHz);
 stageTiming.subsetSelectSec = toc(stageTimer);
 
-[bestSubsetIdx, subsetTrusted, subsetSelectionReason] = selectBestDynamicSubsetSummary(subsetSummaryCell);
-subsetOrderIdx = localRankSubsetSummaryCell(subsetSummaryCell);
+[bestSubsetIdx, subsetTrusted, subsetSelectionReason] = selectBestDynamicSubsetSummary(subsetDecisionSummaryCell);
+subsetOrderIdx = localRankSubsetSummaryCell(subsetDecisionSummaryCell);
 selectedSubsetFixture = subsetFixtureCell{bestSubsetIdx};
 selectedSubsetCase = subsetCaseCell{bestSubsetIdx};
 selectedSubsetSummary = subsetSummaryCell{bestSubsetIdx};
+selectedSubsetDecisionSummary = subsetDecisionSummaryCell{bestSubsetIdx};
 subsetCandidateTable = localBuildSubsetCandidateTable(subsetSummaryCell, subsetOrderIdx);
-subsetTrustDiag = localBuildSubsetTrustDiag(subsetSummaryCell, subsetOrderIdx, subsetTrusted, subsetSelectionReason);
+subsetTrustDiag = localBuildSubsetTrustDiag(subsetDecisionSummaryCell, subsetOrderIdx, subsetTrusted, subsetSelectionReason);
 
 stageTimer = tic;
 fdRangePeriodicRefine = [selectedSubsetCase.estResult.fdRefEst - flowOpt.periodicRefineFdHalfWidthHz, ...
   selectedSubsetCase.estResult.fdRefEst + flowOpt.periodicRefineFdHalfWidthHz];
 fdRateRangePeriodicRefine = [selectedSubsetCase.estResult.fdRateEst - flowOpt.periodicRefineFdRateHalfWidthHzPerSec, ...
   selectedSubsetCase.estResult.fdRateEst + flowOpt.periodicRefineFdRateHalfWidthHzPerSec];
-[seedCandidateList, periodicCaseCell, periodicSummaryCell] = runSimplePeriodicRefineCandidates( ...
+[seedCandidateList, periodicCaseCell, periodicSummaryCell, periodicDecisionSummaryCell] = runSimplePeriodicRefineCandidates( ...
   displayName, satMode, periodicFixture, staticSeedCase, selectedSubsetCase, ...
   toothStepHz, pilotWave, carrierFreq, sampleRate, optVerbose, flowOpt, debugTruth, truthUse);
-[finalCase, periodicDoaSeed, periodicCaseCell, periodicSummaryCell] = selectSimpleDynamicFinalCase( ...
+[finalCase, periodicDoaSeed, periodicCaseCell, periodicSummaryCell, periodicDecisionSummaryCell] = selectSimpleDynamicFinalCase( ...
   displayName, satMode, periodicFixture, selectedSubsetCase, subsetTrustDiag, toothStepHz, ...
-  seedCandidateList, periodicCaseCell, periodicSummaryCell, pilotWave, carrierFreq, ...
+  seedCandidateList, periodicCaseCell, periodicSummaryCell, periodicDecisionSummaryCell, pilotWave, carrierFreq, ...
   sampleRate, optVerbose, flowOpt, debugTruth, truthUse);
 periodicCandidateTable = localBuildPeriodicCandidateTable(periodicSummaryCell);
 finalSummary = buildDynamicUnknownCaseSummary(finalCase, toothStepHz, truthUse);
@@ -64,12 +65,14 @@ flow.displayName = displayName;
 flow.satMode = satMode;
 flow.caseSubsetCell = subsetCaseCell;
 flow.subsetSummaryCell = subsetSummaryCell;
+flow.subsetDecisionSummaryCell = subsetDecisionSummaryCell;
 flow.subsetRunTimeSec = subsetRunTimeSec;
 flow.bestSubsetIdx = bestSubsetIdx;
 flow.selectedSubsetLabel = string(localGetFieldOrDefault(selectedSubsetFixture, 'subsetLabel', "subset" + string(bestSubsetIdx)));
 flow.selectedSubsetOffsets = reshape(localGetFieldOrDefault(selectedSubsetFixture, 'subsetOffsetIdx', []), 1, []);
 flow.selectedSubsetCase = selectedSubsetCase;
 flow.selectedSubsetSummary = selectedSubsetSummary;
+flow.selectedSubsetDecisionSummary = selectedSubsetDecisionSummary;
 flow.subsetCandidateTable = subsetCandidateTable;
 flow.subsetTrustDiag = subsetTrustDiag;
 flow.subsetSelectionReason = string(localGetFieldOrDefault(subsetTrustDiag, 'selectionReason', "unknown"));
@@ -79,6 +82,7 @@ flow.fdRateRangePeriodicRefine = fdRateRangePeriodicRefine;
 flow.periodicDoaSeed = periodicDoaSeed;
 flow.periodicCaseCell = periodicCaseCell;
 flow.periodicSummaryCell = periodicSummaryCell;
+flow.periodicDecisionSummaryCell = periodicDecisionSummaryCell;
 flow.periodicCandidateTable = periodicCandidateTable;
 flow.caseFinal = finalCase;
 flow.finalSummary = finalSummary;
@@ -230,6 +234,7 @@ finalResidualNorm = nan(numCase, 1);
 runTimeMs = nan(numCase, 1);
 healthBucket = nan(numCase, 1);
 toothIdx = nan(numCase, 1);
+toothResidualHz = nan(numCase, 1);
 for iCase = 1:numCase
   summaryUse = summaryCell{iCase};
   subsetLabel(iCase) = string(localGetFieldOrDefault(summaryUse, 'subsetLabel', "subset" + string(iCase)));
@@ -240,11 +245,12 @@ for iCase = 1:numCase
   runTimeMs(iCase) = localGetFieldOrDefault(summaryUse, 'runTimeMs', NaN);
   healthBucket(iCase) = localBuildPeriodicHealthBucket(summaryUse);
   toothIdx(iCase) = localGetFieldOrDefault(summaryUse, 'toothIdx', NaN);
+  toothResidualHz(iCase) = localGetFieldOrDefault(summaryUse, 'toothResidualHz', NaN);
 end
 rankVec = nan(numCase, 1);
 rankVec(orderIdx) = (1:numCase).';
-tableOut = table(rankVec, subsetLabel, toothIdx, healthBucket, fdRefEst, fdRateEst, finalObj, finalResidualNorm, runTimeMs, ...
-  'VariableNames', {'rank', 'subsetLabel', 'toothIdx', 'healthBucket', 'fdRefEstHz', 'fdRateEstHzPerSec', 'finalObj', 'finalResidualNorm', 'runTimeMs'});
+tableOut = table(rankVec, subsetLabel, toothIdx, toothResidualHz, healthBucket, fdRefEst, fdRateEst, finalObj, finalResidualNorm, runTimeMs, ...
+  'VariableNames', {'rank', 'subsetLabel', 'toothIdx', 'toothResidualHz', 'healthBucket', 'fdRefEstHz', 'fdRateEstHzPerSec', 'finalObj', 'finalResidualNorm', 'runTimeMs'});
 end
 
 function tableOut = localBuildPeriodicCandidateTable(summaryCell)
@@ -274,7 +280,7 @@ tableOut = table(rankVec, seedSource, startTag, fdRefEst, fdRateEst, finalObj, f
   'VariableNames', {'rank', 'seedSource', 'startTag', 'fdRefEstHz', 'fdRateEstHzPerSec', 'finalObj', 'finalResidualNorm', 'runTimeMs'});
 end
 
-function [subsetCaseCell, subsetSummaryCell, subsetRunTimeSec, useParfor] = localEvaluateSubsetBank( ...
+function [subsetCaseCell, subsetSummaryCell, subsetDecisionSummaryCell, subsetRunTimeSec, useParfor] = localEvaluateSubsetBank( ...
   displayName, satMode, subsetFixtureCell, staticSeedCase, pilotWave, carrierFreq, ...
   sampleRate, optVerbose, flowOpt, debugTruth, truthUse, toothStepHz)
 
@@ -282,15 +288,32 @@ runSubsetCaseFn = @(fixtureUse, pilotWaveUse, carrierFreqUse, sampleRateUse, opt
   localRunSubsetUnknownCase(displayName + "-subset", satMode, fixtureUse, staticSeedCase, ...
     pilotWaveUse, carrierFreqUse, sampleRateUse, optVerboseUse, flowOptUse, debugTruth);
 buildSummaryFn = @(caseUse, truthLocal, toothStepLocal) ...
-  buildDynamicUnknownCaseSummary(caseUse, toothStepLocal, truthLocal);
+  buildDynamicUnknownCaseSummary(caseUse, toothStepLocal, struct());
 subsetSeedInfo = struct();
-[subsetCaseCell, subsetSummaryCell, subsetRunTimeSec] = evaluateDynamicSubsetBank( ...
+[subsetCaseCell, subsetDecisionSummaryCell, subsetRunTimeSec] = evaluateDynamicSubsetBank( ...
   subsetFixtureCell, pilotWave, carrierFreq, sampleRate, optVerbose, flowOpt, ...
   [NaN, NaN], [NaN, NaN], subsetSeedInfo, truthUse, toothStepHz, ...
   runSubsetCaseFn, buildSummaryFn);
+subsetSummaryCell = localBuildSubsetEvalSummaryCell(subsetCaseCell, subsetFixtureCell, toothStepHz);
 useParfor = localShouldUseSubsetParfor(flowOpt.parallelOpt, numel(subsetCaseCell));
 end
 
+
+
+function summaryCell = localBuildSubsetEvalSummaryCell(caseCell, subsetFixtureCell, toothStepHz)
+%LOCALBUILDSUBSETEVALSUMMARYCELL Build truth-aware summaries for reporting only.
+
+numCase = numel(caseCell);
+summaryCell = cell(numCase, 1);
+for iCase = 1:numCase
+  fixtureUse = subsetFixtureCell{iCase};
+  summaryCell{iCase} = buildDynamicUnknownCaseSummary(caseCell{iCase}, toothStepHz, fixtureUse.truth);
+  summaryCell{iCase}.subsetLabel = string(localGetFieldOrDefault(fixtureUse, ...
+    'subsetLabel', "subset" + string(iCase)));
+  summaryCell{iCase}.subsetOffsetIdx = reshape(localGetFieldOrDefault(fixtureUse, ...
+    'subsetOffsetIdx', []), 1, []);
+end
+end
 
 function orderIdx = localRankSubsetSummaryCell(summaryCell)
 numCase = numel(summaryCell);

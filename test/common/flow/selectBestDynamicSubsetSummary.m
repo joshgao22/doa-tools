@@ -1,5 +1,5 @@
 function [bestIdx, isTrusted, reasonText] = selectBestDynamicSubsetSummary(summaryCell)
-%SELECTBESTDYNAMICSUBSETSUMMARY Select one subset using tooth-first, truth-free scores.
+%SELECTBESTDYNAMICSUBSETSUMMARY Select one subset using no-truth scores.
 
 arguments
   summaryCell cell
@@ -23,74 +23,26 @@ bestIdx = orderIdx(1);
 bestSummary = summaryCell{bestIdx};
 isTrusted = logical(localGetFieldOrDefault(bestSummary, 'isResolved', false)) && ...
   isfinite(localGetFieldOrDefault(bestSummary, 'finalObj', NaN)) && ...
-  isfinite(localGetFieldOrDefault(bestSummary, 'finalResidualNorm', NaN));
-reasonText = "selected by tooth-first objective ranking";
+  isfinite(localGetFieldOrDefault(bestSummary, 'finalResidualNorm', NaN)) && ...
+  localBuildPhaseHealthBucket(bestSummary) <= 0;
+reasonText = "selected by no-truth health/objective ranking";
 end
 
 
 function scoreVec = localBuildSubsetSelectionScore(summary)
-%LOCALBUILDSUBSETSELECTIONSCORE Build one truth-free tooth-selection score.
-% Subset schedules primarily serve as tooth selectors. Keep tooth-first
-% ordering at the cross-tooth level only. Once multiple candidates already
-% land on the same tooth, ranking must avoid truth-aware residual proxies
-% and should first use coarse phase-health gates, then objective / residual,
-% and only then the lighter quality penalties.
+%LOCALBUILDSUBSETSELECTIONSCORE Build one truth-free subset-selection score.
+% Subset schedules are compared with estimator-internal diagnostics only.
+% Truth-relative tooth indices or residuals are intentionally ignored here;
+% those fields are reserved for replay / scan evaluation tables.
 
 isResolved = logical(localGetFieldOrDefault(summary, 'isResolved', false));
 resolvedPenalty = double(~isResolved);
 
-toothIdx = localGetFieldOrDefault(summary, 'toothIdx', NaN);
-if isempty(toothIdx)
-  toothIdx = NaN;
-else
-  toothIdx = toothIdx(1);
-end
-if ~isfinite(toothIdx)
-  toothIdxPenalty = inf;
-  absToothIdx = inf;
-else
-  toothIdxPenalty = double(abs(toothIdx) > 0);
-  absToothIdx = abs(toothIdx);
-end
+finalObj = localGetFiniteScalar(summary, 'finalObj', inf);
+finalResidualNorm = localGetFiniteScalar(summary, 'finalResidualNorm', inf);
+runTimeMs = localGetFiniteScalar(summary, 'runTimeMs', inf);
 
-finalObj = localGetFieldOrDefault(summary, 'finalObj', inf);
-if isempty(finalObj)
-  finalObj = inf;
-else
-  finalObj = finalObj(1);
-  if ~isfinite(finalObj)
-    finalObj = inf;
-  end
-end
-finalResidualNorm = localGetFieldOrDefault(summary, 'finalResidualNorm', inf);
-if isempty(finalResidualNorm)
-  finalResidualNorm = inf;
-else
-  finalResidualNorm = finalResidualNorm(1);
-  if ~isfinite(finalResidualNorm)
-    finalResidualNorm = inf;
-  end
-end
-runTimeMs = localGetFieldOrDefault(summary, 'runTimeMs', inf);
-if isempty(runTimeMs)
-  runTimeMs = inf;
-else
-  runTimeMs = runTimeMs(1);
-  if ~isfinite(runTimeMs)
-    runTimeMs = inf;
-  end
-end
-
-supportBucket = localBuildFloorBucket(summary, 'nonRefSupportRatioFloor', 0.90);
-fitBucket = localBuildFloorBucket(summary, 'nonRefFitRatioFloor', 0.80);
-consistencyBucket = localBuildFloorBucket(summary, 'nonRefConsistencyRatioFloor', 0.98);
-coherenceBucket = localBuildFloorBucket(summary, 'nonRefCoherenceFloor', 0.98);
-phaseRmsBucket = localBuildCeilBucket(summary, 'nonRefRmsPhaseResidRad', 0.01);
-phaseMaxBucket = localBuildCeilBucket(summary, 'nonRefMaxAbsPhaseResidRad', 0.02);
-negativeBucket = localBuildCeilBucket(summary, 'maxNonRefNegativeProjectionRatio', 0.10);
-phaseHealthBucket = supportBucket + fitBucket + consistencyBucket + ...
-  coherenceBucket + phaseRmsBucket + phaseMaxBucket + negativeBucket;
-
+phaseHealthBucket = localBuildPhaseHealthBucket(summary);
 supportPenalty = localGetQualityPenalty(summary, 'nonRefSupportRatioFloor');
 fitPenalty = localGetQualityPenalty(summary, 'nonRefFitRatioFloor');
 consistencyPenalty = localGetQualityPenalty(summary, 'nonRefConsistencyRatioFloor');
@@ -100,15 +52,27 @@ nonRefMaxAbsPhaseResidRad = localGetFinitePenalty(summary, 'nonRefMaxAbsPhaseRes
 negativePenalty = localGetFinitePenalty(summary, 'maxNonRefNegativeProjectionRatio', 0);
 negativePenalty = min(max(negativePenalty, 0), 1);
 
-% Keep tooth-first ordering only at the cross-tooth level. Once several
-% candidates have already landed on the same tooth, do not reintroduce
-% truth-aware tooth residuals. Use coarse phase-health gates first, then
-% objective / residual, and keep runtime only as the final tiebreaker.
-scoreVec = [resolvedPenalty, toothIdxPenalty, absToothIdx, phaseHealthBucket, ...
-  finalObj, finalResidualNorm, consistencyPenalty, coherencePenalty, ...
-  nonRefRmsPhaseResidRad, nonRefMaxAbsPhaseResidRad, supportPenalty, ...
-  fitPenalty, negativePenalty, runTimeMs];
+scoreVec = [resolvedPenalty, phaseHealthBucket, finalObj, finalResidualNorm, ...
+  consistencyPenalty, coherencePenalty, nonRefRmsPhaseResidRad, ...
+  nonRefMaxAbsPhaseResidRad, supportPenalty, fitPenalty, negativePenalty, ...
+  runTimeMs];
 end
+
+
+function bucket = localBuildPhaseHealthBucket(summary)
+%LOCALBUILDPHASEHEALTHBUCKET Count coarse non-reference phase-health failures.
+
+supportBucket = localBuildFloorBucket(summary, 'nonRefSupportRatioFloor', 0.90);
+fitBucket = localBuildFloorBucket(summary, 'nonRefFitRatioFloor', 0.80);
+consistencyBucket = localBuildFloorBucket(summary, 'nonRefConsistencyRatioFloor', 0.98);
+coherenceBucket = localBuildFloorBucket(summary, 'nonRefCoherenceFloor', 0.98);
+phaseRmsBucket = localBuildCeilBucket(summary, 'nonRefRmsPhaseResidRad', 0.01);
+phaseMaxBucket = localBuildCeilBucket(summary, 'nonRefMaxAbsPhaseResidRad', 0.02);
+negativeBucket = localBuildCeilBucket(summary, 'maxNonRefNegativeProjectionRatio', 0.10);
+bucket = supportBucket + fitBucket + consistencyBucket + coherenceBucket + ...
+  phaseRmsBucket + phaseMaxBucket + negativeBucket;
+end
+
 
 function value = localBuildFloorBucket(summary, fieldName, minValue)
 %LOCALBUILDFLOORBUCKET Build one coarse penalty bucket for lower-bounded metrics.
@@ -153,6 +117,21 @@ value = 1 - metricValue;
 end
 
 
+function value = localGetFiniteScalar(summary, fieldName, defaultValue)
+%LOCALGETFINITESCALAR Read one finite scalar used directly in the score.
+
+value = localGetFieldOrDefault(summary, fieldName, defaultValue);
+if isempty(value)
+  value = defaultValue;
+else
+  value = value(1);
+end
+if ~isfinite(value)
+  value = defaultValue;
+end
+end
+
+
 function value = localGetFinitePenalty(summary, fieldName, defaultValue)
 %LOCALGETFINITEPENALTY Read one finite scalar penalty metric.
 
@@ -178,7 +157,7 @@ value = defaultValue;
 if isstruct(dataStruct) && isfield(dataStruct, fieldName)
   rawValue = dataStruct.(fieldName);
   if ~isempty(rawValue)
-    value = rawValue(1);
+    value = rawValue;
   end
 end
 end

@@ -1,8 +1,9 @@
 function summary = buildDynamicUnknownCaseSummary(caseUse, toothStepHz, truth)
 %BUILDDYNAMICUNKNOWNCASESUMMARY Build one compact dynamic-case summary.
 % This helper keeps summary construction reusable outside the main bundle.
-% The truth struct is optional: when omitted, the summary remains selection-
-% safe and only contains internal objective / health metrics.
+% The truth struct is optional: when omitted, the summary remains decision-
+% safe and only contains internal objective / health metrics. Truth-relative
+% fields are evaluation-only aliases and must not be used by flow selectors.
 
 arguments
   caseUse (1,1) struct
@@ -62,15 +63,20 @@ end
 
 truthLatlon = reshape(localGetFieldOrDefault(truth, 'latlonTrueDeg', []), [], 1);
 if numel(truthLatlon) >= 2 && numel(summary.doaParamEst) >= 2 && all(isfinite(summary.doaParamEst(1:2)))
-  summary.angleErrDeg = calcLatlonAngleError(summary.doaParamEst(1:2).', truthLatlon(1:2));
+  summary.truthAngleErrDeg = calcLatlonAngleError(summary.doaParamEst(1:2).', truthLatlon(1:2));
+  summary.angleErrDeg = summary.truthAngleErrDeg;
 end
 truthFdRef = localGetFieldOrDefault(truth, 'fdRefTrueHz', localGetFieldOrDefault(truth, 'fdRefFit', NaN));
 truthFdRate = localGetFieldOrDefault(truth, 'fdRateTrueHzPerSec', localGetFieldOrDefault(truth, 'fdRateFit', NaN));
-summary.fdRefErrHz = summary.fdRefEst - truthFdRef;
-summary.fdRateErrHzPerSec = summary.fdRateEst - truthFdRate;
-if isfinite(toothStepHz) && toothStepHz > 0 && isfinite(summary.fdRefErrHz)
-  summary.toothIdx = round(summary.fdRefErrHz / toothStepHz);
-  summary.toothResidualHz = summary.fdRefErrHz - summary.toothIdx * toothStepHz;
+summary.truthFdRefErrHz = summary.fdRefEst - truthFdRef;
+summary.truthFdRateErrHzPerSec = summary.fdRateEst - truthFdRate;
+summary.fdRefErrHz = summary.truthFdRefErrHz;
+summary.fdRateErrHzPerSec = summary.truthFdRateErrHzPerSec;
+if isfinite(toothStepHz) && toothStepHz > 0 && isfinite(summary.truthFdRefErrHz)
+  summary.truthToothIdx = round(summary.truthFdRefErrHz / toothStepHz);
+  summary.truthToothResidualHz = summary.truthFdRefErrHz - summary.truthToothIdx * toothStepHz;
+  summary.toothIdx = summary.truthToothIdx;
+  summary.toothResidualHz = summary.truthToothResidualHz;
 end
 end
 
@@ -103,10 +109,15 @@ summary.nonRefCoherenceFloor = NaN;
 summary.nonRefMaxAbsPhaseResidRad = NaN;
 summary.nonRefRmsPhaseResidRad = NaN;
 summary.angleErrDeg = NaN;
+summary.truthAngleErrDeg = NaN;
 summary.fdRefErrHz = NaN;
 summary.fdRateErrHzPerSec = NaN;
 summary.toothIdx = NaN;
 summary.toothResidualHz = NaN;
+summary.truthFdRefErrHz = NaN;
+summary.truthFdRateErrHzPerSec = NaN;
+summary.truthToothIdx = NaN;
+summary.truthToothResidualHz = NaN;
 summary.stageTag = "";
 summary.startTag = "";
 summary.routeFamily = "";
