@@ -65,9 +65,12 @@ clear; close all; clc;
 
 #### `scanMfKnownUnknownInformationLoss.m`
 
-- 作用：扫描 known/unknown Doppler-rate 条件下的信息损失。
-- 用途：支撑 nuisance-rate 的 EFIM / information-loss 解释。
-- 主要输出：known/unknown performance gap、loss surface。
+- 作用：扫描 known/unknown Doppler-rate 条件下的 CRB / EFIM 信息损失。
+- 用途：支撑 nuisance-rate 的 EFIM / information-loss 解释，优先作为论文理论机制图候选，不承担 dynamic flow 正确性验证。
+- 主要输出：`lossTable`、`primarySliceTable`、`mainSliceTable`、`timeOriginSummaryTable`、`primaryDisplayTable`、`tfSensitivityDisplayTable`、`snrSensitivityDisplayTable`、`crbSummaryTable`、`fimDiagTable`、`fimDiagSummaryTable`、轻量 `crbBundleSummaryCell`。命令行只打印主 SNR + 主帧间隔 + 单一 time-origin class 下的 U/K rollback 百分比表、time-origin 分类提示和 FIM condition summary，完整表留在 `scanData`。
+- 图形口径：默认画 3 张聚焦图：主 SNR / 主帧间隔 / 单一 time-origin class 下 `fdRef CRB std rollback (%)` 随帧数变化、主帧间隔下 multi-sat `fdRef CRB std rollback (%)` 随 SNR 变化、主 SNR 下 multi-sat `fdRef CRB std rollback (%)` 对帧间隔的敏感性；不再画信息含义不清的混合 window-span 曲线。若手动加入奇数帧数，`centralRef` 样本会保留在 `scanData.lossTable`，但不会混入默认主趋势图，避免奇偶帧参考时刻不同导致的锯齿误读。
+- warning 口径：该 scan 会在调用 CRB bundle 时抑制预期内的 full-FIM ill-conditioned / pinv warning，并用 `fimDiagSummaryTable` 汇总 full-FIM 与 interest-FIM 的条件数；interest-FIM warning 不作为预期噪声压制。
+- 存储口径：默认只在 workspace 保留 `scanData`，不创建 tmp、不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。
 
 ### 3. 建立 comb / tooth 的 objective 证据
 
