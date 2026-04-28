@@ -13,6 +13,7 @@
 
 - `scanMfRegimeMapByWindow.md`：多帧窗口下 fixed-DoA / static-Doppler / first-order-Doppler regime 量级分析。
 - `scanMfBlockLength.md`：pilot block length 对 `fdRef` comb / alias tooth separation 与块内 Doppler-rate 量级的影响。
+- `scanMfCpIpTying.md`：CP/relaxed/IP phase tying 对 `fdRef` comb tooth 结构的影响。
 - `scanMfSubsetBankCoverage.md`：curated / random subset bank 的选齿覆盖与 runtime-cost scan。
 
 ## 单个结果文档结构
