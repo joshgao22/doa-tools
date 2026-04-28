@@ -15,6 +15,7 @@
 - `scanMfBlockLength.md`：pilot block length 对 `fdRef` comb / alias tooth separation 与块内 Doppler-rate 量级的影响。
 - `scanMfCpIpTying.md`：CP/relaxed/IP phase tying 对 `fdRef` comb tooth 结构的影响。
 - `scanMfCpIpPerfMap.md`：CP/IP 在 SNR 和 frame count 上的 full-flow 性能 scan；当前 snapshot 作为负结果，说明 full-flow 仍被 wrong-tooth / same-tooth basin 污染，不能直接作为 CP/IP 论文性能图。
+- `scanMfCpIpInToothPerfMap.md`：CP/IP 在 truth-centered in-tooth 条件下的受控性能 scan；当前 snapshot 显示 CP 稳定保住 center tooth、`fdRef` consistency 和 non-ref coherence，但 IP 在 angle RMSE 上经常更小，应作为 angle-vs-Doppler-consistency trade-off 解释。
 - `scanMfKnownUnknownInformationLoss.md`：known / unknown Doppler-rate 的 CRB / EFIM 信息损失 scan。
 - `scanMfSubsetBankCoverage.md`：curated / random subset bank 的选齿覆盖与 runtime-cost scan。
 

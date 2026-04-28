@@ -1,8 +1,8 @@
 function [repeatTable, repeatCell, context, flowOpt, runState] = runSimpleDynamicFlowReplayBatch(batchOpt)
-%RUNSIMPLEDYNAMICFLOWREPLAYBATCH Run a small fixed-seed simple-flow replay batch.
-% This helper is for dev/replay entries only. It keeps repeat construction,
-% static seed construction, and simple-flow execution identical across replay
-% scripts without turning replay into regression.
+%RUNSIMPLEDYNAMICFLOWREPLAYBATCH Run a small fixed-seed simple-flow batch.
+% This helper is shared by flow-like replay and scan entries. It keeps repeat
+% construction, static seed construction, and simple-flow execution identical
+% across mechanism scripts without turning them into regression.
 
 arguments
   batchOpt (1,1) struct

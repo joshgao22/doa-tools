@@ -64,6 +64,14 @@ clear; close all; clc;
 - 主要输出：`perfTable`、`aggregateTable`、轻量 `repeatOutCell` 与可重画的 `plotData`；命令行只打印 aggregate table，完整逐 repeat 表留在 `scanData`。
 - 存储口径：默认不创建 tmp、不保存图片、不保存 snapshot；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。
 
+#### `scanMfCpIpInToothPerfMap.m`
+
+- 作用：扫描受控 in-tooth 条件下 CP/IP 在 SNR 和 frame count 上的性能。
+- 用途：在 truth-centered half-tooth `fdRef` range、truth-local unknown-rate range 与同一 `MS-SF-Static` DoA seed 下隔离 full-flow tooth selection / same-tooth adoption 污染，形成 CP/IP 论文性能图的受控候选；该结果只代表 given-correct-tooth 的模型上限，不代表完整系统性能。
+- 主要输出：`perfTable`、`aggregateTable`、轻量 `repeatOutCell`、`checkpointSummaryTable` 与可重画的 `plotData`；表中保留 `inToothMode`、`fdRateRangeMode`、truth-tooth hit、non-ref coherence floor 和 IP/CP ratio。命令行只打印 aggregate table 和 checkpoint summary，完整逐 repeat 表留在 `scanData`。
+- checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfCpIpInToothPerfMap/<stableRunKey>/`。中断后用同一配置直接重跑可恢复已完成 task；成功构造 `scanData` 后默认清理 checkpoint 目录，失败时 `catch` 打印保留路径。
+- 存储口径：默认不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。
+
 #### `scanMfKnownUnknownInformationLoss.m`
 
 - 作用：扫描 known/unknown Doppler-rate 条件下的 CRB / EFIM 信息损失。
