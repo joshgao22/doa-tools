@@ -125,6 +125,7 @@ regression、dev、replay、scan、strategy、实验 helper。
 通用工具和通用绘图。
 
 - 只有确实没有 DoA-Doppler 语义的工具才放 `utils/`；
+- `utils/io/` 放通用 I/O、snapshot 保存/恢复/清理和运行通知 helper；`notifyTelegram` 只做旁路消息发送，不承载 replay / scan 专属 summary 逻辑；
 - 单脚本一次性图先留 local，复用后再提升到 `test/common/plot/` 或 `plottool/`。
 
 ## README 索引
@@ -133,6 +134,7 @@ regression、dev、replay、scan、strategy、实验 helper。
 
 - `AGENTS.md`：AI / 自动化修改代码前的最短入口，说明读文档链条和优先级。
 - `test/data/cache/README.md`：大 `.mat` snapshot 的集中存储规则。
+- `utils/io/README.md`：通用 I/O 工具与 Telegram 运行通知边界。
 
 ### 测试与排障入口
 
@@ -190,9 +192,16 @@ regression、dev、replay、scan、strategy、实验 helper。
 | 保存最终 snapshot | `saveExpSnapshot` | `utils/io/saveExpSnapshot.m` |
 | 恢复 snapshot | `loadExpSnapshot` | `utils/io/loadExpSnapshot.m` |
 | 清理 cache / tmp 运行产物 | `cleanupRunArtifacts` | `utils/io/cleanupRunArtifacts.m` |
+| 发送可选运行通知 | `notifyTelegram` | `utils/io/notifyTelegram.m` |
 | 清理 checkpoint run 目录 | `cleanupPerfTaskGridCheckpoint` | `test/common/flow/cleanupPerfTaskGridCheckpoint.m` |
 
 根 README 只保留入口索引；save / load / cleanup 的调用细节不要在其它 README 中重复维护。
+
+### 长任务通知
+
+长时间 replay / scan / Monte Carlo 可选调用 `utils/io/notifyTelegram.m` 发送 Telegram 通知。该通知属于旁路 I/O：发送失败只应 `warning`，不得改变仿真结果、snapshot、`replayData` / `scanData`、pass/fail 口径或 estimator 数值路径。
+
+通知内容只保留脚本名、状态、耗时、snapshot 路径和少量关键 summary；详细结果仍写入对应 `results/` 文档。token、chat_id 与私有配置不得提交到仓库。
 
 ### 文档同步
 

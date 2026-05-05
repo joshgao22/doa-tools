@@ -28,6 +28,12 @@ clear; close all; clc;
 5. `Summary output and plotting`：只依赖 `replayData` 输出 summary 并画图。恢复 snapshot 后可直接运行这一节。
 6. `Local helpers`：仅放本脚本私有 glue、summary 和绘图 helper。
 
+## 可选运行通知
+
+长时间 replay 可在顶层脚本结束、失败 `catch` 或 snapshot 保存后调用 `utils/io/notifyTelegram.m` 发送可选 Telegram 通知。通知必须是 best-effort：发送失败只 `warning`，不得改变 `replayData`、snapshot、图表数据、数值路径或任何 replay 结论口径。
+
+通知内容只保留脚本名、状态、耗时、snapshot 路径和少量关键 summary；详细结果仍写入 `test/dev/replay/results/`，不要在通知 helper 中维护第二套 replay results 解析逻辑。
+
 ## 推荐推进顺序
 
 这组 replay 按当前排障主线组织。后续整体仿真、推进和观察现象时，建议按下面顺序运行，而不是按文件名字母顺序运行。

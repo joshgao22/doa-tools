@@ -55,6 +55,15 @@
 - `test/dev/strategy/`：策略比较、已证伪路线和重试准入条件。
 - `test/common/`：实验侧复用 helper，不长期维护第二套正式算法。
 
+
+## 长任务通知边界
+
+- 长时间运行的 replay / scan / Monte Carlo 脚本可在顶层 orchestration 层调用 `utils/io/notifyTelegram.m` 发送完成或失败通知。
+- 通知逻辑必须是 best-effort：发送失败只 `warning`，不得影响仿真主结果、snapshot 保存、`replayData` / `scanData` 内容或 estimator 数值路径。
+- `notifyTelegram` 只作为通用 I/O 工具使用，不下沉到 `estimator/`、`performance/`、objective、residual、CRB 或正式算法 helper。
+- token、chat_id 与本机配置不得写入仓库；优先使用环境变量或 MATLAB `prefdir` 下的私有配置。
+- 新增或修改长时间 replay / scan 时，可在脚本结束、失败 `catch`、snapshot 保存后追加简短通知；消息只报告脚本名、状态、耗时、snapshot 路径和少量关键 summary，不维护第二套 results 解析逻辑。
+
 ## 结果、落盘与文档边界
 
 - 运行时临时文件统一放仓库根目录 `tmp/<scriptName>/<runKey>/`。

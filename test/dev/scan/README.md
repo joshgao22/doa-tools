@@ -26,6 +26,12 @@ clear; close all; clc;
 5. `Summary output and plotting`：只依赖 `scanData` 输出 summary 并画图。恢复 snapshot 后可直接运行这一节。
 6. `Local helpers`：仅放本脚本私有 glue、summary 和绘图 helper。
 
+## 可选运行通知
+
+长时间 scan 可在顶层脚本结束、失败 `catch`、checkpoint 完成或 snapshot 保存后调用 `utils/io/notifyTelegram.m` 发送可选 Telegram 通知。通知必须是 best-effort：发送失败只 `warning`，不得改变 `scanData`、checkpoint / snapshot、图表数据、数值路径或任何 scan 结论口径。
+
+通知内容只报告脚本名、状态、耗时、snapshot 路径和少量关键 summary；详细扫描结果仍写入 `test/dev/scan/results/`，不要在通知 helper 中维护第二套 scan results 解析逻辑。
+
 ## 推荐推进顺序
 
 这组 scan 按“论文主线 + 当前 dynamic flow 排障”组织。整体仿真时建议先用较轻 scan 建立机制，再跑重的性能图。

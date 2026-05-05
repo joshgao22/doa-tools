@@ -21,6 +21,7 @@
 - 比较内容：frame subset 策略探针。
 - 主要问题：不同 subset schedule 是否改善 tooth selection。
 - 输出：subset/tooth summary。
+- 当前定位：历史策略探针，不作为当前 curated bank 系统扫描入口；新的 bank coverage / random rescue 比较集中到 `test/dev/scan/scanMfSubsetBankCoverage.m`。
 
 ### `probeMfSubsetToothSelectThenPeriodicRefine.m`
 
