@@ -48,6 +48,7 @@ results/<scriptName>/<caseName>.md
 | `replayMfInToothDoaDopplerRidgeTrace.m` | `replayMfInToothDoaDopplerRidgeTrace.md` | `test/data/cache/replay/replayMfInToothDoaDopplerRidgeTrace_20260429-100106.mat` | final-centered ridge 证明 DoA-Doppler coupling 存在，但 minimum 常贴边界；优先推进 gated `wide+single-MF` basin-entry，而不是公式化 ridge slope。 |
 | `replayMfInToothGatedRescueEffectiveness.m` | `replayMfInToothGatedRescueEffectiveness.md` | `test/data/cache/replay/replayMfInToothGatedRescueEffectiveness_20260504-215932.mat` | family-safe-adopt 显著压低 controlled in-tooth MS-MF DoA tail，hard rescue rate 提升到 `0.8`，easy / fd-negative damage 为 0；仍是 replay-level candidate。 |
 | `replayMfInToothDoaFdRangeEnvelope.m` | `replayMfInToothDoaFdRangeEnvelope.md` | `test/data/cache/replay/replayMfInToothDoaFdRangeEnvelope_20260504-204938.mat` | base-seed envelope 支持 wide / single-MF DoA basin-entry 与 `0.006 deg` family-safe step，不支持默认引入非零 fdRef / fdRate joint bank。 |
+| `replayMfFlowLikeGatedBasinEntryEffectiveness.m` | `replayMfFlowLikeGatedBasinEntryEffectiveness.md` | `test/data/cache/replay/replayMfFlowLikeGatedBasinEntryEffectiveness_20260505-160714.mat` | 100-repeat flow-like 结果显示 basin-entry family 有救力，但当前 gate/adoption 有 easy damage 且 P95/max 变差；作为 negative / diagnostic，不推进默认 flow。 |
 
 ## 维护规则
 

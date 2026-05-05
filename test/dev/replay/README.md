@@ -141,8 +141,10 @@ clear; close all; clc;
 - 作用：在真实 subset-periodic flow 结构内比较 disabled 与 no-truth gated `wide + single-MF` same-tooth basin-entry rescue。
 - 选帧与初始化口径：不使用 truth-centered 半齿 oracle，不跳过 subset selection；只通过 `buildSimpleDynamicFlowOpt.sameToothRescue` 显式打开 flow-level rescue，默认 flow 仍保持关闭。
 - gate 口径：只读取 selected periodic decision summary 与 subset trust 诊断中的 non-ref coherence、phase residual 和 trust 状态；truth 只用于结果表里的 angle / tooth / fd 评价。
-- 主要输出：disabled-vs-gated compare table、aggregate table、gated periodic candidate table、warning table、checkpoint summary，以及 angle / coherence 对比图。
-- 临时存档：头部 `checkpointEnable=true` 时分别为 disabled 与 gated batch 建立 per-repeat checkpoint / resume，任务文件写入仓库根目录 `tmp/replayMfFlowLikeGatedBasinEntryEffectiveness-disabled/<runKey>/task/` 与 `tmp/replayMfFlowLikeGatedBasinEntryEffectiveness-gatedWideSingle/<runKey>/task/`；成功构造并保存 `replayData` 后默认清理。
+- 主要输出：disabled-vs-gated compare table、same-tooth in-tooth compare / aggregate、gate-miss hard-case table、case-role summary、gate-reason count、final-tag / tooth transition count、gated periodic candidate table、warning table、storage summary，以及 angle / coherence 对比图。
+- 存储口径：snapshot 仍只保存 `replayData` 一个变量；`saveRepeatDetail=false` 时只保存轻量 table 与 checkpoint summary，适合扩大 repeat 后通过 `loadExpSnapshot` 重跑 summary 小节；若需要追单 seed 的完整 flow 结构，才临时打开 `saveRepeatDetail=true`。
+- Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存后发送 HTML `DONE` 通知，在 batch / storage 失败时发送 `FAILED` 通知并继续 `rethrow`；通知只包含脚本名、耗时、seed、snapshot / checkpoint 和少量 aggregate / gate-miss 指标，发送失败只 warning。
+- 临时存档：头部 `checkpointEnable=true` 时分别为 disabled 与 gated batch 建立 per-repeat checkpoint / resume，任务文件写入仓库根目录 `tmp/replayMfFlowLikeGatedBasinEntryEffectiveness-disabled/<runKey>/task/` 与 `tmp/replayMfFlowLikeGatedBasinEntryEffectiveness-gatedWideSingle/<runKey>/task/`；成功构造 `replayData` 并清理 checkpoint 后再保存 snapshot。
 - 当前结论：该入口只作为真实 flow 条件下的 stress check；由于会混入 wrong-tooth / subset selection 因素，当前 in-tooth DoA 主线不继续围绕它调参，也不据此打开默认 flow。
 
 #### `replayMfSameToothHardCase.m`
