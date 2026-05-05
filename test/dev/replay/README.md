@@ -136,6 +136,15 @@ clear; close all; clc;
 - 当前结论：只作为 gated rescue 批量验证 replay；当前默认代码收敛为 coherence-only gate + DoA-only strict/family safe-adopt 对照，用于区分 gate 漏检、candidate bank 不足、统一 DoA-step guard 过紧与 triggered-selected damage。joint offset 先交给 envelope replay 判断，默认不进入效果验证主表。当前短期目标收回到 controlled in-tooth DoA 修复，不把该 replay 结论直接推进 flow 或默认 estimator。
 - 详细结果：`results/replayMfInToothGatedRescueEffectiveness.md`。
 
+#### `replayMfInToothOrdinaryAngleMissDiagnose.m`
+
+- 作用：在 controlled in-tooth 条件下专门诊断 non-collapse ordinary DoA miss，区分普通 angle miss、collapse hard、mid-coherence miss、wrong-tooth 与 fd-not-healthy 负样本。
+- 选帧与初始化口径：沿用 truth-centered half-tooth `fdRef` 范围，不做 subset tooth selection，不改变默认 flow；truth 只用于 offline miss label 与 truth-DoA oracle 上限。
+- 候选口径：比较 default final、final-centered small DoA polish、wide-centered DoA-only basin-entry、single-MF-centered DoA-only basin-entry、best implementable 与 truth-DoA oracle；final-centered polish 只作为 replay probe，不进入 estimator / flow 默认路径。
+- 主要输出：`ordinarySeedTable`、`ordinaryCandidateTable`、`ordinaryAggregateTable`、`ordinaryFamilyAggregateTable`、原有 method / gated rescue 辅助表、runtime timing summary，以及 ordinary miss 角误差 / gain / coherence 对比图。
+- Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存后发送 HTML `DONE` 通知，在 batch / storage 失败时发送 `FAILED` 通知并继续 `rethrow`；通知只包含脚本名、耗时、seed、snapshot 与少量 ordinary summary，发送失败只 warning。
+- 当前结论：新增为 controlled in-tooth DoA 主线的 ordinary-miss 分叉诊断入口；用于判断剩余 `>0.002 deg` miss 是否可由 small polish 或 basin-entry truth-free 候选解释，不据此直接放宽 hard-collapse rescue gate。
+
 #### `replayMfFlowLikeGatedBasinEntryEffectiveness.m`
 
 - 作用：在真实 subset-periodic flow 结构内比较 disabled 与 no-truth gated `wide + single-MF` same-tooth basin-entry rescue。

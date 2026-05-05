@@ -1,0 +1,2633 @@
+% replayMfInToothOrdinaryAngleMissDiagnose
+% Purpose: diagnose ordinary in-tooth DoA misses that are not explained by
+% non-reference coherence collapse. The replay assumes the fdRef tooth is
+% already correct by using a truth-centered half-tooth fd range, then compares
+% default final, final-centered small polish, wide-centered, single-MF-centered,
+% and truth-DoA oracle candidates. Truth is used only for offline labels.
+%
+% Usage: edit the configuration block below, then run this script directly.
+% The script leaves replayData in the workspace; checkpointEnable=true resumes
+% interrupted repeat runs from per-repeat files under the repo-root tmp.
+% saveSnapshot=true saves only replayData via saveExpSnapshot. Telegram notice is best-effort only.
+
+clear; close all; clc;
+
+%% Replay configuration
+replayName = "replayMfInToothOrdinaryAngleMissDiagnose";
+
+snrDb = 10;                         % Snapshot SNR used to generate rx signals.
+baseSeed = 253;                     % First seed of the small replay batch.
+numRepeat = 100;                    % Number of consecutive seeds to replay.
+saveSnapshot = true;                % true saves the lightweight replayData only.
+notifyTelegramEnable = true;        % true sends best-effort HTML Telegram notice on completion or failure.
+optVerbose = false;                 % true enables compact estimator / branch trace.
+checkpointEnable = true;             % true enables per-repeat checkpoint/resume under repo-root tmp/.
+oracleFdHalfToothFraction = 0.49;   % Half-width fraction of the 1/T_f tooth step.
+oracleFdRateHalfWidthHzPerSec = 1000; % Local truth-centered fdRate half-width.
+staticLocalDoaHalfWidthDeg = [0.002; 0.002]; % Local DoA box around the static seed.
+staticWideDoaHalfWidthDeg = [0.010; 0.010];  % Wider same-tooth DoA box for rescue center.
+truthLocalDoaHalfWidthDeg = [0.002; 0.002];  % Truth DoA oracle box used only for offline labeling.
+coarseDoaStepDegList = [-0.006; -0.004; -0.002; 0; 0.002; 0.004; 0.006]; % Implementable basin-entry DoA offsets.
+finalPolishDoaStepDegList = [-0.002; -0.001; -0.0005; 0; 0.0005; 0.001; 0.002]; % Final-centered small DoA polish offsets.
+jointDoaStepDegList = [-0.004; -0.002; 0; 0.002; 0.004]; % Conservative DoA offsets for optional joint DoA-fdRef probes.
+jointFdRefOffsetHzList = [-300; -150; 0; 150; 300]; % In-tooth fdRef offsets for optional joint DoA-fdRef probes.
+includeJointSafeAdoptBank = false;   % false bypasses joint bank unless range-envelope evidence asks for it.
+includeFamilySafeAdoptBank = true;    % true compares a wider DoA-step guard for wide/single-MF center candidates.
+includeLegacyFailedBanks = false;    % false bypasses one-center/blanket banks already shown unstable.
+fdRefHealthyAbsHz = 1;              % Offline fdRef health threshold.
+fdRateHealthyAbsHzPerSec = 50;      % Offline fdRate health threshold.
+coherenceHealthyThreshold = 0.95;   % Offline selected non-ref coherence recovery threshold.
+truthDoaGapThresholdDeg = 1e-3;     % Offline default gap to truth-DoA oracle threshold.
+angleGainThresholdDeg = 5e-4;       % Offline rescue gain threshold.
+damageThresholdDeg = 5e-4;          % Offline damage threshold.
+angleHitThresholdDeg = 0.002;        % Offline DoA hit threshold for P99/hit-rate summaries.
+ordinaryCoherenceMinThreshold = 0.95; % Offline non-collapse threshold for ordinary angle miss labels.
+ordinaryTruthGapThresholdDeg = 5e-4;  % Offline truth-DoA oracle gap required to call a miss improvable.
+gatedRescueCoherenceThreshold = 0.20; % No-truth trigger: default non-ref coherence has clearly collapsed.
+gatedRescuePhaseResidThresholdRad = 1.0; % No-truth trigger: default non-ref phase residual is large.
+gatedRescueGateVersion = "coherence-v1"; % Checkpoint signature for the coherence-only no-truth trigger logic.
+safeAdoptMaxAbsDoaStepDeg = 0.004; % Replay-only strict safe adoption guard for triggered rescue candidates.
+familySafeAdoptMaxAbsDoaStepDeg = 0.006; % Replay-only relaxed guard for wide/single-MF basin-entry centers.
+safeAdoptCoherenceThreshold = 0.95; % Replay-only candidate coherence recovery requirement.
+safeAdoptMinObjGain = 0; % Replay-only candidate objective gain requirement.
+safeAdoptMaxAbsFdRefStepHz = 300; % Replay-only fdRef step guard for joint candidates.
+
+runTic = tic;
+
+seedList = baseSeed + (0:(numRepeat - 1));
+seedList = reshape(double(seedList), [], 1);
+numRepeat = numel(seedList);
+
+try
+
+%% Build context and flow options
+config = struct();
+config.snrDb = snrDb;
+config.baseSeed = baseSeed;
+config.numRepeat = numRepeat;
+config.seedList = seedList;
+config.saveSnapshot = saveSnapshot;
+config.notifyTelegramEnable = notifyTelegramEnable;
+config.optVerbose = optVerbose;
+config.checkpointEnable = checkpointEnable;
+config.checkpointResume = true;
+config.checkpointCleanupOnSuccess = true;
+config.oracleFdHalfToothFraction = oracleFdHalfToothFraction;
+config.oracleFdRateHalfWidthHzPerSec = oracleFdRateHalfWidthHzPerSec;
+config.staticLocalDoaHalfWidthDeg = staticLocalDoaHalfWidthDeg(:);
+config.staticWideDoaHalfWidthDeg = staticWideDoaHalfWidthDeg(:);
+config.truthLocalDoaHalfWidthDeg = truthLocalDoaHalfWidthDeg(:);
+config.coarseDoaStepDegList = coarseDoaStepDegList(:);
+config.finalPolishDoaStepDegList = finalPolishDoaStepDegList(:);
+config.jointDoaStepDegList = jointDoaStepDegList(:);
+config.jointFdRefOffsetHzList = jointFdRefOffsetHzList(:);
+config.includeJointSafeAdoptBank = includeJointSafeAdoptBank;
+config.includeFamilySafeAdoptBank = includeFamilySafeAdoptBank;
+config.includeJointCandidateGrid = includeJointSafeAdoptBank || includeLegacyFailedBanks;
+config.includeLegacyFailedBanks = includeLegacyFailedBanks;
+config.fdRefHealthyAbsHz = fdRefHealthyAbsHz;
+config.fdRateHealthyAbsHzPerSec = fdRateHealthyAbsHzPerSec;
+config.coherenceHealthyThreshold = coherenceHealthyThreshold;
+config.truthDoaGapThresholdDeg = truthDoaGapThresholdDeg;
+config.angleGainThresholdDeg = angleGainThresholdDeg;
+config.damageThresholdDeg = damageThresholdDeg;
+config.angleHitThresholdDeg = angleHitThresholdDeg;
+config.ordinaryCoherenceMinThreshold = ordinaryCoherenceMinThreshold;
+config.ordinaryTruthGapThresholdDeg = ordinaryTruthGapThresholdDeg;
+config.gatedRescueCoherenceThreshold = gatedRescueCoherenceThreshold;
+config.gatedRescuePhaseResidThresholdRad = gatedRescuePhaseResidThresholdRad;
+config.gatedRescueGateVersion = string(gatedRescueGateVersion);
+config.safeAdoptMaxAbsDoaStepDeg = safeAdoptMaxAbsDoaStepDeg;
+config.familySafeAdoptMaxAbsDoaStepDeg = familySafeAdoptMaxAbsDoaStepDeg;
+config.safeAdoptCoherenceThreshold = safeAdoptCoherenceThreshold;
+config.safeAdoptMinObjGain = safeAdoptMinObjGain;
+config.safeAdoptMaxAbsFdRefStepHz = safeAdoptMaxAbsFdRefStepHz;
+
+fprintf('Running %s ...\n', char(replayName));
+fprintf('  repeats                         : %d\n', config.numRepeat);
+fprintf('  snr (dB)                        : %.2f\n', config.snrDb);
+fprintf('  base seed                       : %d\n', config.baseSeed);
+fprintf('  repeat mode                     : %s\n', 'parfor-auto');
+fprintf('  save snapshot                   : %d\n', config.saveSnapshot);
+fprintf('  telegram notify                 : %d\n', config.notifyTelegramEnable);
+fprintf('  checkpoint                      : %d\n', config.checkpointEnable);
+fprintf('  fd oracle half-tooth fraction   : %.3f\n', config.oracleFdHalfToothFraction);
+fprintf('  fdRate oracle half-width        : %.2f Hz/s\n', config.oracleFdRateHalfWidthHzPerSec);
+fprintf('  basin-entry DoA steps           : %s deg\n', mat2str(config.coarseDoaStepDegList(:).'));
+fprintf('  final polish DoA steps          : %s deg\n', mat2str(config.finalPolishDoaStepDegList(:).'));
+fprintf('  include joint safe-adopt bank   : %d\n', config.includeJointSafeAdoptBank);
+fprintf('  include family safe-adopt bank  : %d\n', config.includeFamilySafeAdoptBank);
+if config.includeJointSafeAdoptBank
+  fprintf('  joint rescue DoA steps          : %s deg\n', mat2str(config.jointDoaStepDegList(:).'));
+  fprintf('  joint rescue fdRef offsets      : %s Hz\n', mat2str(config.jointFdRefOffsetHzList(:).'));
+end
+fprintf('  include legacy failed banks     : %d\n', config.includeLegacyFailedBanks);
+fprintf('  ordinary coherence threshold    : %.3f\n', config.ordinaryCoherenceMinThreshold);
+fprintf('  gated rescue coherence threshold: %.3f\n', config.gatedRescueCoherenceThreshold);
+if config.gatedRescueGateVersion == "coherence-v1"
+  fprintf('  gated rescue phase gate         : inactive\n');
+else
+  fprintf('  gated rescue phase threshold    : %.3f rad\n', config.gatedRescuePhaseResidThresholdRad);
+end
+fprintf('  gated rescue gate version       : %s\n', char(config.gatedRescueGateVersion));
+fprintf('  safe adopt max DoA step         : %.4f deg\n', config.safeAdoptMaxAbsDoaStepDeg);
+fprintf('  family safe max DoA step        : %.4f deg\n', config.familySafeAdoptMaxAbsDoaStepDeg);
+fprintf('  safe adopt coherence threshold  : %.3f\n', config.safeAdoptCoherenceThreshold);
+fprintf('  safe adopt max fdRef step       : %.2f Hz\n', config.safeAdoptMaxAbsFdRefStepHz);
+fprintf('  angle hit threshold             : %.4f deg\n', config.angleHitThresholdDeg);
+
+parallelOpt = struct( ...
+  'enableSubsetEvalParfor', false, ...
+  'minSubsetEvalParfor', 4, ...
+  'enableFixtureBankParfor', false, ...
+  'enableParfor', false);
+contextOpt = struct( ...
+  'baseSeed', config.baseSeed, ...
+  'numSubsetRandomTrial', 0, ...
+  'parallelOpt', parallelOpt);
+flowOpt = buildSimpleDynamicFlowOpt(struct( ...
+  'parallelOpt', parallelOpt, ...
+  'periodicRefineFdHalfWidthHz', 50, ...
+  'periodicRefineFdRateHalfWidthHzPerSec', 100, ...
+  'periodicRefineDoaHalfWidthDeg', [1e-8; 1e-8], ...
+  'periodicRefineFreezeDoa', true, ...
+  'periodicPolishEnableWhenMulti', false));
+methodList = localBuildMethodList(config);
+
+checkpointOpt = localBuildCheckpointOpt(replayName, config);
+checkpointRunDir = "";
+if config.checkpointEnable
+  checkpointRunDir = checkpointOpt.runDir;
+  config.checkpointRunDir = string(checkpointRunDir);
+  fprintf('  checkpoint resume               : %d\n', config.checkpointResume);
+  fprintf('  checkpoint dir                  : %s\n', checkpointRunDir);
+end
+
+fprintf('[%s] Build shared dynamic context.\n', char(datetime('now', 'Format', 'HH:mm:ss')));
+context = buildDynamicDualSatEciContext(contextOpt);
+context = localDisableSubsetBankForInTooth(context);
+fprintf('[%s] Shared dynamic context built.\n', char(datetime('now', 'Format', 'HH:mm:ss')));
+
+%% Run replay batch
+repeatCell = cell(numRepeat, 1);
+useParfor = localCanUseParfor() && numRepeat > 1;
+runState = struct();
+try
+  if config.checkpointEnable
+    taskGrid = localBuildRepeatTaskGrid(config.seedList);
+    sharedData = struct('context', context, 'flowOpt', flowOpt, 'methodList', methodList, 'config', config);
+    numDoneTask = localCountCheckpointTaskFile(fullfile(checkpointRunDir, 'task'), numRepeat);
+    numTodoTask = numRepeat - numDoneTask;
+    tracker = localCreateProgressTracker(sprintf('%s repeat batch (%s, resume %d/%d)', ...
+      char(replayName), localModeText(useParfor), numDoneTask, numRepeat), numTodoTask, false);
+    checkpointRunnerOpt = localBuildCheckpointRunnerOpt(checkpointOpt, tracker, useParfor);
+    runState = runPerfTaskGridWithCheckpoint(taskGrid, sharedData, @localCheckpointTaskRunner, checkpointRunnerOpt);
+    localCloseProgressTracker(tracker);
+    if ~runState.isComplete
+      error('replayMfInToothOrdinaryAngleMissDiagnose:CheckpointIncomplete', ...
+        'Checkpoint replay returned an incomplete repeat batch.');
+    end
+    repeatCell = runState.resultCell;
+  else
+    tracker = localCreateProgressTracker(sprintf('%s repeat batch (%s)', char(replayName), localModeText(useParfor)), numRepeat, useParfor);
+    if useParfor
+      progressQueue = tracker.queue;
+      parfor iRepeat = 1:numRepeat
+        repeatCell{iRepeat} = localRunOneRepeat(iRepeat, config.seedList(iRepeat), context, flowOpt, methodList, config);
+        if ~isempty(progressQueue)
+          send(progressQueue, iRepeat);
+        end
+      end
+    else
+      for iRepeat = 1:numRepeat
+        repeatCell{iRepeat} = localRunOneRepeat(iRepeat, config.seedList(iRepeat), context, flowOpt, methodList, config);
+        localAdvanceProgressTracker(tracker);
+      end
+    end
+    localCloseProgressTracker(tracker);
+  end
+catch ME
+  if exist('tracker', 'var')
+    localCloseProgressTracker(tracker);
+  end
+  if config.checkpointEnable
+    fprintf('Replay failed. Checkpoint artifacts kept at: %s\n', checkpointRunDir);
+  end
+  rethrow(ME);
+end
+
+methodTable = localBuildMethodTable(repeatCell);
+methodAggregateTable = localBuildMethodAggregateTable(methodTable, config);
+candidateProbeTable = localBuildCandidateProbeTable(repeatCell);
+ordinarySeedTable = localBuildOrdinarySeedTable(candidateProbeTable, config);
+ordinaryCandidateTable = localBuildOrdinaryCandidateTable(candidateProbeTable, ordinarySeedTable, config);
+ordinaryAggregateTable = localBuildOrdinaryAggregateTable(ordinarySeedTable, ordinaryCandidateTable, config);
+ordinaryFamilyAggregateTable = localBuildOrdinaryFamilyAggregateTable(ordinaryCandidateTable, config);
+rescueBankDecisionTable = localBuildRescueEffectCaseTable(repeatCell);
+rescueEffectCaseTable = localSelectGatedEffectCaseTable(rescueBankDecisionTable);
+triggerReasonTable = localBuildTriggerReasonTable(rescueEffectCaseTable);
+rescueEffectAggregateTable = localBuildRescueEffectAggregateTable(rescueBankDecisionTable, config);
+rescueEffectVerdictTable = localBuildRescueEffectVerdictTable(rescueEffectAggregateTable);
+hardMissSummaryTable = localBuildHardMissSummaryTable(rescueBankDecisionTable, config);
+inToothDoaLadderTable = localBuildInToothDoaLadderTable(methodTable, rescueBankDecisionTable, config);
+rangeTable = localBuildRangeTable(repeatCell);
+timingTable = localBuildTimingTable(repeatCell);
+timingAggregateTable = localBuildTimingAggregateTable(timingTable);
+plotData = localBuildOrdinaryPlotData(ordinarySeedTable, ordinaryCandidateTable);
+
+%% Data storage
+replayData = struct();
+replayData.replayName = string(replayName);
+replayData.config = config;
+replayData.contextSummary = localBuildContextSummary(context, methodList);
+replayData.methodTable = methodTable;
+replayData.methodAggregateTable = methodAggregateTable;
+replayData.candidateProbeTable = candidateProbeTable;
+replayData.ordinarySeedTable = ordinarySeedTable;
+replayData.ordinaryCandidateTable = ordinaryCandidateTable;
+replayData.ordinaryAggregateTable = ordinaryAggregateTable;
+replayData.ordinaryFamilyAggregateTable = ordinaryFamilyAggregateTable;
+replayData.rescueBankDecisionTable = rescueBankDecisionTable;
+replayData.rescueEffectCaseTable = rescueEffectCaseTable;
+replayData.triggerReasonTable = triggerReasonTable;
+replayData.rescueEffectAggregateTable = rescueEffectAggregateTable;
+replayData.rescueEffectVerdictTable = rescueEffectVerdictTable;
+replayData.hardMissSummaryTable = hardMissSummaryTable;
+replayData.inToothDoaLadderTable = inToothDoaLadderTable;
+replayData.rangeTable = rangeTable;
+replayData.timingTable = timingTable;
+replayData.timingAggregateTable = timingAggregateTable;
+replayData.plotData = plotData;
+replayData.methodList = localStripMethodList(methodList);
+if config.checkpointEnable
+  replayData.checkpointSummary = localBuildCheckpointSummary(runState);
+end
+
+if config.saveSnapshot
+  saveOpt = struct('includeVars', {{'replayData'}}, ...
+    'extraMeta', struct('replayName', char(replayName)), 'verbose', true);
+  replayData.snapshotFile = saveExpSnapshot(char(replayName), saveOpt);
+else
+  replayData.snapshotFile = "";
+end
+
+if config.checkpointEnable
+  if config.checkpointCleanupOnSuccess
+    replayData.checkpointSummary.cleanupReport = cleanupPerfTaskGridCheckpoint(runState, struct('verbose', false));
+    replayData.checkpointSummary.cleanedOnSuccess = true;
+  else
+    replayData.checkpointSummary.cleanedOnSuccess = false;
+  end
+end
+
+localNotifyReplayStatus(replayName, "DONE", config, replayData, toc(runTic), []);
+catch ME
+  if exist('checkpointRunDir', 'var') && strlength(string(checkpointRunDir)) > 0
+    fprintf('Replay failed. Checkpoint artifacts kept at: %s\n', checkpointRunDir);
+  end
+  localNotifyReplayStatus(replayName, "FAILED", config, struct(), toc(runTic), ME);
+  rethrow(ME);
+end
+
+%% Summary output and plotting
+if ~exist('replayData', 'var') || ~isstruct(replayData)
+  error('Replay data is missing. Run the replay batch sections or load a snapshot containing replayData.');
+end
+fprintf('Running replayMfInToothOrdinaryAngleMissDiagnose ...\n');
+fprintf('  repeats                         : %d\n', numel(unique(replayData.rescueEffectCaseTable.taskSeed)));
+fprintf('  snr (dB)                        : %.2f\n', replayData.config.snrDb);
+fprintf('  base seed                       : %d\n', replayData.config.baseSeed);
+if isfield(replayData.config, 'notifyTelegramEnable')
+  fprintf('  telegram notify                 : %d\n', replayData.config.notifyTelegramEnable);
+end
+if isfield(replayData.config, 'checkpointEnable')
+  fprintf('  checkpoint                      : %d\n', replayData.config.checkpointEnable);
+end
+if isfield(replayData.config, 'checkpointRunDir')
+  fprintf('  checkpoint dir                  : %s\n', char(replayData.config.checkpointRunDir));
+end
+if isfield(replayData.config, 'includeFamilySafeAdoptBank')
+  fprintf('  include family safe-adopt bank  : %d\n', replayData.config.includeFamilySafeAdoptBank);
+end
+if isfield(replayData.config, 'angleHitThresholdDeg')
+  fprintf('  angle hit threshold             : %.4f deg\n', replayData.config.angleHitThresholdDeg);
+end
+fprintf('\n========== Ordinary miss aggregate ==========\n');
+disp(replayData.ordinaryAggregateTable);
+if isfield(replayData, 'ordinaryFamilyAggregateTable') && ~isempty(replayData.ordinaryFamilyAggregateTable)
+  fprintf('\n========== Ordinary candidate family aggregate ==========\n');
+  disp(replayData.ordinaryFamilyAggregateTable);
+end
+if isfield(replayData, 'ordinarySeedTable')
+  fprintf('\n========== Ordinary seed classification ==========\n');
+  localDispTablePreview(replayData.ordinarySeedTable, 12);
+end
+if isfield(replayData, 'ordinaryCandidateTable')
+  fprintf('\n========== Ordinary candidate table ==========\n');
+  localDispTablePreview(replayData.ordinaryCandidateTable, 16);
+end
+fprintf('\n========== In-tooth method aggregate ==========\n');
+disp(replayData.methodAggregateTable);
+if isfield(replayData, 'inToothDoaLadderTable') && ~isempty(replayData.inToothDoaLadderTable)
+  fprintf('\n========== In-tooth DoA ladder ==========\n');
+  disp(replayData.inToothDoaLadderTable);
+end
+fprintf('\n========== Gated rescue aggregate ==========\n');
+disp(replayData.rescueEffectAggregateTable);
+if isfield(replayData, 'rescueEffectVerdictTable') && ~isempty(replayData.rescueEffectVerdictTable)
+  fprintf('\n========== Gated rescue verdict ==========\n');
+  disp(replayData.rescueEffectVerdictTable);
+end
+if isfield(replayData, 'hardMissSummaryTable') && ~isempty(replayData.hardMissSummaryTable)
+  fprintf('\n========== Hard miss summary ==========\n');
+  disp(replayData.hardMissSummaryTable);
+end
+fprintf('\n========== Trigger reason table ==========\n');
+localDispTablePreview(replayData.triggerReasonTable, 8);
+if isfield(replayData, 'rescueBankDecisionTable')
+  fprintf('\n========== Rescue bank decision table ==========\n');
+  localDispTablePreview(replayData.rescueBankDecisionTable, 8);
+end
+fprintf('\n========== Gated rescue case table ==========\n');
+localDispTablePreview(replayData.rescueEffectCaseTable, 8);
+if ~isempty(replayData.timingAggregateTable)
+  fprintf('\n========== Runtime timing summary ==========\n');
+  disp(replayData.timingAggregateTable);
+end
+localPlotOrdinaryReplay(replayData.plotData);
+
+%% Local helpers
+
+function checkpointOpt = localBuildCheckpointOpt(replayName, config)
+%LOCALBUILDCHECKPOINTOPT Build stable per-repeat checkpoint options for this replay.
+
+checkpointOpt = struct('enable', config.checkpointEnable);
+if ~config.checkpointEnable
+  checkpointOpt.runDir = "";
+  return;
+end
+checkpointRunKey = localBuildCheckpointRunKey(config);
+checkpointOutputRoot = fullfile(localGetRepoRoot(), 'tmp');
+checkpointOpt.resume = config.checkpointResume;
+checkpointOpt.runName = string(replayName);
+checkpointOpt.runKey = checkpointRunKey;
+checkpointOpt.outputRoot = checkpointOutputRoot;
+checkpointOpt.runDir = fullfile(checkpointOutputRoot, char(replayName), char(checkpointRunKey));
+checkpointOpt.meta = struct( ...
+  'snrDb', config.snrDb, ...
+  'seedList', reshape(config.seedList, 1, []), ...
+  'gateVersion', char(config.gatedRescueGateVersion), ...
+  'coherenceThreshold', config.gatedRescueCoherenceThreshold, ...
+  'ordinaryCoherenceMinThreshold', config.ordinaryCoherenceMinThreshold, ...
+  'ordinaryTruthGapThresholdDeg', config.ordinaryTruthGapThresholdDeg, ...
+  'phaseResidThresholdRad', config.gatedRescuePhaseResidThresholdRad, ...
+  'phaseGateActive', config.gatedRescueGateVersion ~= "coherence-v1", ...
+  'finalPolishDoaStepDegList', reshape(config.finalPolishDoaStepDegList, 1, []), ...
+  'safeAdoptMaxAbsDoaStepDeg', config.safeAdoptMaxAbsDoaStepDeg, ...
+  'familySafeAdoptMaxAbsDoaStepDeg', config.familySafeAdoptMaxAbsDoaStepDeg, ...
+  'safeAdoptCoherenceThreshold', config.safeAdoptCoherenceThreshold, ...
+  'safeAdoptMinObjGain', config.safeAdoptMinObjGain, ...
+  'safeAdoptMaxAbsFdRefStepHz', config.safeAdoptMaxAbsFdRefStepHz, ...
+  'includeJointSafeAdoptBank', config.includeJointSafeAdoptBank, ...
+  'includeFamilySafeAdoptBank', config.includeFamilySafeAdoptBank, ...
+  'jointDoaStepDegList', reshape(config.jointDoaStepDegList, 1, []), ...
+  'jointFdRefOffsetHzList', reshape(config.jointFdRefOffsetHzList, 1, []), ...
+  'includeLegacyFailedBanks', config.includeLegacyFailedBanks, ...
+  'oracleFdHalfToothFraction', config.oracleFdHalfToothFraction, ...
+  'oracleFdRateHalfWidthHzPerSec', config.oracleFdRateHalfWidthHzPerSec);
+end
+
+function runKey = localBuildCheckpointRunKey(config)
+%LOCALBUILDCHECKPOINTRUNKEY Build a checkpoint key that changes with gate semantics.
+
+seedList = reshape(double(config.seedList), 1, []);
+safeSuffix = sprintf('ordinaryCoh%.3f_hit%.4f_finalGrid%d_familyStep%.3f_joint%d', ...
+  config.ordinaryCoherenceMinThreshold, config.angleHitThresholdDeg, ...
+  numel(config.finalPolishDoaStepDegList), config.familySafeAdoptMaxAbsDoaStepDeg, ...
+  config.includeJointSafeAdoptBank);
+if config.gatedRescueGateVersion == "coherence-v1"
+  runKey = string(sprintf('seed%dto%d_rep%d_snr%.2f_%s_coh%.3f_%s', ...
+    seedList(1), seedList(end), numel(seedList), config.snrDb, ...
+    char(config.gatedRescueGateVersion), config.gatedRescueCoherenceThreshold, safeSuffix));
+else
+  runKey = string(sprintf('seed%dto%d_rep%d_snr%.2f_%s_coh%.3f_phase%.3f_%s', ...
+    seedList(1), seedList(end), numel(seedList), config.snrDb, ...
+    char(config.gatedRescueGateVersion), config.gatedRescueCoherenceThreshold, ...
+    config.gatedRescuePhaseResidThresholdRad, safeSuffix));
+end
+runKey = replace(runKey, '.', 'p');
+runKey = replace(runKey, '-', 'm');
+end
+
+function repoRoot = localGetRepoRoot()
+%LOCALGETREPOROOT Resolve the repository root from the replay script location.
+
+scriptDir = fileparts(mfilename('fullpath'));
+repoRoot = fileparts(fileparts(fileparts(scriptDir)));
+end
+
+function taskGrid = localBuildRepeatTaskGrid(seedList)
+%LOCALBUILDREPEATTASKGRID Build one checkpoint task per repeat seed.
+
+numTask = numel(seedList);
+taskGrid = repmat(struct('taskIndex', 0, 'repeatIndex', 0, 'taskSeed', 0), numTask, 1);
+for iTask = 1:numTask
+  taskGrid(iTask).taskIndex = iTask;
+  taskGrid(iTask).repeatIndex = iTask;
+  taskGrid(iTask).taskSeed = seedList(iTask);
+end
+end
+
+function repeatOut = localCheckpointTaskRunner(taskInfo, sharedData)
+%LOCALCHECKPOINTTASKRUNNER Run one checkpointed repeat task.
+
+repeatOut = localRunOneRepeat(taskInfo.repeatIndex, taskInfo.taskSeed, ...
+  sharedData.context, sharedData.flowOpt, sharedData.methodList, sharedData.config);
+end
+
+function checkpointRunnerOpt = localBuildCheckpointRunnerOpt(checkpointOpt, tracker, useParfor)
+%LOCALBUILDCHECKPOINTRUNNEROPT Keep only options accepted by the checkpoint runner.
+
+checkpointRunnerOpt = struct();
+checkpointRunnerOpt.runName = checkpointOpt.runName;
+checkpointRunnerOpt.runKey = checkpointOpt.runKey;
+checkpointRunnerOpt.outputRoot = checkpointOpt.outputRoot;
+checkpointRunnerOpt.useParfor = useParfor;
+checkpointRunnerOpt.resume = checkpointOpt.resume;
+checkpointRunnerOpt.meta = checkpointOpt.meta;
+checkpointRunnerOpt.progressFcn = @(step) localAdvanceProgressByStep(tracker, step);
+checkpointRunnerOpt.cleanupOnSuccess = false;
+checkpointRunnerOpt.cleanupOpt = struct();
+end
+
+function numDone = localCountCheckpointTaskFile(taskDir, numTask)
+%LOCALCOUNTCHECKPOINTTASKFILE Count existing completed checkpoint task files.
+
+numDone = 0;
+if ~isfolder(taskDir)
+  return;
+end
+for iTask = 1:numTask
+  if isfile(fullfile(taskDir, sprintf('task_%06d.mat', iTask)))
+    numDone = numDone + 1;
+  end
+end
+end
+
+function checkpointSummary = localBuildCheckpointSummary(runState)
+%LOCALBUILDCHECKPOINTSUMMARY Store lightweight checkpoint status only.
+
+checkpointSummary = struct();
+checkpointSummary.runDir = string(localGetFieldOrDefault(runState, 'runDir', ""));
+checkpointSummary.numTask = localGetFieldOrDefault(runState, 'numTask', 0);
+checkpointSummary.numDone = localGetFieldOrDefault(runState, 'numDone', 0);
+checkpointSummary.isComplete = logical(localGetFieldOrDefault(runState, 'isComplete', false));
+checkpointSummary.cleanedOnSuccess = false;
+end
+
+
+function context = localDisableSubsetBankForInTooth(context)
+%LOCALDISABLESUBSETBANKFORINTOOTH Skip curated and random subset fixtures.
+
+context.subsetOffsetCell = {};
+context.subsetLabelList = strings(0, 1);
+context.numSubsetRandomTrial = 0;
+end
+
+function methodList = localBuildMethodList(config)
+%LOCALBUILDMETHODLIST Define the compact in-tooth methods needed by the rescue replay.
+
+methodList = repmat(localMakeMethod("", "", "", false, "", "", [], false, "", "", false), 0, 1);
+methodList(end + 1, 1) = localMakeMethod("ss-mf-cp-u-in-tooth", "single-center", "ref", ...
+  false, "static", "truthFreq", config.staticLocalDoaHalfWidthDeg, false, "truthHalfTooth", "truthLocal", true);
+methodList(end + 1, 1) = localMakeMethod("ms-mf-cp-u-in-tooth", "default-target", "ms", ...
+  false, "static", "truthFreq", config.staticLocalDoaHalfWidthDeg, false, "truthHalfTooth", "truthLocal", true);
+methodList(end + 1, 1) = localMakeMethod("ms-mf-cp-u-wide-doa-in-tooth", "wide-center", "ms", ...
+  false, "static", "truthFreq", config.staticWideDoaHalfWidthDeg, false, "truthHalfTooth", "truthLocal", true);
+methodList(end + 1, 1) = localMakeMethod("ms-mf-cp-u-truth-doa-oracle", "truth-doa-label", "ms", ...
+  false, "truth", "truthFreq", config.truthLocalDoaHalfWidthDeg, false, "truthHalfTooth", "truthLocal", true);
+end
+
+function method = localMakeMethod(label, family, viewMode, isKnownRate, doaSeedMode, initMode, doaHalfWidthDeg, freezeDoa, fdRangeMode, fdRateRangeMode, isOracle)
+%LOCALMAKEMETHOD Construct one method descriptor with a stable field set.
+
+method = struct();
+method.label = string(label);
+method.family = string(family);
+method.viewMode = string(viewMode);
+method.isKnownRate = logical(isKnownRate);
+method.doaSeedMode = string(doaSeedMode);
+method.initMode = string(initMode);
+method.doaHalfWidthDeg = reshape(double(doaHalfWidthDeg), [], 1);
+method.freezeDoa = logical(freezeDoa);
+method.fdRangeMode = string(fdRangeMode);
+method.fdRateRangeMode = string(fdRateRangeMode);
+method.isOracle = logical(isOracle);
+end
+
+function repeatOut = localRunOneRepeat(iRepeat, taskSeed, context, flowOpt, methodList, config)
+%LOCALRUNONEREPEAT Build one repeat, evaluate rescue candidates, and pack compact outputs.
+
+lastwarn('', '');
+tRepeat = tic;
+tBuildData = tic;
+repeatData = buildDynamicRepeatData(context, config.snrDb, taskSeed);
+buildDataMs = 1000 * toc(tBuildData);
+fixture = repeatData.periodicFixture;
+truth = fixture.truth;
+toothStepHz = localResolveToothStepHz(fixture);
+truthFdRefHz = localResolveTruthScalar(truth, {'fdRefFit', 'fdRefTrueHz'});
+truthFdRateHzPerSec = localResolveTruthScalar(truth, {'fdRateFit', 'fdRateTrueHzPerSec'});
+if ~(isfinite(truthFdRefHz) && isfinite(truthFdRateHzPerSec))
+  error('replayMfInToothOrdinaryAngleMissDiagnose:MissingTruthFdLine', ...
+    'Truth fdRef/fdRate values are required for the in-tooth rescue replay.');
+end
+fdHalfWidthHz = config.oracleFdHalfToothFraction * toothStepHz;
+fdRangeOracle = truthFdRefHz + [-fdHalfWidthHz, fdHalfWidthHz];
+fdRateRangeOracle = truthFdRateHzPerSec + config.oracleFdRateHalfWidthHzPerSec * [-1, 1];
+
+tStaticBundle = tic;
+staticBundle = buildDoaDopplerStaticTransitionBundle( ...
+  fixture.viewRefOnly, fixture.viewOtherOnly, fixture.viewMs, ...
+  context.wavelen, context.pilotWave, context.carrierFreq, context.waveInfo.sampleRate, ...
+  fixture.fdRange, truth, context.otherSatIdxGlobal, config.optVerbose, ...
+  flowOpt.doaOnlyOpt, flowOpt.staticBaseOpt, zeros(0, 1), flowOpt.staticMsHalfWidth);
+staticBundleMs = 1000 * toc(tStaticBundle);
+
+rowCell = cell(numel(methodList) + 2, 1);
+rowCell{1} = localBuildSummaryRow(iRepeat, taskSeed, "ss-sf-static", "static-baseline", ...
+  "single", "static", false, "static", "static", "default", "none", NaN, false, ...
+  staticBundle.caseStaticRefOnly, truth, toothStepHz, NaN);
+rowCell{2} = localBuildSummaryRow(iRepeat, taskSeed, "ms-sf-static", "static-baseline", ...
+  "multi", "static", false, "static", "static", "default", "none", NaN, false, ...
+  staticBundle.caseStaticMs, truth, toothStepHz, NaN);
+
+methodCaseCell = cell(numel(methodList), 1);
+dynamicMethodWallTimeMs = nan(numel(methodList), 1);
+for iMethod = 1:numel(methodList)
+  method = methodList(iMethod);
+  tMethod = tic;
+  caseUse = localRunDynamicMethod(method, fixture, staticBundle, truth, ...
+    context.pilotWave, context.carrierFreq, context.waveInfo.sampleRate, config.optVerbose, ...
+    flowOpt, fdRangeOracle, fdRateRangeOracle, toothStepHz);
+  dynamicMethodWallTimeMs(iMethod) = 1000 * toc(tMethod);
+  methodCaseCell{iMethod} = caseUse;
+  rowCell{iMethod + 2} = localBuildSummaryRow(iRepeat, taskSeed, method.label, method.family, ...
+    localInferSatMode(method.viewMode), "dynamic-cp", method.isKnownRate, method.doaSeedMode, ...
+    method.initMode, method.fdRangeMode, method.fdRateRangeMode, localMaxAbs(method.doaHalfWidthDeg), ...
+    method.freezeDoa, caseUse, truth, toothStepHz, dynamicMethodWallTimeMs(iMethod));
+end
+candidateProbeTable = localBuildCandidateProbeForRepeat(iRepeat, taskSeed, fixture, staticBundle, truth, ...
+  context.pilotWave, context.carrierFreq, context.waveInfo.sampleRate, flowOpt, methodList, ...
+  methodCaseCell, fdRangeOracle, fdRateRangeOracle, toothStepHz, config);
+repeatTotalMs = 1000 * toc(tRepeat);
+rescueCaseTable = localBuildRescueCaseTableForRepeat(taskSeed, candidateProbeTable, config, repeatTotalMs);
+
+[warningMessage, warningId] = lastwarn;
+repeatOut = struct();
+repeatOut.iRepeat = iRepeat;
+repeatOut.taskSeed = taskSeed;
+repeatOut.snrDb = config.snrDb;
+repeatOut.toothStepHz = toothStepHz;
+repeatOut.truthFdRefHz = truthFdRefHz;
+repeatOut.truthFdRateHzPerSec = truthFdRateHzPerSec;
+repeatOut.fdRangeOracle = fdRangeOracle;
+repeatOut.fdRateRangeOracle = fdRateRangeOracle;
+repeatOut.methodSummary = struct2table([rowCell{:}].');
+repeatOut.candidateProbeTable = candidateProbeTable;
+repeatOut.rescueCaseTable = rescueCaseTable;
+repeatOut.timing = struct( ...
+  'buildDataMs', buildDataMs, ...
+  'staticBundleMs', staticBundleMs, ...
+  'dynamicMethodTotalMs', sum(dynamicMethodWallTimeMs, 'omitnan'), ...
+  'dynamicMethodMaxMs', max(dynamicMethodWallTimeMs, [], 'omitnan'), ...
+  'repeatTotalMs', repeatTotalMs);
+repeatOut.warningSeen = ~(isempty(warningMessage) && isempty(warningId));
+repeatOut.warningId = string(warningId);
+repeatOut.warningMessage = string(warningMessage);
+end
+
+function caseUse = localRunDynamicMethod(method, fixture, staticBundle, truth, pilotWave, carrierFreq, sampleRate, optVerbose, flowOpt, fdRangeOracle, fdRateRangeOracle, toothStepHz)
+%LOCALRUNDYNAMICMETHOD Run one in-tooth dynamic method descriptor.
+
+[viewUse, debugTruthUse, staticCaseUse] = localResolveMethodView(method, fixture, staticBundle);
+fdRangeUse = fixture.fdRange;
+fdRateRangeUse = fixture.fdRateRange;
+if method.fdRangeMode == "truthHalfTooth"
+  fdRangeUse = fdRangeOracle;
+end
+if method.fdRateRangeMode == "truthLocal"
+  fdRateRangeUse = fdRateRangeOracle;
+end
+truthFdRefHz = localResolveTruthScalar(truth, {'fdRefFit', 'fdRefTrueHz'});
+truthFdRateHzPerSec = localResolveTruthScalar(truth, {'fdRateFit', 'fdRateTrueHzPerSec'});
+seedDoaParam = localResolveDoaSeed(method, staticCaseUse, truth);
+
+dynOpt = flowOpt.dynBaseOpt;
+dynOpt.steeringRefFrameIdx = fixture.sceneSeq.refFrameIdx;
+dynOpt.initDoaParam = seedDoaParam(:);
+dynOpt.initDoaHalfWidth = method.doaHalfWidthDeg(:);
+dynOpt.enableFdAliasUnwrap = true;
+dynOpt.freezeDoa = method.freezeDoa;
+dynOpt.disableUnknownDoaReleaseFloor = true;
+dynOpt.unknownDoaReleaseHalfWidth = method.doaHalfWidthDeg(:);
+
+switch method.initMode
+  case "truthFreq"
+    initParam = localBuildTruthFreqInitParam(seedDoaParam, truthFdRefHz, truthFdRateHzPerSec, method.isKnownRate);
+    initOverride = struct('startTag', method.label, 'initParam', initParam, ...
+      'initDoaParam', seedDoaParam(:), 'initDoaHalfWidth', method.doaHalfWidthDeg(:), ...
+      'freezeDoa', method.freezeDoa);
+  otherwise
+    error('replayMfInToothOrdinaryAngleMissDiagnose:UnknownInitMode', ...
+      'Unknown method initMode "%s".', method.initMode);
+end
+
+displayPrefix = "MS";
+if method.viewMode == "ref"
+  displayPrefix = "SS";
+end
+displayName = displayPrefix + "-MF-" + method.label;
+caseUse = runDynamicDoaDopplerCase(displayName, localInferSatMode(method.viewMode), viewUse, truth, ...
+  pilotWave, carrierFreq, sampleRate, fdRangeUse, fdRateRangeUse, optVerbose, ...
+  dynOpt, method.isKnownRate, debugTruthUse, initOverride);
+caseUse.oracleMeta = struct('toothStepHz', toothStepHz, 'fdRangeUse', fdRangeUse, 'fdRateRangeUse', fdRateRangeUse);
+end
+
+function [viewUse, debugTruthUse, staticCaseUse] = localResolveMethodView(method, fixture, staticBundle)
+%LOCALRESOLVEMETHODVIEW Resolve view, debug truth, and static seed for one method.
+
+switch method.viewMode
+  case "ref"
+    viewUse = fixture.viewRefOnly;
+    debugTruthUse = localGetFieldOrDefault(fixture, 'debugTruthRef', struct());
+    staticCaseUse = staticBundle.caseStaticRefOnly;
+  case "ms"
+    viewUse = fixture.viewMs;
+    debugTruthUse = localGetFieldOrDefault(fixture, 'debugTruthMs', struct());
+    staticCaseUse = staticBundle.caseStaticMs;
+  otherwise
+    error('replayMfInToothOrdinaryAngleMissDiagnose:UnknownViewMode', ...
+      'Unknown method viewMode "%s".', method.viewMode);
+end
+end
+
+function satMode = localInferSatMode(viewMode)
+%LOCALINFERSATMODE Convert a view-mode label to runDynamicDoaDopplerCase sat mode.
+
+if string(viewMode) == "ref"
+  satMode = "single";
+else
+  satMode = "multi";
+end
+end
+
+function seedDoaParam = localResolveDoaSeed(method, staticCase, truth)
+%LOCALRESOLVEDOASEED Choose the DoA seed for one replay-only method.
+
+switch method.doaSeedMode
+  case "static"
+    seedDoaParam = staticCase.estResult.doaParamEst(:);
+  case "truth"
+    seedDoaParam = reshape(truth.latlonTrueDeg, [], 1);
+  otherwise
+    error('replayMfInToothOrdinaryAngleMissDiagnose:UnknownDoaSeedMode', ...
+      'Unknown DoA seed mode "%s".', method.doaSeedMode);
+end
+end
+
+function initParam = localBuildTruthFreqInitParam(doaParam, fdRefHz, fdRateHzPerSec, isKnownRate)
+%LOCALBUILDTRUTHFREQINITPARAM Build an oracle frequency initializer.
+
+if isKnownRate
+  initParam = [doaParam(:); fdRefHz];
+else
+  initParam = [doaParam(:); fdRefHz; fdRateHzPerSec];
+end
+end
+
+function candidateProbeTable = localBuildCandidateProbeForRepeat(iRepeat, taskSeed, fixture, staticBundle, truth, pilotWave, carrierFreq, sampleRate, flowOpt, methodList, methodCaseCell, fdRangeOracle, fdRateRangeOracle, toothStepHz, config)
+%LOCALBUILDCANDIDATEPROBEFORREPEAT Evaluate implementable rescue grids without solver adoption.
+
+candidateProbeTable = table();
+defaultIdx = find([methodList.label] == "ms-mf-cp-u-in-tooth", 1, 'first');
+if isempty(defaultIdx) || defaultIdx > numel(methodCaseCell)
+  return;
+end
+defaultMethod = methodList(defaultIdx);
+defaultCase = methodCaseCell{defaultIdx};
+defaultOptVar = localResolveOptVarFromCase(defaultCase);
+if numel(defaultOptVar) < 4
+  return;
+end
+[viewUse, ~, staticCaseUse] = localResolveMethodView(defaultMethod, fixture, staticBundle);
+seedDoaParam = localResolveDoaSeed(defaultMethod, staticCaseUse, truth);
+dynOpt = localBuildDynOptForProbe(defaultMethod, fixture, flowOpt, seedDoaParam);
+[model, ~, ~] = buildDoaDopplerMfModel(viewUse.sceneSeq, viewUse.rxSigMf, pilotWave, ...
+  carrierFreq, sampleRate, viewUse.doaGrid, fdRangeOracle, fdRateRangeOracle, dynOpt);
+[~, ~, model] = buildDoaDopplerMfInit(model, defaultOptVar);
+
+rowCell = cell(0, 1);
+rowCell{end + 1, 1} = localEvaluateCandidateProbePoint(iRepeat, taskSeed, ...
+  "default-final", "default-final", "ms-mf-cp-u-in-tooth", defaultOptVar, [0; 0], 0, 0, ...
+  model, truth, toothStepHz);
+rowCell = localAppendPureCenteredProbeGrid(rowCell, iRepeat, taskSeed, ...
+  "final-small-doa-grid", "ms-mf-cp-u-in-tooth", defaultOptVar, defaultOptVar, ...
+  config.finalPolishDoaStepDegList, model, truth, toothStepHz);
+
+truthIdx = find([methodList.label] == "ms-mf-cp-u-truth-doa-oracle", 1, 'first');
+if ~isempty(truthIdx) && truthIdx <= numel(methodCaseCell)
+  truthOptVar = localResolveOptVarFromCase(methodCaseCell{truthIdx});
+  if numel(truthOptVar) == numel(defaultOptVar)
+    rowCell{end + 1, 1} = localEvaluateCandidateProbePoint(iRepeat, taskSeed, ...
+      "truth-doa-oracle-final", "truth-doa-oracle-final", "ms-mf-cp-u-truth-doa-oracle", ...
+      truthOptVar, truthOptVar(1:2) - defaultOptVar(1:2), ...
+      truthOptVar(3) - defaultOptVar(3), truthOptVar(4) - defaultOptVar(4), model, truth, toothStepHz);
+  end
+end
+
+wideIdx = find([methodList.label] == "ms-mf-cp-u-wide-doa-in-tooth", 1, 'first');
+if ~isempty(wideIdx) && wideIdx <= numel(methodCaseCell)
+  wideOptVar = localResolveOptVarFromCase(methodCaseCell{wideIdx});
+  rowCell = localAppendPureCenteredProbeGrid(rowCell, iRepeat, taskSeed, ...
+    "wide-coarse-doa-grid", "ms-mf-cp-u-wide-doa-in-tooth", wideOptVar, defaultOptVar, ...
+    config.coarseDoaStepDegList, model, truth, toothStepHz);
+  if localGetFieldOrDefault(config, 'includeJointCandidateGrid', true)
+    rowCell = localAppendJointCenteredProbeGrid(rowCell, iRepeat, taskSeed, ...
+      "wide-joint-doa-fdref-grid", "ms-mf-cp-u-wide-doa-in-tooth", wideOptVar, defaultOptVar, ...
+      config.jointDoaStepDegList, config.jointFdRefOffsetHzList, model, truth, toothStepHz);
+  end
+end
+
+singleIdx = find([methodList.label] == "ss-mf-cp-u-in-tooth", 1, 'first');
+if ~isempty(singleIdx) && singleIdx <= numel(methodCaseCell)
+  singleOptVar = localResolveOptVarFromCase(methodCaseCell{singleIdx});
+  rowCell = localAppendPureCenteredProbeGrid(rowCell, iRepeat, taskSeed, ...
+    "single-mf-coarse-doa-grid", "ss-mf-cp-u-in-tooth", singleOptVar, defaultOptVar, ...
+    config.coarseDoaStepDegList, model, truth, toothStepHz);
+  if localGetFieldOrDefault(config, 'includeJointCandidateGrid', true)
+    rowCell = localAppendJointCenteredProbeGrid(rowCell, iRepeat, taskSeed, ...
+      "single-mf-joint-doa-fdref-grid", "ss-mf-cp-u-in-tooth", singleOptVar, defaultOptVar, ...
+      config.jointDoaStepDegList, config.jointFdRefOffsetHzList, model, truth, toothStepHz);
+  end
+end
+
+candidateProbeTable = struct2table([rowCell{:}].');
+defaultMask = candidateProbeTable.candidateFamily == "default-final";
+if any(defaultMask)
+  defaultObj = candidateProbeTable.obj(find(defaultMask, 1, 'first'));
+  candidateProbeTable.objGainFromDefault = defaultObj - candidateProbeTable.obj;
+end
+end
+
+function dynOpt = localBuildDynOptForProbe(method, fixture, flowOpt, seedDoaParam)
+%LOCALBUILDDYNOPTFORPROBE Build the same evaluator options used by the default in-tooth method.
+
+dynOpt = flowOpt.dynBaseOpt;
+dynOpt.steeringRefFrameIdx = fixture.sceneSeq.refFrameIdx;
+dynOpt.initDoaParam = seedDoaParam(:);
+dynOpt.initDoaHalfWidth = method.doaHalfWidthDeg(:);
+dynOpt.enableFdAliasUnwrap = true;
+dynOpt.freezeDoa = method.freezeDoa;
+dynOpt.disableUnknownDoaReleaseFloor = true;
+dynOpt.unknownDoaReleaseHalfWidth = method.doaHalfWidthDeg(:);
+dynOpt.verbose = false;
+end
+
+function rowCell = localAppendPureCenteredProbeGrid(rowCell, iRepeat, taskSeed, candidateFamily, sourceMethodLabel, centerOptVar, defaultOptVar, probeDoaStepDegList, model, truth, toothStepHz)
+%LOCALAPPENDPURECENTEREDPROBEGRID Add a DoA-only grid around one implementable center.
+
+centerOptVar = reshape(double(centerOptVar), [], 1);
+defaultOptVar = reshape(double(defaultOptVar), [], 1);
+probeDoaStepDegList = reshape(double(probeDoaStepDegList), [], 1);
+if numel(centerOptVar) ~= numel(defaultOptVar) || numel(centerOptVar) < 4
+  return;
+end
+if any(~isfinite(centerOptVar(1:4))) || any(~isfinite(defaultOptVar(1:4)))
+  return;
+end
+centerLabel = string(sourceMethodLabel) + "-coarse-center";
+for iLat = 1:numel(probeDoaStepDegList)
+  for iLon = 1:numel(probeDoaStepDegList)
+    doaStepLocal = [probeDoaStepDegList(iLat); probeDoaStepDegList(iLon)];
+    optVar = centerOptVar;
+    optVar(1:2) = optVar(1:2) + doaStepLocal;
+    doaStepFromDefault = optVar(1:2) - defaultOptVar(1:2);
+    tag = sprintf('coarse-center-dlat%+.4g-dlon%+.4g', doaStepLocal(1), doaStepLocal(2));
+    row = localEvaluateCandidateProbePoint(iRepeat, taskSeed, candidateFamily, string(tag), ...
+      sourceMethodLabel, optVar, doaStepFromDefault, optVar(3) - defaultOptVar(3), ...
+      optVar(4) - defaultOptVar(4), model, truth, toothStepHz);
+    row.probeCenterFamily = centerLabel;
+    rowCell{end + 1, 1} = row; %#ok<AGROW>
+  end
+end
+end
+
+function rowCell = localAppendJointCenteredProbeGrid(rowCell, iRepeat, taskSeed, candidateFamily, sourceMethodLabel, centerOptVar, defaultOptVar, probeDoaStepDegList, probeFdRefOffsetHzList, model, truth, toothStepHz)
+%LOCALAPPENDJOINTCENTEREDPROBEGRID Add a conservative DoA-fdRef grid around one center.
+
+centerOptVar = reshape(double(centerOptVar), [], 1);
+defaultOptVar = reshape(double(defaultOptVar), [], 1);
+probeDoaStepDegList = reshape(double(probeDoaStepDegList), [], 1);
+probeFdRefOffsetHzList = reshape(double(probeFdRefOffsetHzList), [], 1);
+if numel(centerOptVar) ~= numel(defaultOptVar) || numel(centerOptVar) < 4
+  return;
+end
+if any(~isfinite(centerOptVar(1:4))) || any(~isfinite(defaultOptVar(1:4)))
+  return;
+end
+centerLabel = string(sourceMethodLabel) + "-joint-center";
+for iLat = 1:numel(probeDoaStepDegList)
+  for iLon = 1:numel(probeDoaStepDegList)
+    for iFd = 1:numel(probeFdRefOffsetHzList)
+      doaStepLocal = [probeDoaStepDegList(iLat); probeDoaStepDegList(iLon)];
+      fdRefStepLocal = probeFdRefOffsetHzList(iFd);
+      optVar = centerOptVar;
+      optVar(1:2) = optVar(1:2) + doaStepLocal;
+      optVar(3) = optVar(3) + fdRefStepLocal;
+      doaStepFromDefault = optVar(1:2) - defaultOptVar(1:2);
+      tag = sprintf('joint-center-dlat%+.4g-dlon%+.4g-dfd%+.4g', ...
+        doaStepLocal(1), doaStepLocal(2), fdRefStepLocal);
+      row = localEvaluateCandidateProbePoint(iRepeat, taskSeed, candidateFamily, string(tag), ...
+        sourceMethodLabel, optVar, doaStepFromDefault, optVar(3) - defaultOptVar(3), ...
+        optVar(4) - defaultOptVar(4), model, truth, toothStepHz);
+      row.probeCenterFamily = centerLabel;
+      row.localFdRefOffsetHz = fdRefStepLocal;
+      rowCell{end + 1, 1} = row; %#ok<AGROW>
+    end
+  end
+end
+end
+
+function row = localEvaluateCandidateProbePoint(iRepeat, taskSeed, candidateFamily, candidateTag, sourceMethodLabel, optVar, doaStepDeg, fdRefStepHz, fdRateStepHzPerSec, model, truth, toothStepHz)
+%LOCALEVALUATECANDIDATEPROBEPOINT Evaluate one candidate optVar and pack compact metrics.
+
+optVar = reshape(double(optVar), [], 1);
+[obj, ~, noiseVar, evalAux] = evaluateDoaDopplerMfObjective(model, optVar);
+evalDiag = buildDoaDopplerMfEvalDiag(model, optVar, obj, noiseVar, evalAux);
+truthLatlon = reshape(localGetFieldOrDefault(truth, 'latlonTrueDeg', [NaN; NaN]), [], 1);
+truthFdRefHz = localResolveTruthScalar(truth, {'fdRefFit', 'fdRefTrueHz'});
+truthFdRateHzPerSec = localResolveTruthScalar(truth, {'fdRateFit', 'fdRateTrueHzPerSec'});
+[nonRefCoherenceFloor, nonRefRmsPhaseResidRad] = localExtractProbeNonRefMetrics(evalDiag);
+fdRefErrHz = optVar(3) - truthFdRefHz;
+fdRateErrHzPerSec = optVar(4) - truthFdRateHzPerSec;
+toothIdx = NaN;
+toothResidualHz = NaN;
+if isfinite(toothStepHz) && toothStepHz > 0 && isfinite(fdRefErrHz)
+  toothIdx = round(fdRefErrHz / toothStepHz);
+  toothResidualHz = fdRefErrHz - toothIdx * toothStepHz;
+end
+row = struct();
+row.iRepeat = iRepeat;
+row.taskSeed = taskSeed;
+row.candidateFamily = string(candidateFamily);
+row.candidateTag = string(candidateTag);
+row.sourceMethodLabel = string(sourceMethodLabel);
+row.probeCenterFamily = "";
+row.doaStep1Deg = localVectorElem(doaStepDeg, 1, NaN);
+row.doaStep2Deg = localVectorElem(doaStepDeg, 2, NaN);
+row.fdRefStepHz = fdRefStepHz;
+row.fdRateStepHzPerSec = fdRateStepHzPerSec;
+row.localFdRefOffsetHz = NaN;
+row.doa1Deg = optVar(1);
+row.doa2Deg = optVar(2);
+row.fdRefHz = optVar(3);
+row.fdRateHzPerSec = optVar(4);
+row.obj = obj;
+row.objGainFromDefault = NaN;
+row.residualNorm = localGetFieldOrDefault(evalDiag, 'residualNorm', NaN);
+row.angleErrDeg = calcLatlonAngleError(optVar(1:2), truthLatlon(1:2));
+row.fdRefErrHz = fdRefErrHz;
+row.fdRateErrHzPerSec = fdRateErrHzPerSec;
+row.toothIdx = toothIdx;
+row.toothResidualHz = toothResidualHz;
+row.nonRefCoherenceFloor = nonRefCoherenceFloor;
+row.nonRefRmsPhaseResidRad = nonRefRmsPhaseResidRad;
+row.nonRefFitRatioFloor = localGetFieldOrDefault(evalDiag, 'nonRefFitRatioFloor', NaN);
+row.nonRefSupportRatioFloor = localGetFieldOrDefault(evalDiag, 'nonRefSupportRatioFloor', NaN);
+end
+
+function [nonRefCoherenceFloor, nonRefRmsPhaseResidRad] = localExtractProbeNonRefMetrics(evalDiag)
+%LOCALEXTRACTPROBENONREFMETRICS Extract non-reference coherence and phase residual metrics.
+
+nonRefCoherenceFloor = NaN;
+nonRefRmsPhaseResidRad = NaN;
+refSatIdxLocal = localGetFieldOrDefault(evalDiag, 'refSatIdxLocal', NaN);
+coherenceSat = reshape(localGetFieldOrDefault(evalDiag, 'coherenceSat', []), [], 1);
+if isfinite(refSatIdxLocal) && refSatIdxLocal >= 1 && refSatIdxLocal <= numel(coherenceSat)
+  nonRefMask = true(size(coherenceSat));
+  nonRefMask(refSatIdxLocal) = false;
+  nonRefCoherenceFloor = min(coherenceSat(nonRefMask), [], 'omitnan');
+else
+  nonRefCoherenceFloor = min(coherenceSat, [], 'omitnan');
+end
+blockSummary = localGetFieldOrDefault(evalDiag, 'blockSummary', []);
+if istable(blockSummary) && ismember('rmsPhaseResidRad', blockSummary.Properties.VariableNames)
+  phaseResid = blockSummary.rmsPhaseResidRad;
+  if ismember('isRefSat', blockSummary.Properties.VariableNames)
+    phaseResid = phaseResid(~blockSummary.isRefSat);
+  end
+  nonRefRmsPhaseResidRad = max(phaseResid, [], 'omitnan');
+end
+end
+
+function optVar = localResolveOptVarFromCase(caseUse)
+%LOCALRESOLVEOPTVARFROMCASE Read a final optimizer vector from one case result.
+
+optVar = [];
+estResult = localGetFieldOrDefault(caseUse, 'estResult', struct());
+if ~isstruct(estResult)
+  return;
+end
+optVar = reshape(localGetFieldOrDefault(estResult, 'optVarEst', []), [], 1);
+if ~isempty(optVar)
+  return;
+end
+doaParam = reshape(localGetFieldOrDefault(estResult, 'doaParamEst', []), [], 1);
+fdRef = localGetFieldOrDefault(estResult, 'fdRefEst', NaN);
+fdRate = localGetFieldOrDefault(estResult, 'fdRateEst', NaN);
+if numel(doaParam) >= 2 && isfinite(fdRef) && isfinite(fdRate)
+  optVar = [doaParam(1:2); fdRef; fdRate];
+end
+end
+
+function row = localBuildSummaryRow(iRepeat, taskSeed, methodLabel, methodFamily, satMode, modelClass, isKnownRate, doaSeedMode, initMode, fdRangeMode, fdRateRangeMode, doaHalfWidthMaxDeg, freezeDoa, caseUse, truth, toothStepHz, wallTimeMs)
+%LOCALBUILDSUMMARYROW Convert one method result into a stable table row.
+
+info = summarizeDoaDopplerCase(caseUse, truth);
+dynSummary = buildDynamicUnknownCaseSummary(caseUse, toothStepHz, truth);
+row = struct();
+row.iRepeat = iRepeat;
+row.taskSeed = taskSeed;
+row.methodLabel = string(methodLabel);
+row.methodFamily = string(methodFamily);
+row.satMode = string(satMode);
+row.modelClass = string(modelClass);
+row.rateMode = localInferRateMode(modelClass, isKnownRate);
+row.oracleLevel = localInferOracleLevel(fdRangeMode, fdRateRangeMode, doaSeedMode);
+row.isKnownRate = logical(isKnownRate);
+row.doaSeedMode = string(doaSeedMode);
+row.initMode = string(initMode);
+row.fdRangeMode = string(fdRangeMode);
+row.fdRateRangeMode = string(fdRateRangeMode);
+row.doaHalfWidthMaxDeg = doaHalfWidthMaxDeg;
+row.freezeDoa = logical(freezeDoa);
+row.solveVariant = string(localGetFieldOrDefault(dynSummary, 'solveVariant', ""));
+row.isResolved = logical(localGetFieldOrDefault(info, 'isResolved', false));
+row.angleErrDeg = localGetFieldOrDefault(info, 'angleErrDeg', NaN);
+row.fdRefErrHz = localGetFieldOrDefault(info, 'fdRefErrHz', NaN);
+row.fdRateErrHzPerSec = localGetFieldOrDefault(info, 'fdRateErrHzPerSec', NaN);
+row.fdLineRmseHz = localGetFieldOrDefault(info, 'fdLineRmseHz', NaN);
+row.fdSatRmseHz = localGetFieldOrDefault(info, 'fdSatRmseHz', NaN);
+row.deltaFdRmseHz = localGetFieldOrDefault(info, 'deltaFdRmseHz', NaN);
+row.toothIdx = localGetFieldOrDefault(dynSummary, 'toothIdx', NaN);
+row.toothResidualHz = localGetFieldOrDefault(dynSummary, 'toothResidualHz', NaN);
+row.finalObj = localGetFieldOrDefault(dynSummary, 'finalObj', NaN);
+row.finalResidualNorm = localGetFieldOrDefault(dynSummary, 'finalResidualNorm', NaN);
+row.nonRefCoherenceFloor = localGetFieldOrDefault(dynSummary, 'nonRefCoherenceFloor', NaN);
+row.nonRefRmsPhaseResidRad = localGetFieldOrDefault(dynSummary, 'nonRefRmsPhaseResidRad', NaN);
+row.runTimeMs = localGetFieldOrDefault(info, 'runTimeMs', NaN);
+row.wallTimeMs = wallTimeMs;
+end
+
+function rateMode = localInferRateMode(modelClass, isKnownRate)
+%LOCALINFERRATEMODE Return a compact rate-mode label for summary tables.
+
+if string(modelClass) == "static"
+  rateMode = "static";
+elseif isKnownRate
+  rateMode = "known-rate";
+else
+  rateMode = "unknown-rate";
+end
+end
+
+function oracleLevel = localInferOracleLevel(fdRangeMode, fdRateRangeMode, doaSeedMode)
+%LOCALINFERORACLELEVEL Return the oracle scope used by one replay row.
+
+labelPart = strings(0, 1);
+if string(fdRangeMode) == "truthHalfTooth"
+  labelPart(end + 1, 1) = "fd";
+end
+if string(fdRateRangeMode) == "truthLocal"
+  labelPart(end + 1, 1) = "fdRate";
+end
+if string(doaSeedMode) == "truth"
+  labelPart(end + 1, 1) = "truthDoA";
+end
+if isempty(labelPart)
+  oracleLevel = "none";
+else
+  oracleLevel = strjoin(labelPart, "+");
+end
+end
+
+function methodTable = localBuildMethodTable(repeatCell)
+%LOCALBUILDMETHODTABLE Stack per-repeat method summaries into one table.
+
+summaryCell = cell(numel(repeatCell), 1);
+for iRepeat = 1:numel(repeatCell)
+  summaryCell{iRepeat} = repeatCell{iRepeat}.methodSummary;
+end
+methodTable = vertcat(summaryCell{:});
+end
+
+function aggregateTable = localBuildMethodAggregateTable(methodTable, config)
+%LOCALBUILDMETHODAGGREGATETABLE Build compact method-level distribution metrics.
+
+angleHitThreshold = localGetFieldOrDefault(config, 'angleHitThresholdDeg', NaN);
+methodList = unique(methodTable.methodLabel, 'stable');
+rowCell = cell(numel(methodList), 1);
+for iMethod = 1:numel(methodList)
+  methodNow = methodList(iMethod);
+  mask = methodTable.methodLabel == methodNow;
+  idxFirst = find(mask, 1, 'first');
+  row = struct();
+  row.methodLabel = methodNow;
+  row.methodFamily = methodTable.methodFamily(idxFirst);
+  row.satMode = methodTable.satMode(idxFirst);
+  row.modelClass = methodTable.modelClass(idxFirst);
+  row.numRepeat = nnz(mask);
+  row.resolvedRate = mean(double(methodTable.isResolved(mask)), 'omitnan');
+  row.toothHitRate = mean(double(methodTable.toothIdx(mask) == 0), 'omitnan');
+  row.angleRmseDeg = sqrt(mean(methodTable.angleErrDeg(mask) .^ 2, 'omitnan'));
+  row.angleMedianDeg = median(methodTable.angleErrDeg(mask), 'omitnan');
+  row.angleP95Deg = localPercentile(methodTable.angleErrDeg(mask), 95);
+  row.angleP99Deg = localPercentile(methodTable.angleErrDeg(mask), 99);
+  row.angleHitThresholdDeg = angleHitThreshold;
+  row.angleHitRate = localMeanHit(methodTable.angleErrDeg(mask), angleHitThreshold);
+  row.angleMaxDeg = max(methodTable.angleErrDeg(mask), [], 'omitnan');
+  row.fdRefAbsMedianHz = median(abs(methodTable.fdRefErrHz(mask)), 'omitnan');
+  row.fdRateAbsMedianHzPerSec = median(abs(methodTable.fdRateErrHzPerSec(mask)), 'omitnan');
+  row.nonRefCoherenceFloorMedian = median(methodTable.nonRefCoherenceFloor(mask), 'omitnan');
+  row.wallTimeMedianMs = median(methodTable.wallTimeMs(mask), 'omitnan');
+  rowCell{iMethod} = row;
+end
+aggregateTable = struct2table([rowCell{:}].');
+end
+
+function candidateProbeTable = localBuildCandidateProbeTable(repeatCell)
+%LOCALBUILDCANDIDATEPROBETABLE Stack per-repeat candidate objective probes.
+
+probeCell = cell(0, 1);
+for iRepeat = 1:numel(repeatCell)
+  if isfield(repeatCell{iRepeat}, 'candidateProbeTable') && ~isempty(repeatCell{iRepeat}.candidateProbeTable)
+    probeCell{end + 1, 1} = repeatCell{iRepeat}.candidateProbeTable; %#ok<AGROW>
+  end
+end
+if isempty(probeCell)
+  candidateProbeTable = table();
+else
+  candidateProbeTable = vertcat(probeCell{:});
+end
+end
+
+
+function ordinarySeedTable = localBuildOrdinarySeedTable(candidateProbeTable, config)
+%LOCALBUILDORDINARYSEEDTABLE Classify in-tooth angle misses using offline labels.
+
+if isempty(candidateProbeTable)
+  ordinarySeedTable = table();
+  return;
+end
+seedList = unique(candidateProbeTable.taskSeed, 'stable');
+rowCell = cell(numel(seedList), 1);
+for iSeed = 1:numel(seedList)
+  taskSeed = seedList(iSeed);
+  seedProbe = candidateProbeTable(candidateProbeTable.taskSeed == taskSeed, :);
+  defaultRow = localBestProbeRow(seedProbe, "default-final");
+  truthRow = localBestProbeRow(seedProbe, "truth-doa-oracle-final");
+  defaultAngle = localProbeValue(defaultRow, 'angleErrDeg', NaN);
+  truthAngle = localProbeValue(truthRow, 'angleErrDeg', NaN);
+  defaultCoherence = localProbeValue(defaultRow, 'nonRefCoherenceFloor', NaN);
+  defaultPhaseResid = localProbeValue(defaultRow, 'nonRefRmsPhaseResidRad', NaN);
+  defaultFdRefAbs = abs(localProbeValue(defaultRow, 'fdRefErrHz', NaN));
+  defaultFdRateAbs = abs(localProbeValue(defaultRow, 'fdRateErrHzPerSec', NaN));
+  defaultToothIdx = localProbeValue(defaultRow, 'toothIdx', NaN);
+  sameTooth = isfinite(defaultToothIdx) && defaultToothIdx == 0;
+  fdHealthy = sameTooth && isfinite(defaultFdRefAbs) && defaultFdRefAbs <= config.fdRefHealthyAbsHz && ...
+    isfinite(defaultFdRateAbs) && defaultFdRateAbs <= config.fdRateHealthyAbsHzPerSec;
+  angleMiss = isfinite(defaultAngle) && defaultAngle > config.angleHitThresholdDeg;
+  nonCollapse = isfinite(defaultCoherence) && defaultCoherence >= config.ordinaryCoherenceMinThreshold;
+  oracleGap = defaultAngle - truthAngle;
+  oracleUseful = isfinite(oracleGap) && oracleGap >= config.ordinaryTruthGapThresholdDeg;
+  missType = "unclassified";
+  if ~sameTooth
+    missType = "wrong-tooth-negative";
+  elseif ~fdHealthy
+    missType = "fd-not-healthy-negative";
+  elseif ~angleMiss
+    missType = "easy-hit";
+  elseif nonCollapse
+    missType = "ordinary-angle-miss";
+  elseif isfinite(defaultCoherence) && defaultCoherence < config.gatedRescueCoherenceThreshold
+    missType = "collapse-hard";
+  else
+    missType = "mid-coherence-angle-miss";
+  end
+  row = struct();
+  row.taskSeed = taskSeed;
+  row.missType = missType;
+  row.isOrdinaryAngleMiss = missType == "ordinary-angle-miss";
+  row.isAngleMiss = angleMiss;
+  row.sameTooth = sameTooth;
+  row.fdHealthy = fdHealthy;
+  row.nonCollapse = nonCollapse;
+  row.oracleUseful = oracleUseful;
+  row.defaultAngleErrDeg = defaultAngle;
+  row.truthDoaOracleAngleErrDeg = truthAngle;
+  row.oracleGapDeg = oracleGap;
+  row.defaultToothIdx = defaultToothIdx;
+  row.defaultFdRefErrHz = localProbeValue(defaultRow, 'fdRefErrHz', NaN);
+  row.defaultFdRateErrHzPerSec = localProbeValue(defaultRow, 'fdRateErrHzPerSec', NaN);
+  row.defaultNonRefCoherenceFloor = defaultCoherence;
+  row.defaultNonRefRmsPhaseResidRad = defaultPhaseResid;
+  rowCell{iSeed} = row;
+end
+ordinarySeedTable = struct2table([rowCell{:}].');
+end
+
+function ordinaryCandidateTable = localBuildOrdinaryCandidateTable(candidateProbeTable, ordinarySeedTable, config)
+%LOCALBUILDORDINARYCANDIDATETABLE Compare best candidate families for each seed.
+
+if isempty(candidateProbeTable) || isempty(ordinarySeedTable)
+  ordinaryCandidateTable = table();
+  return;
+end
+familyList = [
+  "default-final", "default";
+  "final-small-doa-grid", "final-small-polish";
+  "wide-coarse-doa-grid", "wide-basin-entry";
+  "single-mf-coarse-doa-grid", "single-mf-basin-entry";
+  "__implementable_any__", "best-implementable";
+  "__basin_entry_any__", "best-basin-entry";
+  "truth-doa-oracle-final", "truth-doa-oracle"];
+rowCell = cell(height(ordinarySeedTable) * size(familyList, 1), 1);
+rowCount = 0;
+for iSeed = 1:height(ordinarySeedTable)
+  taskSeed = ordinarySeedTable.taskSeed(iSeed);
+  seedProbe = candidateProbeTable(candidateProbeTable.taskSeed == taskSeed, :);
+  defaultRow = localBestProbeRow(seedProbe, "default-final");
+  defaultAngle = localProbeValue(defaultRow, 'angleErrDeg', NaN);
+  defaultCoherence = localProbeValue(defaultRow, 'nonRefCoherenceFloor', NaN);
+  for iFamily = 1:size(familyList, 1)
+    familyKey = familyList(iFamily, 1);
+    displayFamily = familyList(iFamily, 2);
+    if familyKey == "__implementable_any__"
+      candidateRow = localBestProbeRowAny(seedProbe, ["default-final"; "final-small-doa-grid"; ...
+        "wide-coarse-doa-grid"; "single-mf-coarse-doa-grid"]);
+    elseif familyKey == "__basin_entry_any__"
+      candidateRow = localBestProbeRowAny(seedProbe, ["wide-coarse-doa-grid"; "single-mf-coarse-doa-grid"]);
+    else
+      candidateRow = localBestProbeRow(seedProbe, familyKey);
+    end
+    candidateAngle = localProbeValue(candidateRow, 'angleErrDeg', NaN);
+    candidateCoherence = localProbeValue(candidateRow, 'nonRefCoherenceFloor', NaN);
+    angleGain = defaultAngle - candidateAngle;
+    coherenceGain = candidateCoherence - defaultCoherence;
+    rowCount = rowCount + 1;
+    row = struct();
+    row.taskSeed = taskSeed;
+    row.missType = ordinarySeedTable.missType(iSeed);
+    row.isOrdinaryAngleMiss = ordinarySeedTable.isOrdinaryAngleMiss(iSeed);
+    row.candidateGroup = displayFamily;
+    row.selectedCandidateFamily = string(localProbeValue(candidateRow, 'candidateFamily', ""));
+    row.selectedCandidateTag = string(localProbeValue(candidateRow, 'candidateTag', ""));
+    row.selectedSourceMethodLabel = string(localProbeValue(candidateRow, 'sourceMethodLabel', ""));
+    row.defaultAngleErrDeg = defaultAngle;
+    row.candidateAngleErrDeg = candidateAngle;
+    row.angleGainDeg = angleGain;
+    row.isHit = isfinite(candidateAngle) && candidateAngle <= config.angleHitThresholdDeg;
+    row.isRescued = ordinarySeedTable.isOrdinaryAngleMiss(iSeed) && isfinite(angleGain) && ...
+      angleGain >= config.angleGainThresholdDeg && row.isHit;
+    row.isDamaged = isfinite(angleGain) && angleGain <= -config.damageThresholdDeg;
+    row.defaultNonRefCoherenceFloor = defaultCoherence;
+    row.candidateNonRefCoherenceFloor = candidateCoherence;
+    row.coherenceGain = coherenceGain;
+    row.candidateObjGainFromDefault = localProbeValue(candidateRow, 'objGainFromDefault', NaN);
+    row.candidateFdRefErrHz = localProbeValue(candidateRow, 'fdRefErrHz', NaN);
+    row.candidateFdRateErrHzPerSec = localProbeValue(candidateRow, 'fdRateErrHzPerSec', NaN);
+    row.candidateToothIdx = localProbeValue(candidateRow, 'toothIdx', NaN);
+    row.candidateDoaStep1Deg = localProbeValue(candidateRow, 'doaStep1Deg', NaN);
+    row.candidateDoaStep2Deg = localProbeValue(candidateRow, 'doaStep2Deg', NaN);
+    row.candidateFdRefStepHz = localProbeValue(candidateRow, 'fdRefStepHz', NaN);
+    rowCell{rowCount} = row;
+  end
+end
+ordinaryCandidateTable = struct2table([rowCell{1:rowCount}].');
+end
+
+function ordinaryAggregateTable = localBuildOrdinaryAggregateTable(ordinarySeedTable, ordinaryCandidateTable, config)
+%LOCALBUILDORDINARYAGGREGATETABLE Summarize ordinary miss coverage and best candidate effect.
+
+if isempty(ordinarySeedTable)
+  ordinaryAggregateTable = table();
+  return;
+end
+ordinaryMask = ordinarySeedTable.isOrdinaryAngleMiss;
+angleMissMask = ordinarySeedTable.isAngleMiss;
+bestMask = ordinaryCandidateTable.candidateGroup == "best-implementable";
+bestOrdinary = ordinaryCandidateTable(bestMask & ordinaryCandidateTable.isOrdinaryAngleMiss, :);
+row = struct();
+row.numSeed = height(ordinarySeedTable);
+row.numAngleMiss = nnz(angleMissMask);
+row.numOrdinaryAngleMiss = nnz(ordinaryMask);
+row.ordinaryAngleMissRate = mean(double(ordinaryMask), 'omitnan');
+row.collapseHardCount = nnz(ordinarySeedTable.missType == "collapse-hard");
+row.midCoherenceMissCount = nnz(ordinarySeedTable.missType == "mid-coherence-angle-miss");
+row.wrongToothCount = nnz(ordinarySeedTable.missType == "wrong-tooth-negative");
+row.fdNotHealthyCount = nnz(ordinarySeedTable.missType == "fd-not-healthy-negative");
+row.easyHitCount = nnz(ordinarySeedTable.missType == "easy-hit");
+row.defaultOrdinaryMedianAngleDeg = median(ordinarySeedTable.defaultAngleErrDeg(ordinaryMask), 'omitnan');
+row.defaultOrdinaryP95AngleDeg = localPercentile(ordinarySeedTable.defaultAngleErrDeg(ordinaryMask), 95);
+row.defaultOrdinaryMedianCoherence = median(ordinarySeedTable.defaultNonRefCoherenceFloor(ordinaryMask), 'omitnan');
+row.bestImplementableRescueRate = localMeanOptionalLogical(localTableColumn(bestOrdinary, 'isRescued'));
+row.bestImplementableHitRate = localMeanOptionalLogical(localTableColumn(bestOrdinary, 'isHit'));
+row.bestImplementableDamageRate = localMeanOptionalLogical(localTableColumn(bestOrdinary, 'isDamaged'));
+row.bestImplementableMedianAngleDeg = median(localTableColumn(bestOrdinary, 'candidateAngleErrDeg'), 'omitnan');
+row.bestImplementableMedianGainDeg = median(localTableColumn(bestOrdinary, 'angleGainDeg'), 'omitnan');
+row.angleHitThresholdDeg = config.angleHitThresholdDeg;
+ordinaryAggregateTable = struct2table(row);
+end
+
+function familyAggregateTable = localBuildOrdinaryFamilyAggregateTable(ordinaryCandidateTable, config)
+%LOCALBUILDORDINARYFAMILYAGGREGATETABLE Summarize candidate families on ordinary misses only.
+
+if isempty(ordinaryCandidateTable)
+  familyAggregateTable = table();
+  return;
+end
+dataUse = ordinaryCandidateTable(ordinaryCandidateTable.isOrdinaryAngleMiss, :);
+if isempty(dataUse)
+  familyAggregateTable = table();
+  return;
+end
+groupList = unique(dataUse.candidateGroup, 'stable');
+rowCell = cell(numel(groupList), 1);
+for iGroup = 1:numel(groupList)
+  groupNow = groupList(iGroup);
+  mask = dataUse.candidateGroup == groupNow;
+  row = struct();
+  row.candidateGroup = groupNow;
+  row.numOrdinaryMiss = nnz(mask);
+  row.hitRate = localMeanHit(dataUse.candidateAngleErrDeg(mask), config.angleHitThresholdDeg);
+  row.rescueRate = localMeanOptionalLogical(dataUse.isRescued(mask));
+  row.damageRate = localMeanOptionalLogical(dataUse.isDamaged(mask));
+  row.medianAngleErrDeg = median(dataUse.candidateAngleErrDeg(mask), 'omitnan');
+  row.p95AngleErrDeg = localPercentile(dataUse.candidateAngleErrDeg(mask), 95);
+  row.medianAngleGainDeg = median(dataUse.angleGainDeg(mask), 'omitnan');
+  row.medianCoherence = median(dataUse.candidateNonRefCoherenceFloor(mask), 'omitnan');
+  rowCell{iGroup} = row;
+end
+familyAggregateTable = struct2table([rowCell{:}].');
+end
+
+function plotData = localBuildOrdinaryPlotData(ordinarySeedTable, ordinaryCandidateTable)
+%LOCALBUILDORDINARYPLOTDATA Pack lightweight ordinary-miss plotting inputs.
+
+plotData = struct();
+plotData.ordinarySeedTable = ordinarySeedTable;
+plotData.ordinaryCandidateTable = ordinaryCandidateTable;
+end
+
+function value = localTableColumn(tableUse, fieldName)
+%LOCALTABLECOLUMN Return a table column or an empty vector.
+
+if istable(tableUse) && height(tableUse) > 0 && ismember(fieldName, tableUse.Properties.VariableNames)
+  value = tableUse.(fieldName);
+else
+  value = [];
+end
+end
+
+function rescueEffectCaseTable = localBuildRescueEffectCaseTable(repeatCell)
+%LOCALBUILDRESCUEEFFECTCASETABLE Stack per-repeat rescue bank decisions.
+
+caseCell = cell(0, 1);
+for iRepeat = 1:numel(repeatCell)
+  if isfield(repeatCell{iRepeat}, 'rescueCaseTable') && ~isempty(repeatCell{iRepeat}.rescueCaseTable)
+    caseCell{end + 1, 1} = repeatCell{iRepeat}.rescueCaseTable; %#ok<AGROW>
+  end
+end
+if isempty(caseCell)
+  rescueEffectCaseTable = table();
+else
+  rescueEffectCaseTable = vertcat(caseCell{:});
+end
+end
+
+function rescueCaseTable = localBuildRescueCaseTableForRepeat(taskSeed, candidateProbeTable, config, repeatWallTimeMs)
+%LOCALBUILDRESCUECASETABLEFORREPEAT Select each rescue bank without using truth in the trigger.
+
+bankLabelList = ["disabled"; "gated-wide-single-bank-safe-adopt"];
+if localGetFieldOrDefault(config, 'includeFamilySafeAdoptBank', true)
+  bankLabelList = [bankLabelList; "gated-wide-single-bank-family-safe-adopt"];
+end
+if localGetFieldOrDefault(config, 'includeJointSafeAdoptBank', false)
+  bankLabelList = [bankLabelList; "gated-wide-single-joint-bank-safe-adopt"];
+end
+if isfield(config, 'includeLegacyFailedBanks') && config.includeLegacyFailedBanks
+  bankLabelList = ["disabled"; "gated-wide-only"; "gated-single-mf-only"; ...
+    "gated-wide-single-bank"; "gated-wide-single-bank-safe-adopt"; ...
+    "gated-wide-single-bank-family-safe-adopt"; ...
+    "gated-wide-single-joint-bank"; "gated-wide-single-joint-bank-safe-adopt"; ...
+    "blanket-wide-single-bank"];
+end
+rowCell = cell(numel(bankLabelList), 1);
+defaultRow = localBestProbeRow(candidateProbeTable, "default-final");
+truthRow = localBestProbeRow(candidateProbeTable, "truth-doa-oracle-final");
+wideRow = localBestProbeRow(candidateProbeTable, "wide-coarse-doa-grid");
+singleRow = localBestProbeRow(candidateProbeTable, "single-mf-coarse-doa-grid");
+defaultAngle = localProbeValue(defaultRow, 'angleErrDeg', NaN);
+defaultCoherence = localProbeValue(defaultRow, 'nonRefCoherenceFloor', NaN);
+defaultPhaseResid = localProbeValue(defaultRow, 'nonRefRmsPhaseResidRad', NaN);
+defaultFdRefAbs = abs(localProbeValue(defaultRow, 'fdRefErrHz', NaN));
+defaultFdRateAbs = abs(localProbeValue(defaultRow, 'fdRateErrHzPerSec', NaN));
+defaultToothIdx = localProbeValue(defaultRow, 'toothIdx', NaN);
+truthAngle = localProbeValue(truthRow, 'angleErrDeg', NaN);
+caseRole = localClassifyCaseRole(defaultAngle, truthAngle, defaultCoherence, ...
+  defaultFdRefAbs, defaultFdRateAbs, defaultToothIdx, config);
+[triggered, gateReason, triggeredByCoherence, triggeredByPhaseResid] = ...
+  localShouldTriggerGatedRescue(defaultCoherence, defaultPhaseResid, config);
+for iBank = 1:numel(bankLabelList)
+  bankLabel = bankLabelList(iBank);
+  safeAdoptDiag = localMakeSafeAdoptDiag(false, false, "not-safe-adopt-bank", defaultRow);
+  switch bankLabel
+    case "disabled"
+      selectedRow = defaultRow;
+      rescueTriggered = false;
+      selectedGateReason = "disabled";
+    case "gated-wide-only"
+      rescueTriggered = triggered;
+      selectedGateReason = gateReason;
+      selectedRow = defaultRow;
+      if rescueTriggered
+        selectedRow = localBestProbeRowAny(candidateProbeTable, ["default-final"; "wide-coarse-doa-grid"]);
+      end
+    case "gated-single-mf-only"
+      rescueTriggered = triggered;
+      selectedGateReason = gateReason;
+      selectedRow = defaultRow;
+      if rescueTriggered
+        selectedRow = localBestProbeRowAny(candidateProbeTable, ["default-final"; "single-mf-coarse-doa-grid"]);
+      end
+    case "gated-wide-single-bank"
+      rescueTriggered = triggered;
+      selectedGateReason = gateReason;
+      selectedRow = defaultRow;
+      if rescueTriggered
+        selectedRow = localBestProbeRowAny(candidateProbeTable, ["default-final"; "wide-coarse-doa-grid"; "single-mf-coarse-doa-grid"]);
+      end
+    case "gated-wide-single-bank-safe-adopt"
+      rescueTriggered = triggered;
+      selectedGateReason = gateReason;
+      selectedRow = defaultRow;
+      safeAdoptDiag = localMakeSafeAdoptDiag(true, false, "gate-not-triggered", defaultRow);
+      if rescueTriggered
+        [selectedRow, safeAdoptDiag] = localBestProbeRowAnySafeAdopt(candidateProbeTable, ...
+          ["default-final"; "wide-coarse-doa-grid"; "single-mf-coarse-doa-grid"], config, "strict");
+      end
+    case "gated-wide-single-bank-family-safe-adopt"
+      rescueTriggered = triggered;
+      selectedGateReason = gateReason;
+      selectedRow = defaultRow;
+      safeAdoptDiag = localMakeSafeAdoptDiag(true, false, "gate-not-triggered", defaultRow);
+      if rescueTriggered
+        [selectedRow, safeAdoptDiag] = localBestProbeRowAnySafeAdopt(candidateProbeTable, ...
+          ["default-final"; "wide-coarse-doa-grid"; "single-mf-coarse-doa-grid"], config, "family");
+      end
+    case "gated-wide-single-joint-bank"
+      rescueTriggered = triggered;
+      selectedGateReason = gateReason;
+      selectedRow = defaultRow;
+      if rescueTriggered
+        selectedRow = localBestProbeRowAny(candidateProbeTable, ...
+          ["default-final"; "wide-coarse-doa-grid"; "single-mf-coarse-doa-grid"; ...
+          "wide-joint-doa-fdref-grid"; "single-mf-joint-doa-fdref-grid"]);
+      end
+    case "gated-wide-single-joint-bank-safe-adopt"
+      rescueTriggered = triggered;
+      selectedGateReason = gateReason;
+      selectedRow = defaultRow;
+      safeAdoptDiag = localMakeSafeAdoptDiag(true, false, "gate-not-triggered", defaultRow);
+      if rescueTriggered
+        [selectedRow, safeAdoptDiag] = localBestProbeRowAnySafeAdopt(candidateProbeTable, ...
+          ["default-final"; "wide-coarse-doa-grid"; "single-mf-coarse-doa-grid"; ...
+          "wide-joint-doa-fdref-grid"; "single-mf-joint-doa-fdref-grid"], config, "strict");
+      end
+    case "blanket-wide-single-bank"
+      rescueTriggered = true;
+      selectedGateReason = "blanket-reference";
+      selectedRow = localBestProbeRowAny(candidateProbeTable, ["default-final"; "wide-coarse-doa-grid"; "single-mf-coarse-doa-grid"]);
+    otherwise
+      selectedRow = defaultRow;
+      rescueTriggered = false;
+      selectedGateReason = "unknown-bank";
+  end
+  rowCell{iBank} = localMakeRescueCaseRow(taskSeed, caseRole, bankLabel, selectedRow, defaultRow, truthRow, ...
+    rescueTriggered, selectedGateReason, triggeredByCoherence, triggeredByPhaseResid, ...
+    defaultCoherence, defaultPhaseResid, repeatWallTimeMs, config, safeAdoptDiag);
+end
+rescueCaseTable = struct2table([rowCell{:}].');
+end
+
+function row = localMakeRescueCaseRow(taskSeed, caseRole, bankLabel, selectedRow, defaultRow, truthRow, rescueTriggered, gateReason, triggeredByCoherence, triggeredByPhaseResid, defaultCoherence, defaultPhaseResid, repeatWallTimeMs, config, safeAdoptDiag)
+%LOCALMAKERESCUECASEROW Convert one selected bank candidate into the user-facing case table.
+
+defaultAngle = localProbeValue(defaultRow, 'angleErrDeg', NaN);
+selectedAngle = localProbeValue(selectedRow, 'angleErrDeg', NaN);
+truthAngle = localProbeValue(truthRow, 'angleErrDeg', NaN);
+angleGain = defaultAngle - selectedAngle;
+row = struct();
+row.taskSeed = taskSeed;
+row.bankLabel = string(bankLabel);
+row.caseRole = string(caseRole);
+row.defaultAngleErrDeg = defaultAngle;
+row.defaultNonRefCoherenceFloor = defaultCoherence;
+row.defaultNonRefRmsPhaseResidRad = defaultPhaseResid;
+row.defaultFdRefErrHz = localProbeValue(defaultRow, 'fdRefErrHz', NaN);
+row.defaultFdRateErrHzPerSec = localProbeValue(defaultRow, 'fdRateErrHzPerSec', NaN);
+row.defaultToothIdx = localProbeValue(defaultRow, 'toothIdx', NaN);
+row.truthDoaOracleAngleErrDeg = truthAngle;
+row.rescueTriggered = logical(rescueTriggered);
+row.triggeredByCoherence = logical(triggeredByCoherence);
+row.triggeredByPhaseResid = logical(triggeredByPhaseResid);
+row.phaseResidAvailable = isfinite(defaultPhaseResid);
+row.triggerReason = string(gateReason);
+row.selectedBank = string(bankLabel);
+row.selectedCandidateFamily = string(localProbeValue(selectedRow, 'candidateFamily', ""));
+row.selectedCandidateTag = string(localProbeValue(selectedRow, 'candidateTag', ""));
+row.selectedSourceMethodLabel = string(localProbeValue(selectedRow, 'sourceMethodLabel', ""));
+row.selectedAngleErrDeg = selectedAngle;
+row.selectedNonRefCoherenceFloor = localProbeValue(selectedRow, 'nonRefCoherenceFloor', NaN);
+row.selectedNonRefRmsPhaseResidRad = localProbeValue(selectedRow, 'nonRefRmsPhaseResidRad', NaN);
+row.selectedObj = localProbeValue(selectedRow, 'obj', NaN);
+row.selectedObjGainFromDefault = localProbeValue(selectedRow, 'objGainFromDefault', NaN);
+row.selectedFdRefErrHz = localProbeValue(selectedRow, 'fdRefErrHz', NaN);
+row.selectedFdRateErrHzPerSec = localProbeValue(selectedRow, 'fdRateErrHzPerSec', NaN);
+row.selectedToothIdx = localProbeValue(selectedRow, 'toothIdx', NaN);
+row.selectedDoaStep1Deg = localProbeValue(selectedRow, 'doaStep1Deg', NaN);
+row.selectedDoaStep2Deg = localProbeValue(selectedRow, 'doaStep2Deg', NaN);
+row.selectedFdRefStepHz = localProbeValue(selectedRow, 'fdRefStepHz', NaN);
+row.selectedFdRateStepHzPerSec = localProbeValue(selectedRow, 'fdRateStepHzPerSec', NaN);
+row.safeAdoptApplied = logical(localGetFieldOrDefault(safeAdoptDiag, 'applied', false));
+row.safeAdoptRejected = logical(localGetFieldOrDefault(safeAdoptDiag, 'rejected', false));
+row.safeAdoptReason = string(localGetFieldOrDefault(safeAdoptDiag, 'reason', ""));
+preSafeRow = localGetFieldOrDefault(safeAdoptDiag, 'preSelectedRow', table());
+row.preSafeCandidateFamily = string(localProbeValue(preSafeRow, 'candidateFamily', ""));
+row.preSafeCandidateTag = string(localProbeValue(preSafeRow, 'candidateTag', ""));
+row.preSafeAngleErrDeg = localProbeValue(preSafeRow, 'angleErrDeg', NaN);
+row.preSafeObjGainFromDefault = localProbeValue(preSafeRow, 'objGainFromDefault', NaN);
+row.preSafeNonRefCoherenceFloor = localProbeValue(preSafeRow, 'nonRefCoherenceFloor', NaN);
+row.preSafeDoaStep1Deg = localProbeValue(preSafeRow, 'doaStep1Deg', NaN);
+row.preSafeDoaStep2Deg = localProbeValue(preSafeRow, 'doaStep2Deg', NaN);
+row.preSafeFdRefStepHz = localProbeValue(preSafeRow, 'fdRefStepHz', NaN);
+row.preSafeFdRateStepHzPerSec = localProbeValue(preSafeRow, 'fdRateStepHzPerSec', NaN);
+row.angleGainDeg = angleGain;
+row.wallTimeMs = repeatWallTimeMs;
+row.gapToTruthDoaOracleDeg = selectedAngle - truthAngle;
+row.isHardRescued = row.caseRole == "hard-collapse" && ...
+  isfinite(angleGain) && angleGain >= config.angleGainThresholdDeg && ...
+  isfinite(row.selectedNonRefCoherenceFloor) && row.selectedNonRefCoherenceFloor >= config.coherenceHealthyThreshold;
+row.isDamaged = isfinite(angleGain) && angleGain <= -config.damageThresholdDeg;
+end
+
+function caseRole = localClassifyCaseRole(defaultAngle, truthAngle, defaultCoherence, defaultFdRefAbs, defaultFdRateAbs, defaultToothIdx, config)
+%LOCALCLASSIFYCASEROLE Assign an offline evaluation label for one repeat.
+
+sameTooth = isfinite(defaultToothIdx) && defaultToothIdx == 0;
+fdHealthy = sameTooth && isfinite(defaultFdRefAbs) && defaultFdRefAbs <= config.fdRefHealthyAbsHz && ...
+  isfinite(defaultFdRateAbs) && defaultFdRateAbs <= config.fdRateHealthyAbsHzPerSec;
+truthGap = defaultAngle - truthAngle;
+coherenceCollapsed = isfinite(defaultCoherence) && defaultCoherence < config.coherenceHealthyThreshold;
+if ~sameTooth
+  caseRole = "wrong-tooth-negative";
+elseif ~fdHealthy
+  caseRole = "fd-not-healthy-negative";
+elseif coherenceCollapsed && isfinite(truthGap) && truthGap >= config.truthDoaGapThresholdDeg
+  caseRole = "hard-collapse";
+else
+  caseRole = "easy-negative";
+end
+end
+
+function [triggerRescue, gateReason, triggeredByCoherence, triggeredByPhaseResid] = localShouldTriggerGatedRescue(defaultCoherenceFloor, defaultRmsPhaseResidRad, config)
+%LOCALSHOULDTRIGGERGATEDRESCUE Gate the implementable bank using no-truth diagnostics.
+
+cohThreshold = config.gatedRescueCoherenceThreshold;
+phaseThreshold = config.gatedRescuePhaseResidThresholdRad;
+gateVersion = string(config.gatedRescueGateVersion);
+phaseGateEnabled = gateVersion ~= "coherence-v1" && isfinite(phaseThreshold) && phaseThreshold > 0;
+phaseResidAvailable = phaseGateEnabled && isfinite(defaultRmsPhaseResidRad);
+triggeredByCoherence = isfinite(defaultCoherenceFloor) && defaultCoherenceFloor < cohThreshold;
+triggeredByPhaseResid = phaseResidAvailable && defaultRmsPhaseResidRad >= phaseThreshold;
+triggerRescue = triggeredByCoherence || triggeredByPhaseResid;
+
+if triggeredByCoherence && triggeredByPhaseResid
+  gateReason = "coherence-collapse-and-phase-residual-large";
+elseif triggeredByCoherence
+  gateReason = "coherence-collapse";
+elseif triggeredByPhaseResid
+  gateReason = "phase-residual-large";
+elseif ~isfinite(defaultCoherenceFloor)
+  gateReason = "coherence-unavailable";
+else
+  gateReason = "coherence-not-collapsed";
+end
+end
+
+function rescueEffectCaseTable = localSelectGatedEffectCaseTable(rescueBankDecisionTable)
+%LOCALSELECTGATEDEFFECTCASETABLE Keep one gated wide+single-MF result row per seed.
+
+if isempty(rescueBankDecisionTable)
+  rescueEffectCaseTable = table();
+  return;
+end
+targetBank = "gated-wide-single-joint-bank-safe-adopt";
+if ~any(rescueBankDecisionTable.bankLabel == targetBank)
+  targetBank = "gated-wide-single-bank-family-safe-adopt";
+end
+if ~any(rescueBankDecisionTable.bankLabel == targetBank)
+  targetBank = "gated-wide-single-bank-safe-adopt";
+end
+mask = rescueBankDecisionTable.bankLabel == targetBank;
+rescueEffectCaseTable = rescueBankDecisionTable(mask, :);
+end
+
+function triggerReasonTable = localBuildTriggerReasonTable(rescueEffectCaseTable)
+%LOCALBUILDTRIGGERREASONTABLE Extract one no-truth trigger row per seed for the gated bank.
+
+if isempty(rescueEffectCaseTable)
+  triggerReasonTable = table();
+  return;
+end
+base = rescueEffectCaseTable;
+keepFields = {'taskSeed', 'defaultNonRefCoherenceFloor', 'defaultNonRefRmsPhaseResidRad', ...
+  'triggeredByCoherence', 'triggeredByPhaseResid', 'phaseResidAvailable', ...
+  'rescueTriggered', 'triggerReason'};
+triggerReasonTable = base(:, keepFields);
+end
+
+function hardMissSummaryTable = localBuildHardMissSummaryTable(rescueBankDecisionTable, config)
+%LOCALBUILDHARDMISSSUMMARYTABLE Explain hard-collapse seeds not rescued by the gated bank.
+
+if isempty(rescueBankDecisionTable) || ~ismember('bankLabel', rescueBankDecisionTable.Properties.VariableNames)
+  hardMissSummaryTable = table();
+  return;
+end
+targetBank = "gated-wide-single-joint-bank-safe-adopt";
+if ~any(rescueBankDecisionTable.bankLabel == targetBank)
+  targetBank = "gated-wide-single-bank-family-safe-adopt";
+end
+if ~any(rescueBankDecisionTable.bankLabel == targetBank)
+  targetBank = "gated-wide-single-bank-safe-adopt";
+end
+gatedMask = rescueBankDecisionTable.bankLabel == targetBank & ...
+  rescueBankDecisionTable.caseRole == "hard-collapse" & ~rescueBankDecisionTable.isHardRescued;
+gatedTable = rescueBankDecisionTable(gatedMask, :);
+if isempty(gatedTable)
+  hardMissSummaryTable = table();
+  return;
+end
+rowCell = cell(height(gatedTable), 1);
+for iRow = 1:height(gatedTable)
+  gatedRow = gatedTable(iRow, :);
+  blanketRow = localFindDecisionRow(rescueBankDecisionTable, gatedRow.taskSeed(1), "blanket-wide-single-bank");
+  row = struct();
+  row.taskSeed = gatedRow.taskSeed(1);
+  row.defaultAngleErrDeg = gatedRow.defaultAngleErrDeg(1);
+  row.truthDoaOracleAngleErrDeg = gatedRow.truthDoaOracleAngleErrDeg(1);
+  row.defaultNonRefCoherenceFloor = gatedRow.defaultNonRefCoherenceFloor(1);
+  row.defaultNonRefRmsPhaseResidRad = gatedRow.defaultNonRefRmsPhaseResidRad(1);
+  row.rescueTriggered = gatedRow.rescueTriggered(1);
+  row.triggerReason = gatedRow.triggerReason(1);
+  row.selectedCandidateFamily = gatedRow.selectedCandidateFamily(1);
+  row.selectedCandidateTag = gatedRow.selectedCandidateTag(1);
+  row.selectedAngleErrDeg = gatedRow.selectedAngleErrDeg(1);
+  row.selectedNonRefCoherenceFloor = gatedRow.selectedNonRefCoherenceFloor(1);
+  row.angleGainDeg = gatedRow.angleGainDeg(1);
+  row.blanketSelectedCandidateFamily = string(localTableScalar(blanketRow, 'selectedCandidateFamily', ""));
+  row.blanketSelectedAngleErrDeg = localTableScalar(blanketRow, 'selectedAngleErrDeg', NaN);
+  row.blanketSelectedNonRefCoherenceFloor = localTableScalar(blanketRow, 'selectedNonRefCoherenceFloor', NaN);
+  row.blanketAngleGainDeg = localTableScalar(blanketRow, 'angleGainDeg', NaN);
+  row.blanketIsDamaged = logical(localTableScalar(blanketRow, 'isDamaged', false));
+  row.blanketWouldRescue = localIsHardRescueCandidate(row.blanketAngleGainDeg, ...
+    row.blanketSelectedNonRefCoherenceFloor, config);
+  row.missReason = localClassifyHardMissReason(gatedRow, row.blanketIsDamaged, row.blanketWouldRescue, config);
+  rowCell{iRow} = row;
+end
+hardMissSummaryTable = struct2table([rowCell{:}].');
+end
+
+function decisionRow = localFindDecisionRow(decisionTable, taskSeed, bankLabel)
+%LOCALFINDDECISIONROW Find one bank decision row for a seed.
+
+decisionRow = decisionTable([], :);
+if isempty(decisionTable) || ~ismember('taskSeed', decisionTable.Properties.VariableNames) || ...
+    ~ismember('bankLabel', decisionTable.Properties.VariableNames)
+  return;
+end
+mask = decisionTable.taskSeed == taskSeed & decisionTable.bankLabel == string(bankLabel);
+if any(mask)
+  idx = find(mask, 1, 'first');
+  decisionRow = decisionTable(idx, :);
+end
+end
+
+function isRescue = localIsHardRescueCandidate(angleGainDeg, nonRefCoherenceFloor, config)
+%LOCALISHARDRESCUECANDIDATE Apply the hard-case rescue gain/coherence check.
+
+isRescue = isfinite(angleGainDeg) && angleGainDeg >= config.angleGainThresholdDeg && ...
+  isfinite(nonRefCoherenceFloor) && nonRefCoherenceFloor >= config.coherenceHealthyThreshold;
+end
+
+function missReason = localClassifyHardMissReason(gatedRow, blanketIsDamaged, blanketWouldRescue, config)
+%LOCALCLASSIFYHARDMISSREASON Return a compact explanation for one hard miss.
+
+if ~gatedRow.rescueTriggered(1)
+  if blanketIsDamaged
+    missReason = "gate-not-triggered-and-blanket-damages";
+  elseif blanketWouldRescue
+    missReason = "gate-not-triggered-but-blanket-rescues";
+  else
+    missReason = "gate-not-triggered-bank-not-confirmed";
+  end
+  return;
+end
+if gatedRow.isDamaged(1)
+  missReason = "triggered-selected-damages";
+elseif ~isfinite(gatedRow.angleGainDeg(1)) || gatedRow.angleGainDeg(1) < config.angleGainThresholdDeg
+  missReason = "triggered-angle-gain-insufficient";
+elseif ~isfinite(gatedRow.selectedNonRefCoherenceFloor(1)) || ...
+    gatedRow.selectedNonRefCoherenceFloor(1) < config.coherenceHealthyThreshold
+  missReason = "triggered-coherence-not-recovered";
+else
+  missReason = "unclassified-hard-miss";
+end
+end
+
+function rescueEffectAggregateTable = localBuildRescueEffectAggregateTable(rescueEffectCaseTable, config)
+%LOCALBUILDRESCUEEFFECTAGGREGATETABLE Build rescue and damage rates for each bank.
+
+if isempty(rescueEffectCaseTable)
+  rescueEffectAggregateTable = table();
+  return;
+end
+angleHitThreshold = localGetFieldOrDefault(config, 'angleHitThresholdDeg', NaN);
+bankList = unique(rescueEffectCaseTable.bankLabel, 'stable');
+rowCell = cell(numel(bankList), 1);
+for iBank = 1:numel(bankList)
+  bankNow = bankList(iBank);
+  mask = rescueEffectCaseTable.bankLabel == bankNow;
+  hardMask = mask & rescueEffectCaseTable.caseRole == "hard-collapse";
+  easyMask = mask & rescueEffectCaseTable.caseRole == "easy-negative";
+  fdMask = mask & rescueEffectCaseTable.caseRole == "fd-not-healthy-negative";
+  row = struct();
+  row.bankLabel = bankNow;
+  row.numRepeat = nnz(mask);
+  row.numHardCase = nnz(hardMask);
+  row.numEasyNegativeCase = nnz(easyMask);
+  row.numFdNegativeCase = nnz(fdMask);
+  row.triggerRate = localMeanLogical(rescueEffectCaseTable.rescueTriggered(mask));
+  row.hardTriggerRate = localMeanLogical(rescueEffectCaseTable.rescueTriggered(hardMask));
+  row.easyTriggerRate = localMeanLogical(rescueEffectCaseTable.rescueTriggered(easyMask));
+  row.fdNegativeTriggerRate = localMeanLogical(rescueEffectCaseTable.rescueTriggered(fdMask));
+  row.hardRescueRate = localMeanLogical(rescueEffectCaseTable.isHardRescued(hardMask));
+  row.hardMedianAngleGainDeg = median(rescueEffectCaseTable.angleGainDeg(hardMask), 'omitnan');
+  row.hardP95SelectedAngleDeg = localPercentile(rescueEffectCaseTable.selectedAngleErrDeg(hardMask), 95);
+  row.easyDamageRate = localMeanLogical(rescueEffectCaseTable.isDamaged(easyMask));
+  row.fdNegativeDamageRate = localMeanLogical(rescueEffectCaseTable.isDamaged(fdMask));
+  row.overallMedianAngleDeg = median(rescueEffectCaseTable.selectedAngleErrDeg(mask), 'omitnan');
+  row.overallP95AngleDeg = localPercentile(rescueEffectCaseTable.selectedAngleErrDeg(mask), 95);
+  row.overallP99AngleDeg = localPercentile(rescueEffectCaseTable.selectedAngleErrDeg(mask), 99);
+  row.angleHitThresholdDeg = angleHitThreshold;
+  row.overallAngleHitRate = localMeanHit(rescueEffectCaseTable.selectedAngleErrDeg(mask), angleHitThreshold);
+  row.hardAngleHitRate = localMeanHit(rescueEffectCaseTable.selectedAngleErrDeg(hardMask), angleHitThreshold);
+  row.overallMaxAngleDeg = max(rescueEffectCaseTable.selectedAngleErrDeg(mask), [], 'omitnan');
+  row.medianWallTimeMs = median(rescueEffectCaseTable.wallTimeMs(mask), 'omitnan');
+  rowCell{iBank} = row;
+end
+rescueEffectAggregateTable = struct2table([rowCell{:}].');
+end
+
+function verdictTable = localBuildRescueEffectVerdictTable(aggregateTable)
+%LOCALBUILDRESCUEEFFECTVERDICTTABLE Summarize whether each bank satisfies replay promotion checks.
+
+if isempty(aggregateTable)
+  verdictTable = table();
+  return;
+end
+disabledRow = localSelectAggregateRow(aggregateTable, "disabled");
+blanketRow = localSelectAggregateRow(aggregateTable, "blanket-wide-single-bank");
+bankMask = aggregateTable.bankLabel ~= "disabled";
+bankList = aggregateTable.bankLabel(bankMask);
+rowCell = cell(numel(bankList), 1);
+for iBank = 1:numel(bankList)
+  bankNow = bankList(iBank);
+  bankRow = localSelectAggregateRow(aggregateTable, bankNow);
+  numHardCase = localTableScalar(bankRow, 'numHardCase', NaN);
+  numFdNegativeCase = localTableScalar(bankRow, 'numFdNegativeCase', NaN);
+  hardRescueRate = localTableScalar(bankRow, 'hardRescueRate', NaN);
+  easyDamageRate = localTableScalar(bankRow, 'easyDamageRate', NaN);
+  fdDamageRate = localTableScalar(bankRow, 'fdNegativeDamageRate', NaN);
+  disabledP95 = localTableScalar(disabledRow, 'overallP95AngleDeg', NaN);
+  disabledMax = localTableScalar(disabledRow, 'overallMaxAngleDeg', NaN);
+  bankP95 = localTableScalar(bankRow, 'overallP95AngleDeg', NaN);
+  bankMax = localTableScalar(bankRow, 'overallMaxAngleDeg', NaN);
+  blanketFdDamage = localTableScalar(blanketRow, 'fdNegativeDamageRate', NaN);
+  p95Improvement = disabledP95 - bankP95;
+  maxImprovement = disabledMax - bankMax;
+  hardRescuePass = isfinite(hardRescueRate) && hardRescueRate >= 0.8;
+  easyDamagePass = ~isfinite(easyDamageRate) || easyDamageRate <= 0;
+  fdDamagePass = ~isfinite(fdDamageRate) || fdDamageRate <= 0.05 || ...
+    (isfinite(blanketFdDamage) && fdDamageRate < blanketFdDamage);
+  p95Pass = ~isfinite(p95Improvement) || p95Improvement >= 0;
+  maxPass = ~isfinite(maxImprovement) || maxImprovement >= 0;
+  enoughHardCase = isfinite(numHardCase) && numHardCase >= 3;
+  recommendedPass = enoughHardCase && hardRescuePass && easyDamagePass && fdDamagePass && p95Pass && maxPass;
+  row = struct();
+  row.bankLabel = bankNow;
+  row.numHardCase = numHardCase;
+  row.numFdNegativeCase = numFdNegativeCase;
+  row.hardRescueRate = hardRescueRate;
+  row.easyDamageRate = easyDamageRate;
+  row.fdNegativeDamageRate = fdDamageRate;
+  row.p95ImprovementVsDisabledDeg = p95Improvement;
+  row.maxImprovementVsDisabledDeg = maxImprovement;
+  row.hardRescuePass = hardRescuePass;
+  row.easyDamagePass = easyDamagePass;
+  row.fdDamagePass = fdDamagePass;
+  row.p95NotWorseThanDisabled = p95Pass;
+  row.maxNotWorseThanDisabled = maxPass;
+  row.enoughHardCase = enoughHardCase;
+  row.recommendedPass = recommendedPass;
+  row.recommendation = localBuildVerdictRecommendation(bankNow, recommendedPass, enoughHardCase);
+  rowCell{iBank} = row;
+end
+verdictTable = struct2table([rowCell{:}].');
+end
+
+function row = localSelectAggregateRow(aggregateTable, bankLabel)
+%LOCALSELECTAGGREGATEROW Return one aggregate row for a bank label.
+
+row = aggregateTable([], :);
+if isempty(aggregateTable) || ~ismember('bankLabel', aggregateTable.Properties.VariableNames)
+  return;
+end
+mask = aggregateTable.bankLabel == string(bankLabel);
+if any(mask)
+  idx = find(mask, 1, 'first');
+  row = aggregateTable(idx, :);
+end
+end
+
+function value = localTableScalar(dataTable, fieldName, defaultValue)
+%LOCALTABLESCALAR Read one scalar value from a table row.
+
+value = defaultValue;
+if isempty(dataTable) || height(dataTable) == 0 || ~ismember(fieldName, dataTable.Properties.VariableNames)
+  return;
+end
+rawValue = dataTable.(fieldName);
+if ~isempty(rawValue)
+  value = rawValue(1);
+end
+end
+
+function recommendation = localBuildVerdictRecommendation(bankLabel, recommendedPass, enoughHardCase)
+%LOCALBUILDVERDICTRECOMMENDATION Return a compact replay-only next-step label.
+
+if ~enoughHardCase
+  recommendation = "needs-more-hard-cases";
+elseif recommendedPass && string(bankLabel) == "gated-wide-single-joint-bank-safe-adopt"
+  recommendation = "ready-for-controlled-in-tooth-joint-range-check";
+elseif recommendedPass && string(bankLabel) == "gated-wide-single-bank-safe-adopt"
+  recommendation = "ready-for-controlled-in-tooth-safe-adopt-check";
+elseif recommendedPass && string(bankLabel) == "gated-wide-single-bank"
+  recommendation = "ready-for-controlled-in-tooth-use";
+elseif recommendedPass
+  recommendation = "candidate-but-not-target";
+else
+  recommendation = "hold";
+end
+end
+
+function [bestRow, safeAdoptDiag] = localBestProbeRowAnySafeAdopt(seedProbe, candidateFamilyList, config, safeAdoptMode)
+%LOCALBESTPROBEROWANYSAFEADOPT Select the lowest-objective candidate that passes replay-only safe adoption.
+
+if nargin < 4
+  safeAdoptMode = "strict";
+end
+safeAdoptMode = string(safeAdoptMode);
+rawBestRow = localBestProbeRowAny(seedProbe, candidateFamilyList);
+defaultRow = localBestProbeRow(seedProbe, "default-final");
+safeAdoptDiag = localMakeSafeAdoptDiag(true, false, "accepted", rawBestRow);
+bestRow = defaultRow;
+if isempty(seedProbe) || isempty(rawBestRow)
+  safeAdoptDiag = localMakeSafeAdoptDiag(true, true, "candidate-unavailable", rawBestRow);
+  return;
+end
+candidateFamilyList = string(candidateFamilyList(:));
+mask = ismember(seedProbe.candidateFamily, candidateFamilyList) & isfinite(seedProbe.obj);
+if ~any(mask)
+  safeAdoptDiag = localMakeSafeAdoptDiag(true, true, "candidate-unavailable", rawBestRow);
+  return;
+end
+idx = find(mask);
+isAllowed = false(numel(idx), 1);
+for iIdx = 1:numel(idx)
+  rowNow = seedProbe(idx(iIdx), :);
+  [isAllowed(iIdx), ~] = localCanSafeAdoptProbeRow(rowNow, config, safeAdoptMode);
+end
+if any(isAllowed)
+  idxAllowed = idx(isAllowed);
+  [~, idxRel] = min(seedProbe.obj(idxAllowed));
+  bestRow = seedProbe(idxAllowed(idxRel), :);
+end
+[rawAllowed, rawRejectReason] = localCanSafeAdoptProbeRow(rawBestRow, config, safeAdoptMode);
+if rawAllowed
+  safeAdoptDiag = localMakeSafeAdoptDiag(true, false, "accepted", rawBestRow);
+elseif ~isempty(bestRow) && string(localProbeValue(bestRow, 'candidateFamily', "")) ~= "default-final"
+  safeAdoptDiag = localMakeSafeAdoptDiag(true, true, "raw-rejected-alternative-accepted:" + rawRejectReason, rawBestRow);
+else
+  safeAdoptDiag = localMakeSafeAdoptDiag(true, true, rawRejectReason, rawBestRow);
+end
+end
+
+function [canAdopt, rejectReason] = localCanSafeAdoptProbeRow(candidateRow, config, safeAdoptMode)
+%LOCALCANSAFEADOPTPROBEROW Apply truth-free safe adoption checks to one candidate row.
+
+if nargin < 3
+  safeAdoptMode = "strict";
+end
+safeAdoptMode = string(safeAdoptMode);
+canAdopt = false;
+rejectReason = "candidate-unavailable";
+if isempty(candidateRow) || height(candidateRow) == 0
+  return;
+end
+candidateFamily = string(localProbeValue(candidateRow, 'candidateFamily', ""));
+if candidateFamily == "default-final"
+  canAdopt = true;
+  rejectReason = "default-final";
+  return;
+end
+objGain = localProbeValue(candidateRow, 'objGainFromDefault', NaN);
+if ~(isfinite(objGain) && objGain > config.safeAdoptMinObjGain)
+  rejectReason = "obj-gain-not-positive";
+  return;
+end
+coherenceFloor = localProbeValue(candidateRow, 'nonRefCoherenceFloor', NaN);
+if ~(isfinite(coherenceFloor) && coherenceFloor >= config.safeAdoptCoherenceThreshold)
+  rejectReason = "coherence-not-recovered";
+  return;
+end
+doaStep1 = localProbeValue(candidateRow, 'doaStep1Deg', NaN);
+doaStep2 = localProbeValue(candidateRow, 'doaStep2Deg', NaN);
+if ~(isfinite(doaStep1) && isfinite(doaStep2))
+  rejectReason = "doa-step-unavailable";
+  return;
+end
+maxAbsDoaStepDeg = config.safeAdoptMaxAbsDoaStepDeg;
+if safeAdoptMode == "family" && localIsFamilySafeAdoptCenter(candidateFamily)
+  maxAbsDoaStepDeg = localGetFieldOrDefault(config, 'familySafeAdoptMaxAbsDoaStepDeg', maxAbsDoaStepDeg);
+end
+if max(abs([doaStep1, doaStep2])) > maxAbsDoaStepDeg
+  if safeAdoptMode == "family"
+    rejectReason = "family-doa-step-too-large";
+  else
+    rejectReason = "doa-step-too-large";
+  end
+  return;
+end
+fdRefStep = localProbeValue(candidateRow, 'fdRefStepHz', NaN);
+if ~(isfinite(fdRefStep) && abs(fdRefStep) <= config.safeAdoptMaxAbsFdRefStepHz)
+  rejectReason = "fdref-step-too-large";
+  return;
+end
+canAdopt = true;
+rejectReason = "accepted";
+end
+
+function tf = localIsFamilySafeAdoptCenter(candidateFamily)
+%LOCALISFAMILYSAFEADOPTCENTER Return true for center-based basin-entry candidates.
+
+candidateFamily = string(candidateFamily);
+tf = any(candidateFamily == ["wide-coarse-doa-grid", "single-mf-coarse-doa-grid", ...
+  "wide-joint-doa-fdref-grid", "single-mf-joint-doa-fdref-grid"]);
+end
+
+function safeAdoptDiag = localMakeSafeAdoptDiag(applied, rejected, reason, preSelectedRow)
+%LOCALMAKESAFEADOPTDIAG Build a compact diagnostic struct for safe adoption selection.
+
+if nargin < 4
+  preSelectedRow = table();
+end
+safeAdoptDiag = struct();
+safeAdoptDiag.applied = logical(applied);
+safeAdoptDiag.rejected = logical(rejected);
+safeAdoptDiag.reason = string(reason);
+safeAdoptDiag.preSelectedRow = preSelectedRow;
+end
+
+function bestRow = localBestProbeRow(seedProbe, candidateFamily)
+%LOCALBESTPROBEROW Return the lowest-objective row for one candidate family.
+
+bestRow = seedProbe([], :);
+if isempty(seedProbe) || ~ismember('candidateFamily', seedProbe.Properties.VariableNames)
+  return;
+end
+mask = seedProbe.candidateFamily == string(candidateFamily) & isfinite(seedProbe.obj);
+if ~any(mask)
+  return;
+end
+idx = find(mask);
+[~, idxRel] = min(seedProbe.obj(idx));
+bestRow = seedProbe(idx(idxRel), :);
+end
+
+function bestRow = localBestProbeRowAny(seedProbe, candidateFamilyList)
+%LOCALBESTPROBEROWANY Return the lowest-objective row across several candidate families.
+
+bestRow = seedProbe([], :);
+if isempty(seedProbe) || ~ismember('candidateFamily', seedProbe.Properties.VariableNames)
+  return;
+end
+candidateFamilyList = string(candidateFamilyList(:));
+mask = ismember(seedProbe.candidateFamily, candidateFamilyList) & isfinite(seedProbe.obj);
+if ~any(mask)
+  return;
+end
+idx = find(mask);
+[~, idxRel] = min(seedProbe.obj(idx));
+bestRow = seedProbe(idx(idxRel), :);
+end
+
+function value = localProbeValue(row, fieldName, defaultValue)
+%LOCALPROBEVALUE Read a scalar field from one probe table row.
+
+value = defaultValue;
+if isempty(row) || height(row) == 0 || ~ismember(fieldName, row.Properties.VariableNames)
+  return;
+end
+rawValue = row.(fieldName);
+if ~isempty(rawValue)
+  value = rawValue(1);
+end
+end
+
+function value = localMeanLogical(maskValue)
+%LOCALMEANLOGICAL Return the mean of a logical vector with empty fallback.
+
+if isempty(maskValue)
+  value = NaN;
+else
+  value = mean(double(maskValue), 'omitnan');
+end
+end
+
+function value = localMeanHit(angleValue, threshold)
+%LOCALMEANHIT Return the fraction of angle errors not exceeding a threshold.
+
+if isempty(angleValue) || ~(isfinite(threshold) && threshold >= 0)
+  value = NaN;
+else
+  value = mean(double(angleValue <= threshold), 'omitnan');
+end
+end
+
+function ladderTable = localBuildInToothDoaLadderTable(methodTable, rescueBankDecisionTable, config)
+%LOCALBUILDINTOOTHDOALADDERTABLE Compare SS/MS and raw/gated MS-MF in one controlled in-tooth table.
+
+if isempty(methodTable)
+  ladderTable = table();
+  return;
+end
+rowCell = cell(0, 1);
+truthTable = methodTable(methodTable.methodLabel == "ms-mf-cp-u-truth-doa-oracle", :);
+rowCell{end + 1, 1} = localMakeLadderMethodRow(methodTable, truthTable, ...
+  "ss-sf-static", "1-SS-SF static", "single-sat single-frame static baseline", false, config); %#ok<AGROW>
+rowCell{end + 1, 1} = localMakeLadderMethodRow(methodTable, truthTable, ...
+  "ms-sf-static", "2-MS-SF static", "multi-sat single-frame static baseline", false, config); %#ok<AGROW>
+rowCell{end + 1, 1} = localMakeLadderMethodRow(methodTable, truthTable, ...
+  "ss-mf-cp-u-in-tooth", "3-SS-MF CP-U in-tooth", "single-sat multi-frame baseline", false, config); %#ok<AGROW>
+rowCell{end + 1, 1} = localMakeLadderMethodRow(methodTable, truthTable, ...
+  "ms-mf-cp-u-in-tooth", "4-MS-MF CP-U raw in-tooth", "raw multi-sat multi-frame target", false, config); %#ok<AGROW>
+if ~isempty(rescueBankDecisionTable)
+  rowCell{end + 1, 1} = localMakeLadderGatedRow(rescueBankDecisionTable, ...
+    "gated-wide-single-bank-safe-adopt", "5a-MS-MF CP-U DoA safe-adopt bank", ...
+    "selected gated wide+single-MF DoA-only bank with truth-free safe adoption guard", config); %#ok<AGROW>
+  if any(rescueBankDecisionTable.bankLabel == "gated-wide-single-bank-family-safe-adopt")
+    rowCell{end + 1, 1} = localMakeLadderGatedRow(rescueBankDecisionTable, ...
+      "gated-wide-single-bank-family-safe-adopt", "5b-MS-MF CP-U family safe-adopt bank", ...
+      "selected gated wide+single-MF bank with family-aware DoA-step guard", config); %#ok<AGROW>
+  end
+  if any(rescueBankDecisionTable.bankLabel == "gated-wide-single-joint-bank-safe-adopt")
+    rowCell{end + 1, 1} = localMakeLadderGatedRow(rescueBankDecisionTable, ...
+      "gated-wide-single-joint-bank-safe-adopt", "5c-MS-MF CP-U joint safe-adopt bank", ...
+      "selected gated wide+single-MF DoA-fdRef bank with truth-free safe adoption guard", config); %#ok<AGROW>
+  end
+end
+rowCell{end + 1, 1} = localMakeLadderMethodRow(methodTable, truthTable, ...
+  "ms-mf-cp-u-truth-doa-oracle", "6-MS-MF CP-U truth-DoA oracle", "offline upper bound", true, config); %#ok<AGROW>
+rowCell = rowCell(~cellfun(@isempty, rowCell));
+if isempty(rowCell)
+  ladderTable = table();
+else
+  ladderTable = struct2table([rowCell{:}].');
+end
+end
+
+function row = localMakeLadderMethodRow(methodTable, truthTable, methodLabel, stageLabel, ladderRole, isOracle, config)
+%LOCALMAKELADDERMETHODROW Summarize one method row for the in-tooth DoA ladder.
+
+mask = methodTable.methodLabel == string(methodLabel);
+if ~any(mask)
+  row = [];
+  return;
+end
+subTable = methodTable(mask, :);
+truthAngle = localLookupTruthOracleAngle(subTable.taskSeed, truthTable);
+row = localMakeLadderStatsRow(stageLabel, methodLabel, ladderRole, subTable.taskSeed, ...
+  subTable.angleErrDeg, subTable.fdRefErrHz, subTable.fdRateErrHzPerSec, ...
+  subTable.nonRefCoherenceFloor, subTable.angleErrDeg - truthAngle, ...
+  nan(height(subTable), 1), nan(height(subTable), 1), logical(isOracle), config);
+end
+
+function row = localMakeLadderGatedRow(rescueBankDecisionTable, bankLabel, stageLabel, ladderRole, config)
+%LOCALMAKELADDERGATEDROW Summarize selected gated bank results for the in-tooth DoA ladder.
+
+mask = rescueBankDecisionTable.bankLabel == string(bankLabel);
+if ~any(mask)
+  row = [];
+  return;
+end
+subTable = rescueBankDecisionTable(mask, :);
+selectedByBank = subTable.rescueTriggered & subTable.selectedCandidateFamily ~= "default-final";
+row = localMakeLadderStatsRow(stageLabel, "ms-mf-cp-u-" + string(bankLabel), ladderRole, subTable.taskSeed, ...
+  subTable.selectedAngleErrDeg, subTable.selectedFdRefErrHz, subTable.selectedFdRateErrHzPerSec, ...
+  subTable.selectedNonRefCoherenceFloor, subTable.gapToTruthDoaOracleDeg, ...
+  subTable.rescueTriggered, selectedByBank, false, config);
+end
+
+function row = localMakeLadderStatsRow(stageLabel, methodLabel, ladderRole, taskSeed, angleErrDeg, fdRefErrHz, fdRateErrHzPerSec, nonRefCoherenceFloor, gapToTruthDoaOracleDeg, triggerVec, selectedVec, isOracle, config)
+%LOCALMAKELADDERSTATSROW Pack common in-tooth ladder statistics.
+
+angleErrDeg = reshape(double(angleErrDeg), [], 1);
+fdRefErrHz = reshape(double(fdRefErrHz), [], 1);
+fdRateErrHzPerSec = reshape(double(fdRateErrHzPerSec), [], 1);
+nonRefCoherenceFloor = reshape(double(nonRefCoherenceFloor), [], 1);
+gapToTruthDoaOracleDeg = reshape(double(gapToTruthDoaOracleDeg), [], 1);
+row = struct();
+row.stageLabel = string(stageLabel);
+row.methodLabel = string(methodLabel);
+row.ladderRole = string(ladderRole);
+row.numCase = numel(taskSeed);
+row.triggerRate = localMeanOptionalLogical(triggerVec);
+row.selectedByBankRate = localMeanOptionalLogical(selectedVec);
+row.angleRmseDeg = sqrt(mean(angleErrDeg .^ 2, 'omitnan'));
+row.angleMedianDeg = median(angleErrDeg, 'omitnan');
+row.angleP95Deg = localPercentile(angleErrDeg, 95);
+row.angleP99Deg = localPercentile(angleErrDeg, 99);
+row.angleHitThresholdDeg = localGetFieldOrDefault(config, 'angleHitThresholdDeg', NaN);
+row.angleHitRate = localMeanHit(angleErrDeg, row.angleHitThresholdDeg);
+row.angleMaxDeg = max(angleErrDeg, [], 'omitnan');
+row.fdRefAbsMedianHz = median(abs(fdRefErrHz), 'omitnan');
+row.fdRateAbsMedianHzPerSec = median(abs(fdRateErrHzPerSec), 'omitnan');
+row.nonRefCoherenceFloorMedian = median(nonRefCoherenceFloor, 'omitnan');
+row.gapToTruthDoaOracleMedianDeg = median(gapToTruthDoaOracleDeg, 'omitnan');
+row.isOracleUpperBound = logical(isOracle);
+end
+
+function truthAngle = localLookupTruthOracleAngle(taskSeed, truthTable)
+%LOCALLOOKUPTRUTHORACLEANGLE Return truth-DoA oracle angle for matching seeds.
+
+truthAngle = nan(numel(taskSeed), 1);
+if isempty(truthTable) || ~ismember('taskSeed', truthTable.Properties.VariableNames)
+  return;
+end
+for iSeed = 1:numel(taskSeed)
+  mask = truthTable.taskSeed == taskSeed(iSeed);
+  if any(mask)
+    idx = find(mask, 1, 'first');
+    truthAngle(iSeed) = truthTable.angleErrDeg(idx);
+  end
+end
+end
+
+function value = localMeanOptionalLogical(logicalVec)
+%LOCALMEANOPTIONALLOGICAL Return NaN for placeholder vectors and mean for logical indicators.
+
+if isempty(logicalVec) || all(isnan(double(logicalVec(:))))
+  value = NaN;
+else
+  value = mean(double(logicalVec(:)), 'omitnan');
+end
+end
+
+function rangeTable = localBuildRangeTable(repeatCell)
+%LOCALBUILDRANGETABLE Summarize the oracle fd / fdRate boxes used per repeat.
+
+numRepeat = numel(repeatCell);
+taskSeed = nan(numRepeat, 1);
+toothStepHz = nan(numRepeat, 1);
+truthFdRefHz = nan(numRepeat, 1);
+truthFdRateHzPerSec = nan(numRepeat, 1);
+fdRangeLowerHz = nan(numRepeat, 1);
+fdRangeUpperHz = nan(numRepeat, 1);
+fdRateRangeLowerHzPerSec = nan(numRepeat, 1);
+fdRateRangeUpperHzPerSec = nan(numRepeat, 1);
+for iRepeat = 1:numRepeat
+  item = repeatCell{iRepeat};
+  taskSeed(iRepeat) = item.taskSeed;
+  toothStepHz(iRepeat) = item.toothStepHz;
+  truthFdRefHz(iRepeat) = item.truthFdRefHz;
+  truthFdRateHzPerSec(iRepeat) = item.truthFdRateHzPerSec;
+  fdRangeLowerHz(iRepeat) = item.fdRangeOracle(1);
+  fdRangeUpperHz(iRepeat) = item.fdRangeOracle(2);
+  fdRateRangeLowerHzPerSec(iRepeat) = item.fdRateRangeOracle(1);
+  fdRateRangeUpperHzPerSec(iRepeat) = item.fdRateRangeOracle(2);
+end
+rangeTable = table(taskSeed, toothStepHz, truthFdRefHz, truthFdRateHzPerSec, ...
+  fdRangeLowerHz, fdRangeUpperHz, fdRateRangeLowerHzPerSec, fdRateRangeUpperHzPerSec);
+end
+
+function timingTable = localBuildTimingTable(repeatCell)
+%LOCALBUILDTIMINGTABLE Stack per-repeat wall-clock timing summaries.
+
+numRepeat = numel(repeatCell);
+taskSeed = nan(numRepeat, 1);
+buildDataMs = nan(numRepeat, 1);
+staticBundleMs = nan(numRepeat, 1);
+dynamicMethodTotalMs = nan(numRepeat, 1);
+dynamicMethodMaxMs = nan(numRepeat, 1);
+repeatTotalMs = nan(numRepeat, 1);
+for iRepeat = 1:numRepeat
+  item = repeatCell{iRepeat};
+  taskSeed(iRepeat) = item.taskSeed;
+  timing = localGetFieldOrDefault(item, 'timing', struct());
+  buildDataMs(iRepeat) = localGetFieldOrDefault(timing, 'buildDataMs', NaN);
+  staticBundleMs(iRepeat) = localGetFieldOrDefault(timing, 'staticBundleMs', NaN);
+  dynamicMethodTotalMs(iRepeat) = localGetFieldOrDefault(timing, 'dynamicMethodTotalMs', NaN);
+  dynamicMethodMaxMs(iRepeat) = localGetFieldOrDefault(timing, 'dynamicMethodMaxMs', NaN);
+  repeatTotalMs(iRepeat) = localGetFieldOrDefault(timing, 'repeatTotalMs', NaN);
+end
+timingTable = table(taskSeed, buildDataMs, staticBundleMs, dynamicMethodTotalMs, dynamicMethodMaxMs, repeatTotalMs);
+end
+
+function timingAggregateTable = localBuildTimingAggregateTable(timingTable)
+%LOCALBUILDTIMINGAGGREGATETABLE Build compact timing summary across repeats.
+
+if isempty(timingTable)
+  timingAggregateTable = table();
+  return;
+end
+stageLabel = ["build-repeat-data"; "static-transition-bundle"; "dynamic-methods-total"; ...
+  "slowest-dynamic-method"; "repeat-total"];
+valueCell = {timingTable.buildDataMs; timingTable.staticBundleMs; timingTable.dynamicMethodTotalMs; ...
+  timingTable.dynamicMethodMaxMs; timingTable.repeatTotalMs};
+medianMs = nan(numel(stageLabel), 1);
+p95Ms = nan(numel(stageLabel), 1);
+totalSec = nan(numel(stageLabel), 1);
+for iStage = 1:numel(stageLabel)
+  value = valueCell{iStage};
+  medianMs(iStage) = median(value, 'omitnan');
+  p95Ms(iStage) = localPercentile(value, 95);
+  totalSec(iStage) = sum(value, 'omitnan') / 1000;
+end
+timingAggregateTable = table(stageLabel, medianMs, p95Ms, totalSec);
+end
+
+function contextSummary = localBuildContextSummary(context, methodList)
+%LOCALBUILDCONTEXTSUMMARY Keep only lightweight context metadata.
+
+contextSummary = struct();
+contextSummary.frameIntvlSec = context.frameIntvlSec;
+contextSummary.periodicOffsetIdx = reshape(context.periodicOffsetIdx, 1, []);
+contextSummary.masterOffsetIdx = reshape(context.masterOffsetIdx, 1, []);
+contextSummary.selectedSatIdxGlobal = reshape(context.selectedSatIdxGlobal, 1, []);
+contextSummary.refSatIdxGlobal = context.refSatIdxGlobal;
+contextSummary.otherSatIdxGlobal = context.otherSatIdxGlobal;
+contextSummary.contextBaseSeed = context.baseSeed;
+contextSummary.tleFileName = string(context.tleFileName);
+contextSummary.methodLabelList = reshape([methodList.label], [], 1);
+contextSummary.subsetInitialization = "disabled: in-tooth rescue replay uses static/single-MF centers only";
+end
+
+function methodListOut = localStripMethodList(methodList)
+%LOCALSTRIPMETHODLIST Store method descriptors without heavy fields.
+
+methodListOut = methodList;
+end
+
+function plotData = localBuildPlotData(rescueBankDecisionTable, rescueEffectCaseTable, triggerReasonTable)
+%LOCALBUILDPLOTDATA Pack lightweight plotting inputs.
+
+plotData = struct();
+plotData.rescueBankDecisionTable = rescueBankDecisionTable;
+plotData.rescueEffectCaseTable = rescueEffectCaseTable;
+plotData.triggerReasonTable = triggerReasonTable;
+end
+
+function localPlotOrdinaryReplay(plotData)
+%LOCALPLOTORDINARYREPLAY Draw ordinary-miss candidate comparisons.
+
+if isempty(plotData) || ~isstruct(plotData)
+  return;
+end
+seedTable = localGetFieldOrDefault(plotData, 'ordinarySeedTable', table());
+candidateTable = localGetFieldOrDefault(plotData, 'ordinaryCandidateTable', table());
+if isempty(seedTable) || isempty(candidateTable)
+  return;
+end
+ordinarySeeds = seedTable.taskSeed(seedTable.isOrdinaryAngleMiss);
+if isempty(ordinarySeeds)
+  ordinarySeeds = seedTable.taskSeed(seedTable.isAngleMiss);
+end
+if isempty(ordinarySeeds)
+  return;
+end
+plotGroups = ["default"; "final-small-polish"; "wide-basin-entry"; ...
+  "single-mf-basin-entry"; "best-implementable"; "truth-doa-oracle"];
+figure('Name', 'Ordinary in-tooth DoA miss diagnose', 'Color', 'w');
+tiledlayout(3, 1, 'TileSpacing', 'compact');
+
+nexttile;
+hold on;
+legendList = strings(0, 1);
+for iGroup = 1:numel(plotGroups)
+  groupNow = plotGroups(iGroup);
+  groupTab = candidateTable(ismember(candidateTable.taskSeed, ordinarySeeds) & ...
+    candidateTable.candidateGroup == groupNow, :);
+  if isempty(groupTab)
+    continue;
+  end
+  plot(double(groupTab.taskSeed), max(groupTab.candidateAngleErrDeg, eps), '-o');
+  legendList(end + 1, 1) = groupNow; %#ok<AGROW>
+end
+set(gca, 'YScale', 'log');
+ylabel('angle error (deg)');
+title('Candidate angle error on ordinary / angle-miss seeds');
+grid on;
+legend(legendList, 'Location', 'best', 'Interpreter', 'none');
+
+nexttile;
+hold on;
+for iGroup = 2:numel(plotGroups)
+  groupNow = plotGroups(iGroup);
+  groupTab = candidateTable(ismember(candidateTable.taskSeed, ordinarySeeds) & ...
+    candidateTable.candidateGroup == groupNow, :);
+  if isempty(groupTab)
+    continue;
+  end
+  plot(double(groupTab.taskSeed), groupTab.angleGainDeg, '-o');
+end
+yline(0, '--');
+ylabel('angle gain (deg)');
+title('Candidate angle gain against default final');
+grid on;
+legend(plotGroups(2:end), 'Location', 'best', 'Interpreter', 'none');
+
+nexttile;
+seedMask = ismember(seedTable.taskSeed, ordinarySeeds);
+plot(double(seedTable.taskSeed(seedMask)), seedTable.defaultNonRefCoherenceFloor(seedMask), '-o');
+hold on;
+yline(0.20, '--', 'collapse gate');
+yline(0.95, ':', 'ordinary threshold');
+xlabel('task seed');
+ylabel('non-ref coherence floor');
+title('Default non-ref coherence for selected seeds');
+grid on;
+end
+
+function legendText = localPlotLegend(baseText, includeMask)
+%LOCALPLOTLEGEND Drop optional labels whose plotted table is unavailable.
+
+legendText = string(baseText(:));
+includeMask = logical(reshape(includeMask, [], 1));
+if numel(includeMask) == numel(legendText)
+  legendText = legendText(includeMask);
+end
+end
+
+function toothStepHz = localResolveToothStepHz(fixture)
+%LOCALRESOLVETOOTHSTEPHZ Resolve the fd tooth spacing from fixture timing.
+
+toothStepHz = NaN;
+if isfield(fixture, 'frameIntvlSec') && isfinite(fixture.frameIntvlSec) && fixture.frameIntvlSec > 0
+  toothStepHz = 1 / fixture.frameIntvlSec;
+  return;
+end
+if isfield(fixture, 'sceneSeq') && isfield(fixture.sceneSeq, 'timeOffsetSec')
+  dt = diff(reshape(fixture.sceneSeq.timeOffsetSec, 1, []));
+  dt = dt(isfinite(dt) & dt > 0);
+  if ~isempty(dt)
+    toothStepHz = 1 / median(dt);
+  end
+end
+if ~(isfinite(toothStepHz) && toothStepHz > 0)
+  error('replayMfInToothOrdinaryAngleMissDiagnose:MissingToothStep', ...
+    'Cannot resolve tooth step from fixture timing.');
+end
+end
+
+function value = localResolveTruthScalar(truth, fieldNameList)
+%LOCALRESOLVETRUTHSCALAR Resolve a scalar truth field using ordered fallbacks.
+
+value = NaN;
+for iField = 1:numel(fieldNameList)
+  fieldName = fieldNameList{iField};
+  rawValue = localGetFieldOrDefault(truth, fieldName, NaN);
+  if isscalar(rawValue) && isfinite(rawValue)
+    value = rawValue;
+    return;
+  end
+end
+end
+
+function maxVal = localMaxAbs(value)
+%LOCALMAXABS Return max abs for a possibly empty numeric vector.
+
+if isempty(value)
+  maxVal = NaN;
+else
+  maxVal = max(abs(value(:)));
+end
+end
+
+function value = localVectorElem(vec, idx, defaultValue)
+%LOCALVECTORELEM Read one vector element with fallback.
+
+value = defaultValue;
+if isempty(vec)
+  return;
+end
+vec = reshape(vec, [], 1);
+if idx >= 1 && idx <= numel(vec) && isfinite(vec(idx))
+  value = vec(idx);
+end
+end
+
+function percentileValue = localPercentile(valueVec, percentile)
+%LOCALPERCENTILE Compute one percentile without requiring Statistics Toolbox.
+
+valueVec = reshape(valueVec, [], 1);
+valueVec = valueVec(isfinite(valueVec));
+if isempty(valueVec)
+  percentileValue = NaN;
+  return;
+end
+valueVec = sort(valueVec);
+if numel(valueVec) == 1
+  percentileValue = valueVec;
+  return;
+end
+rankPos = 1 + (numel(valueVec) - 1) * percentile / 100;
+lo = floor(rankPos);
+hi = ceil(rankPos);
+if lo == hi
+  percentileValue = valueVec(lo);
+else
+  weightHi = rankPos - lo;
+  percentileValue = (1 - weightHi) * valueVec(lo) + weightHi * valueVec(hi);
+end
+end
+
+function localDispTablePreview(dataTable, edgeCount)
+%LOCALDISPTABLEPREVIEW Display short first/last preview for long tables.
+
+if nargin < 2 || isempty(edgeCount)
+  edgeCount = 4;
+end
+if isempty(dataTable) || height(dataTable) <= 2 * edgeCount
+  disp(dataTable);
+  return;
+end
+fprintf('  showing first %d and last %d of %d rows\n', edgeCount, edgeCount, height(dataTable));
+disp(dataTable(1:edgeCount, :));
+fprintf('  ...\n');
+disp(dataTable((height(dataTable) - edgeCount + 1):height(dataTable), :));
+end
+
+function tracker = localCreateProgressTracker(titleText, totalCount, useParfor)
+%LOCALCREATEPROGRESSTRACKER Create a client-side progressbar tracker.
+
+tracker = struct('active', false, 'queue', [], 'totalCount', totalCount);
+if totalCount <= 0
+  return;
+end
+fprintf('%s\n', titleText);
+if exist('progressbar', 'file') ~= 2
+  fprintf('[%s] progressbar.m not found; continuing without progress bar.\n', char(datetime('now', 'Format', 'HH:mm:ss')));
+  return;
+end
+try
+  progressbar('displaymode', 'replace');
+  progressbar('minimalupdateinterval', 0.2);
+  progressbar('reset', totalCount);
+  tracker.active = true;
+  if useParfor
+    tracker.queue = parallel.pool.DataQueue;
+    afterEach(tracker.queue, @(~) progressbar('advance'));
+  end
+catch ME
+  tracker.active = false;
+  tracker.queue = [];
+  fprintf('[%s] Progress bar disabled: %s\n', char(datetime('now', 'Format', 'HH:mm:ss')), ME.message);
+end
+end
+
+function localAdvanceProgressTracker(tracker)
+%LOCALADVANCEPROGRESSTRACKER Advance the progressbar in a serial loop.
+
+if tracker.active && isempty(tracker.queue)
+  progressbar('advance');
+end
+end
+
+function localAdvanceProgressByStep(tracker, step)
+%LOCALADVANCEPROGRESSBYSTEP Advance the progressbar by a checkpoint callback step.
+
+if nargin < 2 || isempty(step)
+  step = 1;
+end
+if tracker.active
+  for iStep = 1:step
+    progressbar('advance');
+  end
+end
+end
+
+function localCloseProgressTracker(tracker)
+%LOCALCLOSEPROGRESSTRACKER Close the progressbar if it is active.
+
+if tracker.active
+  pause(0.05);
+  progressbar('end');
+end
+end
+
+function textOut = localModeText(useParfor)
+%LOCALMODETEXT Return a short run-mode tag.
+
+if useParfor
+  textOut = 'parfor';
+else
+  textOut = 'serial';
+end
+end
+
+function tf = localCanUseParfor()
+%LOCALCANUSEPARFOR Check whether an outer parfor repeat loop can be used.
+
+tf = false;
+try
+  tf = isempty(getCurrentTask()) && ~isempty(ver('parallel')) && license('test', 'Distrib_Computing_Toolbox');
+catch
+  tf = false;
+end
+end
+
+
+function localNotifyReplayStatus(replayName, statusText, config, replayData, elapsedSec, errorObj)
+%LOCALNOTIFYREPLAYSTATUS Send a compact best-effort Telegram status notice.
+
+if ~isfield(config, 'notifyTelegramEnable') || ~logical(config.notifyTelegramEnable)
+  return;
+end
+try
+  titleText = sprintf('%s %s', char(statusText), char(replayName));
+  messageText = localBuildTelegramHtmlMessage(replayName, statusText, config, replayData, elapsedSec, errorObj);
+  notifyTelegram(titleText, messageText, "HTML");
+catch notifyME
+  warning('Telegram notification wrapper failed: %s', notifyME.message);
+end
+end
+
+function messageText = localBuildTelegramHtmlMessage(replayName, statusText, config, replayData, elapsedSec, errorObj)
+%LOCALBUILDTELEGRAMHTMLMESSAGE Build a readable HTML Telegram summary.
+
+lineList = strings(0, 1);
+lineList(end + 1, 1) = sprintf('<b>%s</b> <code>%s</code>', ...
+  localHtmlEscape(statusText), localHtmlEscape(replayName));
+lineList(end + 1, 1) = sprintf('Elapsed: <code>%s</code>', localHtmlEscape(localFormatDuration(elapsedSec)));
+lineList(end + 1, 1) = sprintf('Repeats/SNR: <code>%d</code> / <code>%.2f dB</code>', ...
+  localGetFieldOrDefault(config, 'numRepeat', 0), localGetFieldOrDefault(config, 'snrDb', NaN));
+if isfield(config, 'seedList')
+  lineList(end + 1, 1) = sprintf('Seeds: <code>%s</code>', localHtmlEscape(localFormatSeedList(config.seedList)));
+end
+
+if strcmpi(string(statusText), "DONE") && isstruct(replayData)
+  if isfield(replayData, 'snapshotFile') && strlength(string(replayData.snapshotFile)) > 0
+    lineList(end + 1, 1) = sprintf('Snapshot: <code>%s</code>', localHtmlEscape(replayData.snapshotFile));
+  elseif isfield(config, 'saveSnapshot') && ~logical(config.saveSnapshot)
+    lineList(end + 1, 1) = 'Snapshot: <code>disabled</code>';
+  end
+  lineList = [lineList; localBuildTelegramOrdinaryLines(replayData)]; %#ok<AGROW>
+elseif ~isempty(errorObj)
+  if isfield(config, 'checkpointEnable') && logical(config.checkpointEnable)
+    lineList(end + 1, 1) = sprintf('Checkpoint: <code>%s</code>', ...
+      localHtmlEscape(localGetFieldOrDefault(config, 'checkpointRunDir', "")));
+  end
+  errorId = string(errorObj.identifier);
+  if strlength(errorId) == 0
+    errorId = "error";
+  end
+  lineList(end + 1, 1) = sprintf('Error: <code>%s</code>', localHtmlEscape(errorId));
+  lineList(end + 1, 1) = sprintf('<pre>%s</pre>', localHtmlEscape(localShortenText(errorObj.message, 900)));
+end
+messageText = strjoin(lineList, newline);
+end
+
+function lineList = localBuildTelegramOrdinaryLines(replayData)
+%LOCALBUILDTELEGRAMORDINARYLINES Extract ordinary-miss metrics for Telegram.
+
+lineList = strings(0, 1);
+if isfield(replayData, 'ordinaryAggregateTable') && height(replayData.ordinaryAggregateTable) > 0
+  t = replayData.ordinaryAggregateTable;
+  lineList(end + 1, 1) = sprintf(['Ordinary: seeds=<code>%d</code>, angleMiss=<code>%d</code>, ' ...
+    'ordinary=<code>%d</code>, best rescue/hit/damage=<code>%.3f/%.3f/%.3f</code>'], ...
+    round(localTableValue(t, 'numSeed')), round(localTableValue(t, 'numAngleMiss')), ...
+    round(localTableValue(t, 'numOrdinaryAngleMiss')), localTableValue(t, 'bestImplementableRescueRate'), ...
+    localTableValue(t, 'bestImplementableHitRate'), localTableValue(t, 'bestImplementableDamageRate'));
+end
+if isfield(replayData, 'ordinaryFamilyAggregateTable') && height(replayData.ordinaryFamilyAggregateTable) > 0
+  t = replayData.ordinaryFamilyAggregateTable;
+  [~, idx] = min(t.medianAngleErrDeg);
+  lineList(end + 1, 1) = sprintf('Best family: <code>%s</code>, median angle=<code>%.4g deg</code>, rescue=<code>%.3f</code>', ...
+    localHtmlEscape(t.candidateGroup(idx)), t.medianAngleErrDeg(idx), t.rescueRate(idx));
+end
+if isfield(replayData, 'checkpointSummary')
+  lineList(end + 1, 1) = 'Checkpoint: <code>saved/cleaned according to config</code>';
+end
+end
+
+function value = localTableValue(tableUse, fieldName)
+%LOCALTABLEVALUE Read a scalar table value by name with NaN fallback.
+
+value = NaN;
+if istable(tableUse) && height(tableUse) > 0 && any(strcmp(tableUse.Properties.VariableNames, fieldName))
+  rawValue = tableUse.(fieldName);
+  if ~isempty(rawValue)
+    value = rawValue(1);
+  end
+end
+end
+
+function seedText = localFormatSeedList(seedList)
+%LOCALFORMATSEEDLIST Format seed list compactly for notification.
+
+seedList = reshape(double(seedList), 1, []);
+if isempty(seedList)
+  seedText = "[]";
+elseif numel(seedList) <= 12
+  seedText = string(mat2str(seedList));
+else
+  seedText = sprintf('[%d ... %d] (%d seeds)', seedList(1), seedList(end), numel(seedList));
+end
+end
+
+function durationText = localFormatDuration(elapsedSec)
+%LOCALFORMATDURATION Format elapsed seconds in a compact human-readable form.
+
+elapsedSec = max(0, double(elapsedSec));
+if elapsedSec < 60
+  durationText = sprintf('%.1f s', elapsedSec);
+elseif elapsedSec < 3600
+  durationText = sprintf('%.1f min', elapsedSec / 60);
+else
+  durationText = sprintf('%.2f h', elapsedSec / 3600);
+end
+end
+
+function shortText = localShortenText(textValue, maxLen)
+%LOCALSHORTENTEXT Keep notification error text within a readable length.
+
+shortText = string(textValue);
+if strlength(shortText) > maxLen
+  shortText = extractBefore(shortText, maxLen + 1) + " ...";
+end
+end
+
+function safeText = localHtmlEscape(textValue)
+%LOCALHTMLESCAPE Escape text for Telegram HTML parse mode.
+
+safeText = string(textValue);
+safeText = replace(safeText, '&', '&amp;');
+safeText = replace(safeText, '<', '&lt;');
+safeText = replace(safeText, '>', '&gt;');
+safeText = replace(safeText, '"', '&quot;');
+safeText = char(safeText);
+end
+
+function value = localGetFieldOrDefault(dataStruct, fieldName, defaultValue)
+%LOCALGETFIELDORDEFAULT Return one struct field or the supplied default.
+
+value = defaultValue;
+if isstruct(dataStruct) && isfield(dataStruct, fieldName)
+  rawValue = dataStruct.(fieldName);
+  if ~isempty(rawValue)
+    value = rawValue;
+  end
+end
+end
