@@ -46,6 +46,7 @@
 
 - `runSimpleDynamicSubsetPeriodicFlow.m`
 - `evaluateDynamicSubsetBank.m`
+- `shouldRunSimpleSameToothBasinEntryRescue.m`
 
 当前约束：
 
@@ -220,6 +221,12 @@
 - checkpoint：只在 replay / scan 显式传入 `checkpointOpt.enable=true` 时启用；每个 repeat 保存一个 task 文件，manifest 校验 seed、SNR、contextOpt 和 flow signature；默认根目录为仓库根目录 `tmp/`。关闭 checkpoint 时不创建 tmp、不打印 checkpoint dir、不写空状态字段；恢复时只重跑缺失 task，成功后由 `cleanupPerfTaskGridCheckpoint` 清理 checkpoint run 目录；若脚本级 tmp 父目录已经为空，也由该 helper 删除该空父目录。
 - 日志：进入 repeat loop 前默认打印紧凑 stage log 与耗时，覆盖 option resolve、shared context build、repeat mode、resume 进度和 enter parfor；这些不是 estimator verbose，不受 `optVerbose` 控制。
 - 不做：硬性 pass/fail assert。
+
+
+### `selectMfInToothEnvelopeSeeds.m`
+
+- 作用：根据 envelope scout 阶段的 `tailDiagnosisTable` 选择 hard-collapse、gate-miss、easy-negative 与 fd-not-healthy 代表 seed，避免对所有 search seeds 做重 surface。
+- 边界：只服务 replay seed coverage；使用离线 label 和 truth-aware summary，不能进入 runtime selector、gate、candidate adoption 或 final winner。
 
 ### `printMfReplayHeader.m`
 

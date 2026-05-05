@@ -57,3 +57,31 @@ This file records directions that have already been tried or diagnosed as high-r
 - Affected layer: CRB diagnostics.
 - Observation: known/unknown CRB consistency warnings can be expected for selected full-FIM configurations. They are useful diagnostics but are not the current blocker for dynamic flow correctness.
 - Allowed future use: local CRB/FIM diagnostics and targeted invariant regression only.
+
+## Truth-dependent tooth selection or truth-aware adoption
+
+- Status: blocked for the default path.
+- Affected layer: subset tooth selection, rescue gate, candidate adoption, final winner selection.
+- Observation: truth tooth, truth DoA, truth `fdRef/fdRate`, oracle labels, and manually assigned tail classes are useful for oracle replay, offline scan evaluation, and result annotation. Letting them influence the runtime selector would invalidate the no-truth-leak contract and weaken the paper/system boundary.
+- Allowed future use: oracle replay, offline schedule evaluation, result labeling, and mechanism explanation only. Runtime gates must use data-derived metrics such as profile residual, non-ref coherence, phase residual, candidate consensus, or objective comparisons computed from the received data and known geometry.
+
+## Blanket wide or single-MF basin-entry bank
+
+- Status: blocked for the default path.
+- Affected layer: same-tooth rescue / final periodic refinement.
+- Observation: in-tooth tail replay shows that wide-centered and single-MF-centered candidates can rescue different non-ref coherence collapse hard cases, but blanket use can damage easy or fd-negative cases. The viable route is a truth-free collapse gate, not unconditional adoption.
+- Allowed future use: flow-like replay comparisons with disabled, gated-wide-only, gated-single-MF-only, gated-wide-single-bank, and blanket-damage controls. Default-flow adoption requires evidence that hard cases improve and easy / fd-negative cases are not damaged.
+
+## Blanket structured nonuniform subset schedules
+
+- Status: blocked for the default path until adoption evidence improves.
+- Affected layer: subset bank / tooth selection.
+- Observation: structured schedules with better lag features can improve candidate coverage without improving selected tooth hit, and can introduce easy-case damage. The current evidence points to candidate-to-final adoption and validation, not simply schedule count or lag design.
+- Allowed future use: offline scan or strategy comparisons. A structured schedule can only move toward the default bank after it improves selected hit / fd tails under no-truth selection and does not increase easy damage at acceptable candidate cost.
+
+## Expanding full-flow CP/IP performance maps before flow stabilization
+
+- Status: deferred.
+- Affected layer: paper performance scan production.
+- Observation: current full-flow CP/IP performance map is polluted by wrong-tooth and same-tooth bad-basin behavior. Enlarging repeats would mostly stabilize a flow failure result rather than measure the CP/IP model hierarchy.
+- Allowed future use: rerun after selected-tooth flow and same-tooth gated rescue are stable. Until then, use controlled in-tooth CP/IP scans for the angle-vs-Doppler-consistency trade-off and keep full-flow scans as stress-test evidence.

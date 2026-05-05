@@ -55,6 +55,49 @@ periodicDoaSeed.selectedReplayTruthToothResidualHz = localGetFieldOrDefault(sele
 periodicDoaSeed.selectedReplayHealthBucket = localBuildPeriodicHealthBucket(selectedReplayDecisionSummary);
 
 caseUse = periodicCaseCell{selectedReplayIdx};
+periodicDoaSeed.usedBasinEntryRescue = false;
+periodicDoaSeed.basinEntryRescueTriggered = false;
+periodicDoaSeed.basinEntryRescueSelected = false;
+[runBasinEntryRescue, basinEntryGateReason, basinEntryGateDiag] = shouldRunSimpleSameToothBasinEntryRescue( ...
+  satMode, selectedReplayDecisionSummary, subsetTrustDiag, flowOpt);
+periodicDoaSeed.basinEntryGateReason = string(basinEntryGateReason);
+periodicDoaSeed.basinEntryGateDiag = basinEntryGateDiag;
+if runBasinEntryRescue
+  [rescueCaseCell, rescueSummaryCell, rescueDecisionSummaryCell] = localRunBasinEntryRescueCandidates( ...
+    displayName, satMode, periodicFixture, caseUse, seedCandidateList, pilotWave, carrierFreq, sampleRate, ...
+    optVerbose, flowOpt, debugTruth, toothStepHz, truthUse);
+  periodicDoaSeed.usedBasinEntryRescue = ~isempty(rescueCaseCell);
+  periodicDoaSeed.basinEntryRescueTriggered = ~isempty(rescueCaseCell);
+  periodicDoaSeed.basinEntryCandidateCount = numel(rescueCaseCell);
+  periodicDoaSeed.basinEntryCandidateSummaryCell = rescueSummaryCell;
+  for iRescue = 1:numel(rescueCaseCell)
+    periodicCaseCell{end + 1, 1} = rescueCaseCell{iRescue}; %#ok<AGROW>
+    periodicSummaryCell{end + 1, 1} = rescueSummaryCell{iRescue}; %#ok<AGROW>
+    periodicDecisionSummaryCell{end + 1, 1} = rescueDecisionSummaryCell{iRescue}; %#ok<AGROW>
+    candidateScore = buildDynamicSelectionScoreVector(rescueDecisionSummaryCell{iRescue});
+    selectedScore = buildDynamicSelectionScoreVector(selectedReplayDecisionSummary);
+    if localIsScoreBetter(candidateScore, selectedScore)
+      caseUse = rescueCaseCell{iRescue};
+      selectedReplaySummary = rescueSummaryCell{iRescue};
+      selectedReplayDecisionSummary = rescueDecisionSummaryCell{iRescue};
+      selectedReplayIdx = numel(periodicCaseCell);
+      periodicDoaSeed.basinEntryRescueSelected = true;
+      periodicDoaSeed.selectedReplaySeedSource = string(localGetFieldOrDefault(selectedReplaySummary, 'seedSource', "same-tooth-rescue"));
+      periodicDoaSeed.selectedReplayTag = string(localGetFieldOrDefault(selectedReplaySummary, 'startTag', "same-tooth-rescue"));
+      periodicDoaSeed.selectedReplaySelectionReason = "same-tooth-basin-entry-better";
+    end
+  end
+  if ~periodicDoaSeed.basinEntryRescueSelected
+    periodicDoaSeed.selectedReplaySelectionReason = "frozen-better-than-basin-entry";
+  end
+else
+  periodicDoaSeed.basinEntryCandidateCount = 0;
+  periodicDoaSeed.basinEntryCandidateSummaryCell = cell(0, 1);
+end
+periodicDoaSeed.selectedReplayIdx = selectedReplayIdx;
+periodicDoaSeed.selectedReplaySummary = selectedReplaySummary;
+periodicDoaSeed.selectedReplayDecisionSummary = selectedReplayDecisionSummary;
+periodicDoaSeed.selectedReplayHealthBucket = localBuildPeriodicHealthBucket(selectedReplayDecisionSummary);
 periodicDoaSeed.usedDoaPolish = false;
 [runPolish, polishGateReason, polishGateDiag] = shouldRunSimpleVerySmallDoaPolish( ...
   satMode, periodicDoaSeed, selectedReplayDecisionSummary, flowOpt);
@@ -128,6 +171,110 @@ decisionSummary.seedSource = summaryUse.seedSource;
 decisionSummary.startTag = summaryUse.startTag;
 decisionSummary.replayBaseTag = summaryUse.replayBaseTag;
 decisionSummary.subsetDriftFromStaticDeg = NaN;
+end
+
+function [rescueCaseCell, rescueSummaryCell, rescueDecisionSummaryCell] = localRunBasinEntryRescueCandidates(displayName, satMode, periodicFixture, selectedReplayCase, ...
+  seedCandidateList, pilotWave, carrierFreq, sampleRate, optVerbose, flowOpt, debugTruth, toothStepHz, truthUse)
+%LOCALRUNBASINENTRYRESCUECANDIDATES Evaluate gated wide and single-MF basin-entry candidates.
+
+rescueCaseCell = cell(0, 1);
+rescueSummaryCell = cell(0, 1);
+rescueDecisionSummaryCell = cell(0, 1);
+if satMode ~= "multi"
+  return;
+end
+
+bankMode = lower(strtrim(char(string(localGetFieldOrDefault(flowOpt, 'sameToothRescueBankMode', "wide-single")))));
+runWide = any(strcmp(bankMode, {'wide', 'wide-only', 'wide-single', 'wide-single-bank'}));
+runSingle = any(strcmp(bankMode, {'single', 'single-mf', 'single-mf-only', 'single-only', 'wide-single', 'wide-single-bank'}));
+staticDoa = localResolveSeedDoa(seedCandidateList, "static-seed", selectedReplayCase.estResult.doaParamEst(:));
+
+if runWide
+  [caseWide, summaryWide, decisionWide] = localRunBasinEntryDynamicCandidate( ...
+    displayName, periodicFixture, selectedReplayCase, staticDoa, flowOpt.sameToothRescueWideDoaHalfWidthDeg(:), ...
+    "same-tooth-rescue-wide", "wide-center", periodicFixture.viewMs, "multi", pilotWave, carrierFreq, sampleRate, ...
+    optVerbose, flowOpt, debugTruth, toothStepHz, truthUse);
+  rescueCaseCell{end + 1, 1} = caseWide; %#ok<AGROW>
+  rescueSummaryCell{end + 1, 1} = summaryWide; %#ok<AGROW>
+  rescueDecisionSummaryCell{end + 1, 1} = decisionWide; %#ok<AGROW>
+end
+
+if runSingle
+  [caseSingleCenter, ~, ~] = localRunBasinEntryDynamicCandidate( ...
+    displayName, periodicFixture, selectedReplayCase, staticDoa, flowOpt.sameToothRescueSingleDoaHalfWidthDeg(:), ...
+    "same-tooth-rescue-single-center", "single-mf-center", periodicFixture.viewRefOnly, "single", pilotWave, carrierFreq, sampleRate, ...
+    optVerbose, flowOpt, debugTruth, toothStepHz, truthUse);
+  singleCenterDoa = selectedReplayCase.estResult.doaParamEst(:);
+  if isfield(caseSingleCenter, 'estResult') && isfield(caseSingleCenter.estResult, 'doaParamEst') && ...
+      ~isempty(caseSingleCenter.estResult.doaParamEst) && all(isfinite(caseSingleCenter.estResult.doaParamEst(:)))
+    singleCenterDoa = caseSingleCenter.estResult.doaParamEst(:);
+  end
+  [caseSingle, summarySingle, decisionSingle] = localRunBasinEntryDynamicCandidate( ...
+    displayName, periodicFixture, selectedReplayCase, singleCenterDoa, flowOpt.sameToothRescueMultiDoaHalfWidthDeg(:), ...
+    "same-tooth-rescue-single-mf", "single-mf-center", periodicFixture.viewMs, "multi", pilotWave, carrierFreq, sampleRate, ...
+    optVerbose, flowOpt, debugTruth, toothStepHz, truthUse);
+  rescueCaseCell{end + 1, 1} = caseSingle; %#ok<AGROW>
+  rescueSummaryCell{end + 1, 1} = summarySingle; %#ok<AGROW>
+  rescueDecisionSummaryCell{end + 1, 1} = decisionSingle; %#ok<AGROW>
+end
+end
+
+function [caseUse, summaryUse, decisionSummary] = localRunBasinEntryDynamicCandidate(displayName, periodicFixture, selectedReplayCase, ...
+  seedDoaParam, doaHalfWidthDeg, startTag, seedSource, viewUse, satModeUse, pilotWave, carrierFreq, sampleRate, ...
+  optVerbose, flowOpt, debugTruth, toothStepHz, truthUse)
+%LOCALRUNBASINENTRYDYNAMICCANDIDATE Run one same-tooth rescue branch.
+
+fdRangeUse = [selectedReplayCase.estResult.fdRefEst - flowOpt.periodicRefineFdHalfWidthHz, ...
+  selectedReplayCase.estResult.fdRefEst + flowOpt.periodicRefineFdHalfWidthHz];
+fdRateRangeUse = [selectedReplayCase.estResult.fdRateEst - flowOpt.periodicRefineFdRateHalfWidthHzPerSec, ...
+  selectedReplayCase.estResult.fdRateEst + flowOpt.periodicRefineFdRateHalfWidthHzPerSec];
+
+dynOpt = flowOpt.dynBaseOpt;
+dynOpt.steeringRefFrameIdx = periodicFixture.sceneSeq.refFrameIdx;
+dynOpt.initDoaParam = seedDoaParam(:);
+dynOpt.initDoaHalfWidth = doaHalfWidthDeg(:);
+dynOpt.enableFdAliasUnwrap = true;
+dynOpt.freezeDoa = false;
+dynOpt.disableUnknownDoaReleaseFloor = true;
+dynOpt.unknownDoaReleaseHalfWidth = doaHalfWidthDeg(:);
+
+initParamSeed = buildDynamicInitParamFromCase(selectedReplayCase, false, selectedReplayCase.estResult.fdRateEst);
+if ~isempty(initParamSeed) && numel(initParamSeed) >= numel(seedDoaParam)
+  initParamSeed(1:numel(seedDoaParam)) = seedDoaParam(:);
+end
+initCandidate = struct( ...
+  'startTag', string(startTag), ...
+  'initParam', initParamSeed, ...
+  'initDoaParam', seedDoaParam(:), ...
+  'initDoaHalfWidth', doaHalfWidthDeg(:), ...
+  'freezeDoa', false);
+
+caseUse = runDynamicDoaDopplerCase(displayName, satModeUse, viewUse, truthUse, pilotWave, carrierFreq, sampleRate, ...
+  fdRangeUse, fdRateRangeUse, optVerbose, dynOpt, false, debugTruth, initCandidate);
+summaryUse = buildDynamicUnknownCaseSummary(caseUse, toothStepHz, truthUse);
+decisionSummary = buildDynamicUnknownCaseSummary(caseUse, toothStepHz, struct());
+summaryUse.seedSource = string(seedSource);
+summaryUse.startTag = string(startTag);
+summaryUse.subsetDriftFromStaticDeg = NaN;
+decisionSummary.seedSource = summaryUse.seedSource;
+decisionSummary.startTag = summaryUse.startTag;
+decisionSummary.subsetDriftFromStaticDeg = NaN;
+end
+
+function doaParam = localResolveSeedDoa(seedCandidateList, seedSource, fallbackDoa)
+%LOCALRESOLVESEEDDOA Resolve a named periodic seed or fall back to the selected replay DoA.
+
+doaParam = fallbackDoa(:);
+for iCand = 1:numel(seedCandidateList)
+  if string(seedCandidateList(iCand).seedSource) ~= string(seedSource)
+    continue;
+  end
+  rawDoa = seedCandidateList(iCand).doaInitParam;
+  if ~isempty(rawDoa) && all(isfinite(rawDoa(:)))
+    doaParam = rawDoa(:);
+    return;
+  end
+end
 end
 
 function viewUse = localGetViewUse(periodicFixture)

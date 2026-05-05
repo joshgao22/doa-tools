@@ -98,15 +98,46 @@ clear; close all; clc;
 - 分类口径：区分 `wrong-tooth`、`same-tooth + fd not healthy`、`same-tooth + fd healthy + non-ref coherence collapsed`、`same-tooth + fd healthy + DoA/local-state basin` 与轻微/不明确 tail。
 - 当前结论：只用于 tail 定位和 gated refine 前置分类；候选 objective probe 用于决定下一步是 conditional DoA polish、wide-centered gated refine、single-MF-centered basin-entry，还是更宽的 basin 进入机制；rescue bank 只模拟候选选择，不改变 solver adoption；line probe 含 truth 只作 replay 机制定位，不进入 regression，不改变默认 flow。
 
+#### `replayMfInToothDoaDopplerRidgeTrace.m`
+
+- 作用：固定 in-tooth tail / negative seed，沿 final→static-MS、final→SS-MF、final→wide 与 final→truth 四类方向重评估 DoA-fdRef / DoA-fdRate 局部 surface，并做 center-to-center line trace。
+- 选帧与初始化口径：继续使用 truth-centered half-tooth `fdRef` 范围，只做 objective 诊断，不做 subset tooth selection，不改变 solver adoption，也不把 truth 信息带入可实现方向。
+- 主要输出：`ridgeSummaryTable`、`centerLineSummaryTable`、`candidateProbeTable`、`tailDiagnosisTable`、`aggregateTable`、oracle range / runtime summary，以及代表性 DoA-fdRef / DoA-fdRate ridge heatmap。
+- 诊断口径：`static-ms / single-mf / wide` 是 truth-free implementable 方向，`truth` 只作 oracle 标记；重点看 ridge slope、minimum 是否贴边界、objective gain、non-ref coherence 是否恢复，以及 easy / fd-negative seed 是否也被 surface candidate 吸走。
+- 当前结论：新增为 in-tooth DoA/local-state 坏盆地的 ridge 诊断入口；代表性结果显示 final-centered ridge 不适合直接公式化；当前只把 gated `wide+single-MF` basin-entry 作为 controlled in-tooth DoA rescue 候选，不把 ridge slope 或 flow 接入作为下一步。
+- 详细结果：`results/replayMfInToothDoaDopplerRidgeTrace.md`。
+
+
+#### `replayMfInToothDoaFdRangeEnvelope.m`
+
+- 作用：用 `baseSeed / numSearchRepeat` 先跑轻量 scout 分类，再只对 hard / gate-miss / easy / fd-negative 代表 seed 扫描 DoA-fdRef 与 DoA-fdRate 局部 envelope，用于决定 controlled in-tooth rescue 的 DoA / fdRef 搜索半宽。
+- 选帧与初始化口径：只做 replay-level objective surface 诊断，不做 subset tooth selection，不改变 solver adoption；`static-ms / single-mf / wide` 是可实现 center，`truth` 仍只作 oracle 方向。`fixed-list` 模式保留为手动复查入口。
+- 主要输出：`selectedEnvelopeSeedTable`、`scoutTailDiagnosisTable`、`candidateCoverageTable`、`policyRecommendationTable`、`envelopeSummaryTable`、`rangeRecommendationTable`、`ridgeSummaryTable`、`centerLineSummaryTable`、`candidateProbeTable`、`tailDiagnosisTable`、oracle range / runtime summary。
+- 临时存储：默认 `checkpointEnable=true`，scout 与 envelope 两个阶段分别在仓库根目录 `tmp/replayMfInToothDoaFdRangeEnvelope-scout/<runKey>/task/` 与 `tmp/replayMfInToothDoaFdRangeEnvelope-envelope/<runKey>/task/` 保存 per-seed checkpoint；成功保存 `replayData` 后默认清理，失败时保留并打印路径。
+- 诊断口径：重点看每个 center/surface 的 `minDoaOffsetDeg`、`minFdRefOffsetHz`、`boundaryHit`、`p95AbsDoaOffsetDeg` 与 `p95AbsFdOffsetHz`；同时用 `candidateCoverageTable` 判断 implementable center 是否覆盖 truth-DoA oracle 的 hit，用 `policyRecommendationTable` 离线比较 gate threshold、family DoA step 与 safe coherence 的组合。若 hard seed minimum 频繁贴边界，应先扩大 replay envelope，不把该范围直接写进 rescue bank。
+- 当前结论：新增为搜索范围决策入口；默认两阶段运行，避免把全部 scout seed 都做重 surface。它不替代 `replayMfInToothGatedRescueEffectiveness` 的效果验证，只为后者是否需要 joint DoA-fdRef candidate bank 提供范围依据。
+- 详细结果：`results/replayMfInToothDoaFdRangeEnvelope.md`。
+
 #### `replayMfInToothGatedRescueEffectiveness.m`
 
 - 作用：在更多 repeat 上验证 in-tooth 条件下的 no-truth gated rescue 是否稳定救回 same-tooth collapse，并确认 easy / fd-not-healthy 负样本是否被误伤。
 - 选帧与初始化口径：使用 truth-centered half-tooth `fdRef` 范围，只验证 tooth 已正确时的 basin-entry rescue；不做 subset tooth selection，也不改变默认 flow。
-- 候选口径：`caseRole / isHardRescued / isDamaged` 可用 truth 做离线评价；`rescueTriggered / triggerReason / selectedCandidateFamily` 只能由默认估计的 non-ref coherence、phase residual、candidate objective 和卫星几何回代诊断决定。当前 gate 采用 coherence-collapse 或 phase-residual-large 的 OR 触发；phase residual 缺失只能记录为 unavailable，不能 veto coherence trigger。
-- 主要输出：`rescueEffectAggregateTable`、`rescueEffectVerdictTable`、`rescueEffectCaseTable`、`rescueBankDecisionTable`、`triggerReasonTable`、`candidateProbeTable`、method / range / timing summary，以及按 task seed 画出的 default / gated / blanket / truth-DoA oracle angle / coherence 线图和 trigger / case-role 线图。
-- 对照 bank：`disabled`、`gated-wide-only`、`gated-single-mf-only`、`gated-wide-single-bank`，并保留 `blanket-wide-single-bank` 作为误伤参考。
-- 当前结论：只作为 gated rescue 批量验证 replay；2026-04-27 的 100-repeat confirmation 显示 `gated-wide-single-bank` 是唯一通过 verdict 的 bank，hard rescue rate 为 `0.85714`，easy / fd-not-healthy 负样本无误伤，overall P95 从 disabled 的 `0.0036204 deg` 降到 `0.0020833 deg`。下一步进入 flow-like replay 验证，不直接接入默认 flow。
+- 候选口径：`caseRole / isHardRescued / isDamaged` 可用 truth 做离线评价；`rescueTriggered / triggerReason / selectedCandidateFamily` 只能由默认估计的 non-ref coherence、phase residual、candidate objective 和卫星几何回代诊断决定。当前 gate 采用 `coherence-v1`，只用 default non-ref coherence collapse 触发；phase residual 仅保留字段占位，不参与本 replay 的触发。
+- 主要输出：`inToothDoaLadderTable`、`rescueEffectAggregateTable`、`rescueEffectVerdictTable`、`rescueEffectCaseTable`、`rescueBankDecisionTable`、`triggerReasonTable`、`hardMissSummaryTable`、`candidateProbeTable`、method / range / timing summary，以及按 task seed 画出的 default / gated / blanket / truth-DoA oracle angle / coherence 线图和 trigger / case-role 线图。
+- 对照 bank：默认保留 `disabled`、严格 DoA safe-adopt 的 `gated-wide-single-bank-safe-adopt`，以及新增的 `gated-wide-single-bank-family-safe-adopt`。后者只放宽 wide / single-MF basin-entry center 的 DoA step guard，用于验证 seed 256 这类被统一阈值拒绝的好 candidate 是否可安全采纳。已验证无增益或不稳的 `wide-only / single-mf-only / unsafe gated / blanket` 默认旁路。如需复查旧路径，可显式打开 `includeLegacyFailedBanks`。
+- joint bank 口径：DoA-fdRef joint candidate 仍保留为 opt-in 诊断分支，只有在文件头打开 `includeJointSafeAdoptBank` 时才生成 joint grid 并输出 `gated-wide-single-joint-bank-safe-adopt`，避免默认增加候选和表格噪声。
+- safe adoption 口径：safe-adopt 只在 replay 层增加 truth-free adoption guard，要求 candidate 相对 default 有 objective gain、non-ref coherence 恢复、DoA step 和 fdRef step 均不超过头部阈值；family-safe 仅对 wide / single-MF center 使用更宽的 `familySafeAdoptMaxAbsDoaStepDeg`，default/final-centered candidate 仍用严格阈值。不改变 estimator、flow 或 objective。
+- 当前结论：只作为 gated rescue 批量验证 replay；当前默认代码收敛为 coherence-only gate + DoA-only strict/family safe-adopt 对照，用于区分 gate 漏检、candidate bank 不足、统一 DoA-step guard 过紧与 triggered-selected damage。joint offset 先交给 envelope replay 判断，默认不进入效果验证主表。当前短期目标收回到 controlled in-tooth DoA 修复，不把该 replay 结论直接推进 flow 或默认 estimator。
 - 详细结果：`results/replayMfInToothGatedRescueEffectiveness.md`。
+
+#### `replayMfFlowLikeGatedBasinEntryEffectiveness.m`
+
+- 作用：在真实 subset-periodic flow 结构内比较 disabled 与 no-truth gated `wide + single-MF` same-tooth basin-entry rescue。
+- 选帧与初始化口径：不使用 truth-centered 半齿 oracle，不跳过 subset selection；只通过 `buildSimpleDynamicFlowOpt.sameToothRescue` 显式打开 flow-level rescue，默认 flow 仍保持关闭。
+- gate 口径：只读取 selected periodic decision summary 与 subset trust 诊断中的 non-ref coherence、phase residual 和 trust 状态；truth 只用于结果表里的 angle / tooth / fd 评价。
+- 主要输出：disabled-vs-gated compare table、aggregate table、gated periodic candidate table、warning table、checkpoint summary，以及 angle / coherence 对比图。
+- 临时存档：头部 `checkpointEnable=true` 时分别为 disabled 与 gated batch 建立 per-repeat checkpoint / resume，任务文件写入仓库根目录 `tmp/replayMfFlowLikeGatedBasinEntryEffectiveness-disabled/<runKey>/task/` 与 `tmp/replayMfFlowLikeGatedBasinEntryEffectiveness-gatedWideSingle/<runKey>/task/`；成功构造并保存 `replayData` 后默认清理。
+- 当前结论：该入口只作为真实 flow 条件下的 stress check；由于会混入 wrong-tooth / subset selection 因素，当前 in-tooth DoA 主线不继续围绕它调参，也不据此打开默认 flow。
 
 #### `replayMfSameToothHardCase.m`
 

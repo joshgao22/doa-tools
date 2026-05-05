@@ -45,7 +45,9 @@ results/<scriptName>/<caseName>.md
 | `replayMfRandomRescueEffectiveness.m` | `replayMfRandomRescueEffectiveness.md` | `test/data/cache/replay/replayMfRandomRescueEffectiveness_20260427-110427.mat` | rescue/random bank 明显提升 central tooth 命中率，但已有 easy-case damage，后续应转 scan/gate 验证而非 blanket 常驻。 |
 | `replayMfInToothFdRangeOracle.m` | `replayMfInToothFdRangeOracle.md` | `test/data/cache/replay/replayMfInToothFdRangeOracle_20260426-104249.mat` | half-tooth oracle 下频率链健康，但少数 same-tooth non-ref coherence tail 拉坏 RMSE。 |
 | `replayMfInToothTailCaseDiagnose.m` | `replayMfInToothTailCaseDiagnose.md` | `test/data/cache/replay/replayMfInToothTailCaseDiagnose_20260427-102008.mat` | gated `wide+single-MF` rescue bank 能全救 fixed hard-collapse seeds，并避开 easy / fd-not-healthy 负样本。 |
-| `replayMfInToothGatedRescueEffectiveness.m` | `replayMfInToothGatedRescueEffectiveness.md` | `test/data/cache/replay/replayMfInToothGatedRescueEffectiveness_20260427-132413.mat` | 100-repeat confirmation 中 `gated-wide-single-bank` 是唯一通过 verdict 的 bank，能显著降低 P95 / max 且 easy / fd-negative 无误伤；下一步进入 flow-like replay。 |
+| `replayMfInToothDoaDopplerRidgeTrace.m` | `replayMfInToothDoaDopplerRidgeTrace.md` | `test/data/cache/replay/replayMfInToothDoaDopplerRidgeTrace_20260429-100106.mat` | final-centered ridge 证明 DoA-Doppler coupling 存在，但 minimum 常贴边界；优先推进 gated `wide+single-MF` basin-entry，而不是公式化 ridge slope。 |
+| `replayMfInToothGatedRescueEffectiveness.m` | `replayMfInToothGatedRescueEffectiveness.md` | `test/data/cache/replay/replayMfInToothGatedRescueEffectiveness_20260504-215932.mat` | family-safe-adopt 显著压低 controlled in-tooth MS-MF DoA tail，hard rescue rate 提升到 `0.8`，easy / fd-negative damage 为 0；仍是 replay-level candidate。 |
+| `replayMfInToothDoaFdRangeEnvelope.m` | `replayMfInToothDoaFdRangeEnvelope.md` | `test/data/cache/replay/replayMfInToothDoaFdRangeEnvelope_20260504-204938.mat` | base-seed envelope 支持 wide / single-MF DoA basin-entry 与 `0.006 deg` family-safe step，不支持默认引入非零 fdRef / fdRate joint bank。 |
 
 ## 维护规则
 

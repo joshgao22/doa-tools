@@ -4,7 +4,9 @@ function flowOpt = buildSimpleDynamicFlowOpt(varargin)
 %   static seed -> subset free search -> periodic narrow refine
 % where the periodic replay first compares narrow frozen same-tooth
 % candidates and only then, for clearly trusted same-tooth hard cases,
-% runs one very-small DoA polish.
+% runs one very-small DoA polish. A disabled-by-default same-tooth
+% basin-entry rescue can be enabled by replay or flow experiments after the
+% frozen replay winner is selected.
 % The flow intentionally excludes wide periodic fallback, known-rate
 % anchors, and blanket same-tooth rescue branches.
 %
@@ -13,6 +15,7 @@ function flowOpt = buildSimpleDynamicFlowOpt(varargin)
 %   subset         : subset-bank and subset trust configuration
 %   periodicRefine : same-tooth replay configuration
 %   polish         : gated very-small DoA polish configuration
+%   sameToothRescue : gated wide/single-MF basin-entry rescue configuration
 %   parallel       : subset-evaluation parallel switches
 %
 % To keep existing callers stable, legacy flat field names are still
@@ -122,6 +125,33 @@ polishOpt.maxSelectedToothResidualHz = localGetFirstFieldOrDefault(opt, ...
 polishOpt.maxHealthBucket = localGetFirstFieldOrDefault(opt, ...
   {'periodicRefinePolishMaxHealthBucket'}, polishOpt.maxHealthBucket);
 
+sameToothRescueOpt = localMergeStruct(struct( ...
+  'enable', false, ...
+  'enableWhenMulti', true, ...
+  'coherenceThreshold', 0.20, ...
+  'phaseResidThresholdRad', 1.00, ...
+  'bankMode', "wide-single", ...
+  'wideDoaHalfWidthDeg', [0.010; 0.010], ...
+  'singleDoaHalfWidthDeg', [0.006; 0.006], ...
+  'multiDoaHalfWidthDeg', [0.004; 0.004]), ...
+  localGetFieldOrDefault(opt, 'sameToothRescue', struct()));
+sameToothRescueOpt.enable = logical(localGetFirstFieldOrDefault(opt, ...
+  {'sameToothRescueEnable'}, sameToothRescueOpt.enable));
+sameToothRescueOpt.enableWhenMulti = logical(localGetFirstFieldOrDefault(opt, ...
+  {'sameToothRescueEnableWhenMulti'}, sameToothRescueOpt.enableWhenMulti));
+sameToothRescueOpt.coherenceThreshold = localGetFirstFieldOrDefault(opt, ...
+  {'sameToothRescueCoherenceThreshold'}, sameToothRescueOpt.coherenceThreshold);
+sameToothRescueOpt.phaseResidThresholdRad = localGetFirstFieldOrDefault(opt, ...
+  {'sameToothRescuePhaseResidThresholdRad'}, sameToothRescueOpt.phaseResidThresholdRad);
+sameToothRescueOpt.bankMode = string(localGetFirstFieldOrDefault(opt, ...
+  {'sameToothRescueBankMode'}, sameToothRescueOpt.bankMode));
+sameToothRescueOpt.wideDoaHalfWidthDeg = reshape(localGetFirstFieldOrDefault(opt, ...
+  {'sameToothRescueWideDoaHalfWidthDeg'}, sameToothRescueOpt.wideDoaHalfWidthDeg), [], 1);
+sameToothRescueOpt.singleDoaHalfWidthDeg = reshape(localGetFirstFieldOrDefault(opt, ...
+  {'sameToothRescueSingleDoaHalfWidthDeg'}, sameToothRescueOpt.singleDoaHalfWidthDeg), [], 1);
+sameToothRescueOpt.multiDoaHalfWidthDeg = reshape(localGetFirstFieldOrDefault(opt, ...
+  {'sameToothRescueMultiDoaHalfWidthDeg'}, sameToothRescueOpt.multiDoaHalfWidthDeg), [], 1);
+
 parallelOpt = localMergeStruct(struct( ...
   'enableSubsetEvalParfor', true, ...
   'minSubsetEvalParfor', 4), ...
@@ -131,6 +161,7 @@ parallelOpt = localMergeStruct(parallelOpt, localGetFieldOrDefault(opt, 'paralle
 flowOpt.subset = subsetOpt;
 flowOpt.periodicRefine = periodicRefineOpt;
 flowOpt.polish = polishOpt;
+flowOpt.sameToothRescue = sameToothRescueOpt;
 flowOpt.parallel = parallelOpt;
 flowOpt.parallelOpt = parallelOpt;
 
@@ -162,6 +193,15 @@ flowOpt.periodicRefinePolishMinFrozenDoaDisagreementDeg = polishOpt.minFrozenDoa
 flowOpt.periodicRefinePolishMaxFrozenRelativeObjGap = polishOpt.maxFrozenRelativeObjGap;
 flowOpt.periodicRefinePolishMaxSelectedToothResidualHz = polishOpt.maxSelectedToothResidualHz;
 flowOpt.periodicRefinePolishMaxHealthBucket = polishOpt.maxHealthBucket;
+
+flowOpt.sameToothRescueEnable = logical(sameToothRescueOpt.enable && sameToothRescueOpt.enableWhenMulti);
+flowOpt.sameToothRescueEnableWhenMulti = sameToothRescueOpt.enableWhenMulti;
+flowOpt.sameToothRescueCoherenceThreshold = sameToothRescueOpt.coherenceThreshold;
+flowOpt.sameToothRescuePhaseResidThresholdRad = sameToothRescueOpt.phaseResidThresholdRad;
+flowOpt.sameToothRescueBankMode = sameToothRescueOpt.bankMode;
+flowOpt.sameToothRescueWideDoaHalfWidthDeg = sameToothRescueOpt.wideDoaHalfWidthDeg;
+flowOpt.sameToothRescueSingleDoaHalfWidthDeg = sameToothRescueOpt.singleDoaHalfWidthDeg;
+flowOpt.sameToothRescueMultiDoaHalfWidthDeg = sameToothRescueOpt.multiDoaHalfWidthDeg;
 end
 
 function opt = localParseFlowOpt(varargin)
