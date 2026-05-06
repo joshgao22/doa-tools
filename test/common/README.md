@@ -118,6 +118,33 @@
 - 单脚本一次性图；
 - 需要特定 replay 内部状态的临时图。
 
+
+### `scan/`
+
+负责 scan 顶层 orchestration 的薄工程 helper。
+
+典型文件：
+
+- `printMfScanHeader.m`
+- `printMfScanSection.m`
+- `notifyMfScanStatus.m`
+- `finalizeMfScanResult.m`
+
+使用边界：
+
+- 顶层 scan 是脚本，文件头固定为英文说明 + `clear; close all; clc;` + `Scan configuration`，默认参数写在配置 section；
+- common/scan helper 只负责 header、section banner、best-effort Telegram 状态壳和 tmp cleanup glue；
+- 数据落盘由 scan 脚本的 `Data storage` section 调用 `saveExpSnapshot` 完成；
+- summary 与画图由 scan 脚本的 `Summary output and plotting` section 完成，且应只依赖 `scanData`；
+- common/scan 不维护具体 scan 的 metric parser、results parser、plot helper、strategy recommendation 或 winner adoption 逻辑。
+
+不应包含：
+
+- 具体 scan 的实验默认参数；
+- regression contract；
+- 正式 estimator path；
+- 长期策略规则。
+
 ### `replay/`
 
 负责 replay batch、flow-like scan batch、header、finalize。

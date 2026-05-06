@@ -12,6 +12,7 @@ clear; close all; clc;
 %% Scan configuration
 scanName = "scanMfSubsetBankCoverage";
 saveSnapshot = true;
+notifyTelegramEnable = true;
 optVerbose = false;
 strategyPreset = "scheduleComboQuick";
 checkpointEnable = true;
@@ -35,8 +36,9 @@ numRepeat = numel(seedList);
 
 config = struct();
 config.scanName = string(scanName);
-config.saveSnapshot = saveSnapshot;
-config.optVerbose = optVerbose;
+config.saveSnapshot = logical(saveSnapshot);
+config.notifyTelegramEnable = logical(notifyTelegramEnable);
+config.optVerbose = logical(optVerbose);
 config.strategyPreset = string(strategyPreset);
 config.checkpointEnable = logical(checkpointEnable);
 config.checkpointResume = logical(checkpointResume);
@@ -54,28 +56,43 @@ config.randomTrialList = randomTrialList;
 config.toothHistogramBinCount = toothHistogramBinCount;
 config.toothConsensusResidualPenaltyHz = toothConsensusResidualPenaltyHz;
 
-runKey = localBuildRunKey(char(scanName), config);
-localPrintScanHeader(scanName, config);
+runTic = tic;
+runKey = string(datetime('now', 'Format', 'yyyyMMdd-HHmmss'));
+config.runKey = string(runKey);
+checkpointDir = "";
+checkpointDirCell = strings(0, 1);
+scanData = struct();
 
-%% Build context and flow options
-strategyList = localBuildStrategyList(config);
-numStrategy = numel(strategyList);
-tableCell = cell(numStrategy, 1);
-candidateCell = cell(numStrategy, 1);
-contextCell = cell(numStrategy, 1);
-flowOptCell = cell(numStrategy, 1);
-repeatCellByStrategy = cell(numStrategy, 1);
-runStateCell = cell(numStrategy, 1);
-checkpointDirCell = strings(numStrategy, 1);
-
-%% Run scan batch
 try
+  %% Build context and scan tasks
+  strategyList = localBuildStrategyList(config);
+  numStrategy = numel(strategyList);
+  config.numStrategy = numStrategy;
+  config.numTask = numStrategy * config.numRepeat;
+
+  tableCell = cell(numStrategy, 1);
+  candidateCell = cell(numStrategy, 1);
+  contextCell = cell(numStrategy, 1);
+  flowOptCell = cell(numStrategy, 1);
+  repeatCellByStrategy = cell(numStrategy, 1);
+  runStateCell = cell(numStrategy, 1);
+  batchOptCell = cell(numStrategy, 1);
+  checkpointDirCell = strings(numStrategy, 1);
+  for iStrategy = 1:numStrategy
+    batchOptCell{iStrategy} = localBuildBatchOpt(config, strategyList(iStrategy));
+    checkpointDirCell(iStrategy) = localGetBatchCheckpointDir(batchOptCell{iStrategy});
+  end
+  checkpointDir = localBuildCheckpointDirSummary(checkpointDirCell);
+
+  printMfScanHeader(char(scanName), config, checkpointDir);
+  localPrintScanExtraConfig(config);
+
+  %% Run scan batch
   localLog(sprintf('Run %d subset-bank strategies.', numStrategy));
   for iStrategy = 1:numStrategy
     strategy = strategyList(iStrategy);
     localLog(sprintf('Run strategy %d/%d: %s.', iStrategy, numStrategy, strategy.strategyName));
-    batchOpt = localBuildBatchOpt(config, strategy);
-    checkpointDirCell(iStrategy) = localGetBatchCheckpointDir(batchOpt);
+    batchOpt = batchOptCell{iStrategy};
     [t, repeatCell, contextCell{iStrategy}, flowOptCell{iStrategy}, runStateCell{iStrategy}] = runSimpleDynamicFlowReplayBatch(batchOpt);
     t.strategyName = repmat(strategy.strategyName, height(t), 1);
     t.bankSize = repmat(strategy.bankSize, height(t), 1);
@@ -106,6 +123,7 @@ try
   scanData = struct();
   scanData.scanName = string(scanName);
   scanData.runKey = string(runKey);
+  scanData.utcRun = datetime('now', 'TimeZone', 'local');
   scanData.config = config;
   scanData.strategyList = strategyList;
   scanData.contextSummary = localBuildContextSummary(contextCell, flowOptCell, strategyList);
@@ -123,6 +141,10 @@ try
   scanData.representative = representative;
   scanData.plotData = localBuildPlotData(scanTable, aggregateTable, toothHistogramTable, candidateSeedCoverageTable, consensusAggregateTable);
   scanData.repeatCellByStrategy = localStripRepeatCellByStrategy(repeatCellByStrategy);
+  scanData.elapsedSec = toc(runTic);
+  if ~config.checkpointEnable
+    scanData = finalizeMfScanResult(scanData, "");
+  end
 
   if config.saveSnapshot
     saveOpt = struct('includeVars', {{'scanData'}}, ...
@@ -131,78 +153,205 @@ try
   else
     scanData.snapshotFile = "";
   end
+
+  %% Summary output and plotting
+  config = localEnsureConsensusConfig(scanData.config, scanData);
+  scanData.config = config;
+  scanTable = localAnnotateToothMetrics(scanData.scanTable, config);
+  scanData.scanTable = localAnnotateBaselineComparison(scanTable, config);
+  scanTable = scanData.scanTable;
+  if ~isfield(scanData, 'candidateTable')
+    scanData.candidateTable = table();
+  end
+  scanData.candidateTable = localAnnotateCandidateToothMetrics(scanData.candidateTable, config);
+  if ~all(ismember({ 'anchorFdRefHz', 'anchorToothGroupIdx' }, scanData.candidateTable.Properties.VariableNames))
+    scanData.candidateTable = localAnnotateCandidateAnchorGroups(scanData.candidateTable, {}, config);
+  end
+  if ~isfield(scanData, 'candidateSeedCoverageTable')
+    scanData.candidateSeedCoverageTable = localBuildCandidateSeedCoverageTable(scanTable, scanData.candidateTable);
+  end
+  if ~isfield(scanData, 'consensusTable')
+    scanData.consensusTable = localBuildConsensusDiagnosticTable(scanTable, scanData.candidateTable, config);
+  end
+  scanData.consensusAggregateTable = localBuildConsensusAggregateTable(scanData.consensusTable);
+  if ~isfield(scanData, 'transitionTable')
+    scanData.transitionTable = localBuildBaselineTransitionTable(scanTable, config);
+  end
+  aggregateTable = localBuildAggregateTable(scanTable, scanData.candidateTable, scanData.candidateSeedCoverageTable, config);
+  consensusAggregateTable = scanData.consensusAggregateTable;
+  scanData.aggregateTable = aggregateTable;
+  if ~isfield(scanData, 'scheduleFeatureTable') || ~istable(scanData.scheduleFeatureTable)
+    scanData.scheduleFeatureTable = localBuildScheduleFeatureTable(scanData.strategyList);
+  end
+  if isfield(scanData, 'toothHistogramTable')
+    toothHistogramTable = scanData.toothHistogramTable;
+  else
+    toothHistogramTable = localBuildToothHistogramTable(scanTable, config);
+    scanData.toothHistogramTable = toothHistogramTable;
+  end
+
+  fprintf('  tooth histogram rows            : %d (saved in scanData.toothHistogramTable)\n', height(toothHistogramTable));
+  fprintf('  consensus diagnostic            : anchor-group soft residual penalty scale %.2f Hz (no-truth diagnostic)\n', ...
+    config.toothConsensusResidualPenaltyHz);
+  if isfield(scanData, 'checkpointSummaryTable') && ~isempty(scanData.checkpointSummaryTable)
+    printMfScanSection('Checkpoint summary', scanData.checkpointSummaryTable);
+  end
+  printMfScanSection('Subset-bank aggregate', aggregateTable);
+  localPrintTablePreview('Schedule feature table', localGetScheduleFeatureTableForPrint(scanData), 24);
+  localPrintTablePreview('No-truth consensus diagnostic aggregate', consensusAggregateTable, 16);
+  localPrintTablePreview('Strategy repeat preview', localSelectDisplayTable(scanTable), 16);
+  localPrintTablePreview('Baseline transition preview', scanData.transitionTable, 16);
+  localPrintTablePreview('Candidate seed coverage preview', scanData.candidateSeedCoverageTable, 16);
+  localPrintTablePreview('No-truth consensus diagnostic preview', scanData.consensusTable, 16);
+  localPrintTablePreview('Candidate preview', scanData.candidateTable, 16);
+
+  scanData.plotData = localPlotScan(scanTable, aggregateTable, toothHistogramTable, ...
+    scanData.candidateSeedCoverageTable, consensusAggregateTable);
+
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "DONE", ...
+    'config', scanData.config, ...
+    'snapshotFile', scanData.snapshotFile, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', scanData.elapsedSec, ...
+    'metricLineList', localBuildTelegramMetricLines(scanData), ...
+    'commentLineList', [ ...
+      "Subset-bank coverage scan completed for offline schedule evaluation."; ...
+      "Truth metrics are evaluation-only and must not enter runtime selector or adoption."]));
+
 catch ME
   localPrintCheckpointFailureHint(checkpointDirCell);
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "FAILED", ...
+    'config', config, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
   rethrow(ME);
 end
 
-%% Summary output and plotting
-if ~exist('scanData', 'var') || ~isstruct(scanData)
-  error('Scan data is missing. Run the scan batch sections or load a snapshot containing scanData.');
-end
-
-config = localEnsureConsensusConfig(scanData.config, scanData);
-scanData.config = config;
-scanTable = localAnnotateToothMetrics(scanData.scanTable, config);
-scanData.scanTable = localAnnotateBaselineComparison(scanTable, config);
-scanTable = scanData.scanTable;
-if ~isfield(scanData, 'candidateTable')
-  scanData.candidateTable = table();
-end
-scanData.candidateTable = localAnnotateCandidateToothMetrics(scanData.candidateTable, config);
-if ~all(ismember({ 'anchorFdRefHz', 'anchorToothGroupIdx' }, scanData.candidateTable.Properties.VariableNames))
-  scanData.candidateTable = localAnnotateCandidateAnchorGroups(scanData.candidateTable, {}, config);
-end
-if ~isfield(scanData, 'candidateSeedCoverageTable')
-  scanData.candidateSeedCoverageTable = localBuildCandidateSeedCoverageTable(scanTable, scanData.candidateTable);
-end
-if ~isfield(scanData, 'consensusTable')
-  scanData.consensusTable = localBuildConsensusDiagnosticTable(scanTable, scanData.candidateTable, config);
-end
-scanData.consensusAggregateTable = localBuildConsensusAggregateTable(scanData.consensusTable);
-if ~isfield(scanData, 'transitionTable')
-  scanData.transitionTable = localBuildBaselineTransitionTable(scanTable, config);
-end
-aggregateTable = localBuildAggregateTable(scanTable, scanData.candidateTable, scanData.candidateSeedCoverageTable, config);
-consensusAggregateTable = scanData.consensusAggregateTable;
-scanData.aggregateTable = aggregateTable;
-if ~isfield(scanData, 'scheduleFeatureTable') || ~istable(scanData.scheduleFeatureTable)
-  scanData.scheduleFeatureTable = localBuildScheduleFeatureTable(scanData.strategyList);
-end
-if isfield(scanData, 'toothHistogramTable')
-  toothHistogramTable = scanData.toothHistogramTable;
-else
-  toothHistogramTable = localBuildToothHistogramTable(scanTable, config);
-  scanData.toothHistogramTable = toothHistogramTable;
-end
-
-fprintf('Running %s ...\n', char(scanData.scanName));
-fprintf('  repeats per strategy            : %d\n', config.numRepeat);
-fprintf('  strategies                      : %d (%s)\n', numel(scanData.strategyList), char(config.strategyPreset));
-fprintf('  baseline strategy               : %s\n', char(config.baselineStrategyName));
-fprintf('  near-tooth tolerance            : |toothIdx| <= %d and residual <= %.2f Hz\n', ...
-  config.nearToothIdxTol, config.toothResidualTolHz);
-fprintf('  easy damage rule                : baseline angle <= %.4f deg, damage > %.4f deg or lost truth tooth\n', ...
-  config.easyAngleTolDeg, config.damageAngleTolDeg);
-fprintf('  tooth histogram rows            : %d (saved in scanData.toothHistogramTable)\n', height(toothHistogramTable));
-fprintf('  consensus diagnostic            : anchor-group soft residual penalty scale %.2f Hz (no-truth diagnostic)\n', ...
-  config.toothConsensusResidualPenaltyHz);
-if isfield(scanData, 'checkpointSummaryTable') && ~isempty(scanData.checkpointSummaryTable)
-  localPrintTablePreview('Checkpoint summary', scanData.checkpointSummaryTable, 16);
-end
-fprintf('\n========== Subset-bank aggregate ==========\n');
-disp(aggregateTable);
-localPrintTablePreview('Schedule feature table', localGetScheduleFeatureTableForPrint(scanData), 24);
-localPrintTablePreview('No-truth consensus diagnostic aggregate', consensusAggregateTable, 16);
-localPrintTablePreview('Strategy repeat preview', localSelectDisplayTable(scanTable), 16);
-localPrintTablePreview('Baseline transition preview', scanData.transitionTable, 16);
-localPrintTablePreview('Candidate seed coverage preview', scanData.candidateSeedCoverageTable, 16);
-localPrintTablePreview('No-truth consensus diagnostic preview', scanData.consensusTable, 16);
-localPrintTablePreview('Candidate preview', scanData.candidateTable, 16);
-
-scanData.plotData = localPlotScan(scanTable, aggregateTable, toothHistogramTable, scanData.candidateSeedCoverageTable, consensusAggregateTable);
-
 %% Local helpers
+
+function localPrintScanExtraConfig(scanConfig)
+%LOCALPRINTSCANEXTRACONFIG Print subset-bank-specific settings.
+fprintf('  %-32s : %d\n', 'strategy count', scanConfig.numStrategy);
+fprintf('  %-32s : %s\n', 'strategy preset', char(scanConfig.strategyPreset));
+fprintf('  %-32s : %s\n', 'baseline strategy', char(scanConfig.baselineStrategyName));
+fprintf('  %-32s : %s\n', 'random trial list', mat2str(scanConfig.randomTrialList));
+fprintf('  %-32s : |toothIdx| <= %d, residual <= %.2f Hz\n', 'near-tooth tolerance', ...
+  scanConfig.nearToothIdxTol, scanConfig.toothResidualTolHz);
+fprintf('  %-32s : baseline angle <= %.4f deg, damage > %.4f deg or lost truth tooth\n', ...
+  'easy damage rule', scanConfig.easyAngleTolDeg, scanConfig.damageAngleTolDeg);
+end
+
+function checkpointDir = localBuildCheckpointDirSummary(checkpointDirCell)
+%LOCALBUILDCHECKPOINTDIRSUMMARY Return a compact checkpoint root for logs.
+checkpointDirCell = string(checkpointDirCell(:));
+checkpointDirCell = checkpointDirCell(strlength(checkpointDirCell) > 0);
+if isempty(checkpointDirCell)
+  checkpointDir = "";
+  return;
+end
+parentDirList = strings(numel(checkpointDirCell), 1);
+for iDir = 1:numel(checkpointDirCell)
+  parentDirList(iDir) = string(fileparts(char(checkpointDirCell(iDir))));
+end
+if numel(unique(parentDirList)) == 1
+  checkpointDir = parentDirList(1);
+else
+  checkpointDir = strjoin(checkpointDirCell, newline);
+end
+end
+
+function metricLineList = localBuildTelegramMetricLines(scanData)
+%LOCALBUILDTELEGRAMMETRICLINES Build scan-specific compact HTML metric lines.
+metricLineList = strings(0, 1);
+if ~isstruct(scanData) || ~isfield(scanData, 'aggregateTable') || ~istable(scanData.aggregateTable)
+  return;
+end
+config = localGetFieldOrDefault(scanData, 'config', struct());
+aggregateTable = scanData.aggregateTable;
+metricLineList(end + 1, 1) = sprintf('• preset: <code>%s</code>, strategies: <code>%d</code>', ...
+  char(localHtmlEscape(localGetFieldOrDefault(config, 'strategyPreset', ""))), height(aggregateTable));
+
+baselineName = string(localGetFieldOrDefault(config, 'baselineStrategyName', ""));
+baseRow = localFindStrategyRow(aggregateTable, baselineName);
+if ~isempty(baseRow)
+  metricLineList(end + 1, 1) = sprintf('• baseline truth/near hit: <code>%.3f / %.3f</code>', ...
+    localTableScalar(baseRow, 'truthToothHitRate', NaN), localTableScalar(baseRow, 'nearToothHitRate', NaN));
+end
+
+[bestTruthHit, bestTruthIdx] = localBestTableValue(aggregateTable, 'truthToothHitRate', 'max');
+if isfinite(bestTruthHit) && bestTruthIdx > 0
+  bestName = aggregateTable.strategyName(bestTruthIdx);
+  metricLineList(end + 1, 1) = sprintf('• best selected truth hit: <code>%s %.3f</code>', ...
+    char(localHtmlEscape(bestName)), bestTruthHit);
+end
+
+maxEasyDamage = localTableColumnMax(aggregateTable, 'easyDamageRate');
+maxSelectedMiss = localTableColumnMax(aggregateTable, 'selectedMissDespiteTruthCandidateRate');
+metricLineList(end + 1, 1) = sprintf('• max easy damage / selected-miss: <code>%.3f / %.3f</code>', ...
+  maxEasyDamage, maxSelectedMiss);
+end
+
+function row = localFindStrategyRow(t, strategyName)
+%LOCALFINDSTRATEGYROW Return one aggregate row by strategy name.
+row = table();
+if isempty(t) || ~istable(t) || ~any(strcmp(t.Properties.VariableNames, 'strategyName'))
+  return;
+end
+idx = find(t.strategyName == string(strategyName), 1, 'first');
+if ~isempty(idx)
+  row = t(idx, :);
+end
+end
+
+function value = localTableScalar(t, varName, defaultValue)
+%LOCALTABLESCALAR Read a scalar table value from the first row.
+value = defaultValue;
+if istable(t) && height(t) >= 1 && any(strcmp(t.Properties.VariableNames, varName)) && ~isempty(t.(varName))
+  value = t.(varName)(1);
+end
+end
+
+function [value, idx] = localBestTableValue(t, varName, modeText)
+%LOCALBESTTABLEVALUE Return the best finite value in a numeric table column.
+value = NaN;
+idx = 0;
+if isempty(t) || ~istable(t) || ~any(strcmp(t.Properties.VariableNames, varName))
+  return;
+end
+x = double(t.(varName));
+validIdx = find(isfinite(x));
+if isempty(validIdx)
+  return;
+end
+if strcmpi(modeText, 'min')
+  [value, relIdx] = min(x(validIdx));
+else
+  [value, relIdx] = max(x(validIdx));
+end
+idx = validIdx(relIdx);
+end
+
+function value = localTableColumnMax(t, varName)
+%LOCALTABLECOLUMNMAX Return max of a numeric table column with NaN fallback.
+value = NaN;
+if isempty(t) || ~istable(t) || ~any(strcmp(t.Properties.VariableNames, varName))
+  return;
+end
+value = max(double(t.(varName)), [], 'omitnan');
+end
+
+function textValue = localHtmlEscape(textValue)
+%LOCALHTMLESCAPE Escape text for scan-specific Telegram metric lines.
+textValue = string(textValue);
+textValue = replace(textValue, "&", "&amp;");
+textValue = replace(textValue, "<", "&lt;");
+textValue = replace(textValue, ">", "&gt;");
+end
 
 function strategyList = localBuildStrategyList(scanConfig)
 %LOCALBUILDSTRATEGYLIST Build deterministic and random subset-bank variants.
@@ -1697,24 +1846,6 @@ end
 end
 
 
-function localPrintScanHeader(scanName, scanConfig)
-%LOCALPRINTSCANHEADER Print compact scan configuration before long batches.
-fprintf('Running %s ...\n', char(scanName));
-fprintf('  repeats per strategy            : %d\n', scanConfig.numRepeat);
-fprintf('  snr (dB)                        : %.2f\n', scanConfig.snrDb);
-fprintf('  base seed                       : %d\n', scanConfig.baseSeed);
-fprintf('  strategy preset                 : %s\n', char(scanConfig.strategyPreset));
-fprintf('  strategy repeat mode            : %s\n', 'sequential-strategy / parfor-repeat-auto');
-fprintf('  save snapshot                   : %d\n', scanConfig.saveSnapshot);
-fprintf('  checkpoint enable               : %d (resume=%d, cleanupOnSuccess=%d)\n', ...
-  scanConfig.checkpointEnable, scanConfig.checkpointResume, scanConfig.checkpointCleanupOnSuccess);
-fprintf('  baseline strategy               : %s\n', char(scanConfig.baselineStrategyName));
-fprintf('  random trial list               : %s\n', mat2str(scanConfig.randomTrialList));
-fprintf('  near-tooth tolerance            : |toothIdx| <= %d, residual <= %.2f Hz\n', ...
-  scanConfig.nearToothIdxTol, scanConfig.toothResidualTolHz);
-end
-
-
 function localLog(messageText)
 %LOCALLOG Print one timestamped scan orchestration message.
 fprintf('[%s] %s\n', localNowString('HH:mm:ss'), char(messageText));
@@ -1741,9 +1872,3 @@ if height(t) > numShow
 end
 end
 
-
-function runKey = localBuildRunKey(scriptName, scanConfig)
-%LOCALBUILDRUNKEY Build a lightweight run identifier for scanData metadata.
-timestamp = char(datetime('now', 'Format', 'yyyyMMdd-HHmmss'));
-runKey = sprintf('%s_%s_seed%d_n%d', scriptName, timestamp, scanConfig.baseSeed, scanConfig.numRepeat);
-end

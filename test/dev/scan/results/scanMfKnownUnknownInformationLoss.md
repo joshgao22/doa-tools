@@ -1,32 +1,80 @@
 # scanMfKnownUnknownInformationLoss 结果记录
 
-## 对应 scan
+## 0. 状态摘要
 
-- `test/dev/scan/scanMfKnownUnknownInformationLoss.m`
+| 项目 | 内容 |
+|---|---|
+| 当前状态 | `paper-facing` |
+| 最新代表性 snapshot | `test/data/cache/scan/scanMfKnownUnknownInformationLoss_20260428-151356.mat` |
+| 当前一句话结论 | unknown `fdRate` 作为 nuisance parameter 时，对 DoA CRB 的影响几乎为零，主要信息损失集中在参考星 `fdRef`；该损失随联合帧数增加下降，多星相对单星更不敏感。 |
+| 论文图定位 | `main figure / mechanism figure`，用于 unknown-rate nuisance information-loss 机制图。 |
+| 决策影响 | 固定为当前代表性理论 scan；不进入 regression；后续 estimator RMSE-vs-CRB 需要另做 controlled MC。 |
+| 下一步动作 | 论文图优先画 `fdRef rollback (%)` vs `P`；若需要实际 MLE 贴 CRB，另跑 resolved/local consistency scan。 |
+| 禁止误用 | 不能把该纯 CRB / EFIM scan 解释成实际 `CP-U` estimator 已贴近 CRB，也不能用于判断 tooth selection、same-tooth rescue 或 full-flow 性能。 |
 
-## 扫描目标
+## 1. Scan 身份
 
-扫描 known / unknown Doppler-rate 条件下的多帧 CRB / EFIM 信息损失，量化把参考星 Doppler rate 从已知量改为 nuisance parameter 后，对主参数 DoA 与参考星 `fdRef` 的理论性能界回退。
+- 脚本：`test/dev/scan/scanMfKnownUnknownInformationLoss.m`
+- 结果文档：`test/dev/scan/results/scanMfKnownUnknownInformationLoss.md`
+- scan 类型：`paper-facing curve / CRB-EFIM mechanism scan`
+- 主要问题：known `fdRate` 与 unknown `fdRate` nuisance 两种条件下，主参数 DoA 与参考星 `fdRef` 的 CRB / EFIM 信息损失如何变化。
+- 扫描对象：`SNR`、联合帧数 `P`、帧间隔 `T_f`、`single / multi`、`known / unknown fdRate`。
+- 不覆盖范围：不运行 estimator MC；不验证 MLE 收敛；不覆盖 subset tooth selection、full-flow、same-tooth polish、rescue gate 或 bad-basin 行为。
+- truth 使用口径：不使用 truth 选择候选；只在 CRB 构造中使用理论真值点作为 Fisher information 的线性化点。
+- 是否 paper-facing：Yes。
 
-该 scan 只比较理论界：
+## 2. 术语与曲线口径
 
-- `K`：known `fdRate`，对应理想已知 Doppler-rate 条件；
-- `U`：unknown `fdRate`，对应 `fdRate` 作为 nuisance parameter 后用 EFIM 消元；
-- `U/K rollback (%) = 100 * (CRB_std_U / CRB_std_K - 1)`。
+| 名称 / 字段 | 含义 | 是否使用 truth | 如何解读 | 禁止解释 |
+|---|---|---:|---|---|
+| `K` | known `fdRate` 条件下的 CRB。 | No | 理想已知 Doppler-rate 条件。 | 不是实际 estimator 的 `CP-K` MC RMSE。 |
+| `U` | unknown `fdRate` 作为 nuisance，经 EFIM 消元后的 CRB。 | No | 描述 unknown-rate 对主参数信息的理论削弱。 | 不是实际 estimator 的 `CP-U` MC RMSE。 |
+| `rollback (%)` | `100 * (CRB_std_U / CRB_std_K - 1)`。 | No | 相对 known-rate 的标准差回退，适合比较信息损失比例。 | 不能当作绝对误差，也不能和 full-flow outlier rate 混用。 |
+| `single / multi` | 单星参考链路 CRB 与多星联合 CRB。 | No | 比较多星几何对 unknown-rate loss 的缓解作用。 | 不代表当前 full-flow 多星 estimator 一定优于单星。 |
+| `timeOriginClass` | 多帧 offset 相对于 reference time 的类别。 | No | `rightBiasedRef` 内的 P-trend 可比；`centralRef` 与 `rightBiasedRef` 不应混成同一单调曲线。 | 不要把奇偶 P 混画后解释锯齿。 |
 
-它不是实际 estimator Monte Carlo 性能 scan，不验证 tooth selection、subset flow、same-tooth polish 或优化 basin。实际 `CP-K / CP-U` RMSE 是否贴近 CRB / EFIM，需要另由 performance / controlled replay 验证。
+常见 scan 口径在本文件中的取值：
 
-## Snapshot index
+- `full-sample`：N/A，本 scan 没有 Monte Carlo repeat。
+- `resolved-sample`：N/A，本 scan 是理论 CRB / EFIM。
+- `outlier rate`：N/A，本 scan 不运行 estimator。
+- `truth-tooth / oracle range`：N/A。
+- `stress-test`：否。
 
-| snapshot | 状态 | 配置 | 结论 |
-|---|---|---|---|
-| `test/data/cache/scan/scanMfKnownUnknownInformationLoss_20260428-151356.mat` | current | `contextSeed=253`，`SNR=[-5,0,5,10] dB`，`P=[8,10,12,14,16,18,20]`，`T_f=[1,1.3333,2] ms`，主切片 `SNR=10 dB`、`T_f=1/750 s`，`timeOriginClass=rightBiasedRef`，`84` 个 CRB grid case，只保存轻量 `scanData` | 当前代表性结果。unknown `fdRate` 对 DoA CRB 几乎没有影响，主要损失集中在 `fdRef`；`fdRef` U/K 回退随帧数增加单调下降，multi-sat 的回退明显小于 single-sat；interest FIM 未出现 near-singular，multi unknown 的 full FIM ill-conditioning 属于 nuisance 全参数化的预期病态。 |
+## 3. Snapshot index
 
-## 当前代表性结果
+| snapshot | 日期 | 状态 | 配置摘要 | 结论 | 覆盖 / 取代 |
+|---|---:|---|---|---|---|
+| `test/data/cache/scan/scanMfKnownUnknownInformationLoss_20260428-151356.mat` | 2026-04-28 | `representative` | `contextSeed=253`；`SNR=[-5,0,5,10] dB`；`P=[8,10,12,14,16,18,20]`；`T_f=[1,1.3333,2] ms`；主切片 `SNR=10 dB`、`T_f=1/750 s`、`rightBiasedRef`。 | unknown `fdRate` 对 DoA CRB 几乎无影响，主要损失集中在 `fdRef`；multi-sat 的 `fdRef` rollback 约为 single-sat 的一半。 | none |
 
-当前代表性结果只保留偶数帧数，并在主表中使用同一个 reference-time class：`rightBiasedRef`。该口径与仓库默认 `P=10` 的周期窗口一致，避免把奇数帧 `centralRef` 和偶数帧 `rightBiasedRef` 混画成一条 P-trend 曲线。
+## 4. 最新代表性运行
 
-### 主切片：SNR = 10 dB，T_f = 1/750 s
+### 4.1 配置
+
+- `contextSeed = 253`
+- `numRepeat = N/A`，理论 CRB / EFIM scan 无 MC repeat。
+- `snrDbList = [-5, 0, 5, 10]`
+- `frameCountList = [8, 10, 12, 14, 16, 18, 20]`
+- `frameIntvlSecList = [1/1000, 1/750, 1/500]`
+- 主切片：`primaryPlotSnrDb = 10`，`primaryFrameIntvlSec = 1/750`
+- 关键 scan 轴：`P`、`T_f`、`SNR`、`mode=single/multi`、`fdRateMode=known/unknown`
+- 关键 resolved / outlier 判据：N/A；本 scan 不运行 estimator。
+- checkpoint：该 snapshot 未记录 checkpoint summary。
+- snapshot 保存变量：`scanData`
+- 运行时间：snapshot 未记录 `elapsedSec`。
+
+### 4.2 存档数据检查
+
+- 顶层变量：`data / meta / inventory`
+- `data.scanData` 字段：`scanName`、`runKey`、`utcRun`、`config`、`crbSummaryTable`、`lossTable`、`fimDiagTable`、`fimDiagSummaryTable`、`primarySliceTable`、`mainSliceTable`、`mainTimeOriginClass`、`timeOriginSummaryTable`、`primaryDisplayTable`、`tfSensitivityDisplayTable`、`snrSensitivityDisplayTable`、`crbBundleSummaryCell`、`plotData`
+- 未保存大体量数据：未保存 `rxSigCell`、完整 `sceneSeq`、fixture cache、transition bundle、全量 objective map、完整 debug trace 或图片文件。
+- warning / fail 计数：full FIM 的 expected ill-conditioning 在 scan 结果中以 compact condition summary 记录；主参数 interest FIM 未 near-singular。
+
+## 5. 主要统计与曲线结果
+
+### 5.1 主表 / 主切片
+
+主切片固定 `SNR=10 dB`、`T_f=1/750 s`，并只使用统一的 `rightBiasedRef` time-origin class。
 
 | mode | P | window (ms) | offset mean | DoA rollback (%) | fdRef rollback (%) | trace info loss (%) | min-eig loss (%) |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -45,97 +93,104 @@
 | single | 18 | 22.6667 | 0.5 | 0 | 2.3307 | 0.008639 | 4.5033 |
 | single | 20 | 25.3333 | 0.5 | 0 | 1.8875 | 0.008695 | 3.6707 |
 
-## 可观察现象
+### 5.2 按扫描轴汇总
 
-### 1. unknown `fdRate` 对 DoA CRB 几乎没有负面影响
+| axis value | case | metric 1 | metric 2 | metric 3 | 解释 |
+|---:|---|---:|---:|---:|---|
+| `P=8 -> 20` | multi | `fdRef rollback: 6.10% -> 0.95%` | `DoA rollback: 0.0017% -> 0.0726%` | `trace loss: 10.05% -> 1.84%` | 增加帧数会显著降低 unknown-rate 对 `fdRef` 的相对损失。 |
+| `P=8 -> 20` | single | `fdRef rollback: 11.87% -> 1.89%` | `DoA rollback: ~0` | `min-eig loss: 20.10% -> 3.67%` | single-sat 的 `fdRef` rollback 始终高于 multi-sat。 |
+| `SNR=-5..10 dB` | U/K ratio | 近似不变 | N/A | N/A | rollback 是相对 CRB 比值，主要由几何和时间窗口决定，对 SNR 不敏感。 |
+| `T_f=[1,1.3333,2] ms` | primary sensitivity | 诊断用途 | N/A | N/A | 可用于检查窗口时长影响；论文主图建议先固定 `T_f=1/750 s`。 |
 
-主切片中，single-sat 的 DoA rollback 基本为数值零；multi-sat 的 DoA rollback 也只有 `0.0017% -> 0.0726%`，远小于 `fdRef` rollback。因此，这个 scan 不支持“unknown rate 会显著损害 DoA 理论界”的说法。
+### 5.3 图形口径
 
-更准确的说法是：在当前参考星参数化和观测窗口内，`fdRate` nuisance 与 DoA 主参数的 EFIM 耦合较弱；其主要影响不在 DoA，而在参考星 `fdRef`。
+| 图 | 横轴 | 纵轴 | 曲线 | 是否论文候选 | 注意事项 |
+|---|---|---|---|---:|---|
+| `fdRef CRB rollback versus frame count` | `P` | `100*(U/K-1)` for `fdRef` CRB std | `single`、`multi` | Yes | 主图候选；固定 `SNR=10 dB`、`T_f=1/750 s`、`rightBiasedRef`。 |
+| `fdRef CRB rollback versus SNR` | `SNR` | `fdRef rollback (%)` | `single`、`multi` | No / appendix | 主要说明 U/K rollback 对 SNR 不敏感。 |
+| `Frame-interval sensitivity` | `P` 或 `windowMs` | `fdRef rollback (%)` | 不同 `T_f` | Appendix / diagnostic | 若要解释窗口时长，建议横轴改成 `windowMs`，不要和默认 P-trend 混用。 |
+| `DoA rollback table` | `P` | `DoA rollback (%)` | `single`、`multi` | No | DoA rollback 太小，适合文字说明，不必单独成主图。 |
 
-### 2. `fdRef` 是主要信息损失指标
+## 6. 可观察现象
 
-`fdRef` rollback 随帧数增加单调下降：
+### 6.1 支持当前结论的现象
 
-- multi-sat：`6.10% -> 0.95%`；
-- single-sat：`11.87% -> 1.89%`。
+- DoA rollback 几乎为零：single-sat 基本是数值零，multi-sat 在主切片中也只有 `0.0017% -> 0.0726%`。
+- `fdRef` 是主要信息损失指标：multi-sat 从 `6.10%` 降到 `0.95%`，single-sat 从 `11.87%` 降到 `1.89%`。
+- multi-sat 比 single-sat 更不敏感：同一 `P` 下 multi-sat 的 `fdRef` rollback 始终低于 single-sat，例如 `P=10` 时为 `3.86%` vs `7.57%`。
+- SNR 扩展不是主要信息来源：由于 U/K ratio 近似抵消噪声缩放，继续扩大 SNR 范围预计主要得到近似水平线。
+- interest FIM 未 near-singular：即使 multi unknown 的 full FIM near-singular，主参数 interest block 仍可用。
 
-这说明 unknown Doppler-rate 的主要代价是削弱参考时刻 Doppler 的理论分辨能力。随着帧数增加，跨帧相位轨迹提供更多关于 `fdRef / fdRate` 的联合约束，`fdRate` nuisance 被 EFIM 消元后的额外损失快速下降。
+### 6.2 反向、污染或未解决现象
 
-### 3. multi-sat 比 single-sat 对 unknown-rate 更不敏感
+- 该 scan 不能验证实际 estimator 是否贴近 CRB；`CP-K / CP-U` 的 RMSE-vs-CRB 需要专门的 controlled MC。
+- full FIM near-singular 是 nuisance 全参数化病态，不应当作主参数 EFIM 不可用。
+- 奇偶帧混画会引入 time-origin class 锯齿；主趋势只在统一 `rightBiasedRef` 内解释。
 
-同样的 `P` 和 `T_f` 下，multi-sat 的 `fdRef` rollback 始终低于 single-sat。例如：
+### 6.3 代表性异常格点 / strategy / seed
 
-- `P=8`：single `11.87%`，multi `6.10%`；
-- `P=10`：single `7.57%`，multi `3.86%`；
-- `P=20`：single `1.89%`，multi `0.95%`。
+| 条件 | 类型 | 现象 | 对结论的作用 |
+|---|---|---|---|
+| `mode=multi, fdRate=unknown` | expected full-FIM ill-conditioning | `full near-singular = 84/84`，但 `interest near-singular = 0` | 说明应压制 full-FIM warning，但保留 interest FIM condition summary。 |
+| odd/even mixed `P` | time-origin mixing | 奇偶 P 可能出现锯齿 | 说明主图必须固定 time-origin class。 |
 
-这支持一个对论文有用的解释：多星几何信息不仅能改善绝对 CRB，也能降低 unknown `fdRate` 对 `fdRef` 主参数的相对信息损失。
+## 7. 机制解释
 
-### 4. SNR 扩展不是该 scan 的主要信息来源
+### 7.1 当前解释
 
-该 scan 关注的是 U/K ratio 或 rollback percentage。known / unknown FIM 都会随噪声方差近似整体缩放，因此相对回退对 SNR 不敏感。当前 `SNR=[-5,0,5,10] dB` 已足够说明该点；继续扩展到更宽 SNR 范围，预计主要得到近似水平线，不会显著增加机制信息。
+unknown `fdRate` 作为 nuisance parameter 后，`fdRef` 与 `fdRate` 在跨帧相位轨迹中存在直接耦合，因此 EFIM 消元会削弱参考时刻 `fdRef` 的有效信息。随着 `P` 增加，跨帧相位轨迹提供更多关于斜率和截距的联合约束，`fdRate` nuisance 被消元后的额外损失快速下降。
 
-若论文需要 RMSE vs SNR 曲线，应在 `scanMfCpIpPerfMap` 或专门 controlled MC 中比较实际 estimator 的 `CP-K / CP-U` RMSE，并叠加 CRB / EFIM，而不是把这个纯理论 information-loss scan 扩展成性能 MC。
+DoA 主参数在当前几何与参考星参数化下，与 `fdRate` nuisance 的 EFIM 耦合较弱，因此 DoA rollback 远小于 `fdRef` rollback。多星几何进一步提供额外约束，使 `fdRef` 对 unknown-rate 的相对损失低于 single-sat。
 
-### 5. 帧数趋势应只在同一 time-origin class 内解读
+### 7.2 这个 scan 支持什么
 
-旧版 `P=8:20` 结果出现奇偶锯齿，是因为奇数帧的 offset 对称于 reference frame，属于 `centralRef`；偶数帧采用 `rightBiasedRef`，offset mean 为 `0.5`。两类时间原点下 `fdRef` 与 `fdRate` 的耦合不同，不能混成一条单调 P 曲线。
+- 支持 known/unknown-rate 信息损失主要体现在 `fdRef`，不是 DoA。
+- 支持 `fdRef` rollback 随 `P` 增加快速下降。
+- 支持多星协作不仅降低绝对 CRB，也能降低 unknown-rate nuisance 对 `fdRef` 的相对回退。
+- 支持论文中把 unknown `gamma_ref` 写成 nuisance parameter，并用 EFIM loss 解释退化机制。
 
-当前代表性结果只使用偶数 P，主趋势图使用统一 `rightBiasedRef`，因此 `fdRefLossPct` 随 P 单调下降，结果解释是自洽的。若后续想研究 reference-time placement 本身，应单独新增或扩展一个 sensitivity 图，而不是并入默认主图。
+### 7.3 这个 scan 不证明什么
 
-### 6. full FIM ill-conditioning 不影响当前主结论
+- 不证明实际 estimator 默认路径已修复。
+- 不证明 `CP-U` Monte Carlo RMSE 一定贴近 EFIM。
+- 不证明 full-flow tooth selection、same-tooth rescue 或 low-complexity flow 已通过。
+- 不适合写 regression 契约；这是理论曲线结果，不是 pass/fail guardrail。
 
-FIM condition summary 为：
+## 8. 对主流程的影响
 
-| mode | fdRate mode | cases | full near-singular | interest near-singular | min rcond full | median rcond full | min rcond interest | median rcond interest |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| single | known | 84 | 0 | 0 | 6.189e-05 | 3.4009e-04 | 3.4658e-04 | 1.9071e-03 |
-| single | unknown | 84 | 0 | 0 | 6.2053e-11 | 1.9413e-09 | 2.7682e-04 | 1.7681e-03 |
-| multi | known | 84 | 0 | 0 | 2.4225e-10 | 2.5047e-10 | 2.5540e-10 | 2.5540e-10 |
-| multi | unknown | 84 | 84 | 0 | 4.8726e-16 | 2.8584e-15 | 2.5217e-10 | 2.5488e-10 |
+| 项目 | 影响 |
+|---|---|
+| estimator 默认路径 | 不改；该 scan 不触碰 estimator 数值路径。 |
+| flow 默认路径 | 不改；与 subset / rescue flow 无关。 |
+| replay 下一步 | 若要闭环论文图，下一步需要 controlled MLE-vs-CRB local consistency scan / replay。 |
+| regression | 不写；只作为结果文档和论文图候选。 |
+| 论文图 | `main / mechanism figure`，优先画 `fdRef rollback (%)` vs `P`。 |
+| 排障记录 | 主记录保留“known/unknown-rate 信息损失依赖 CRB/EFIM 口径”的结论即可，不复制长表。 |
 
-`multi + unknown` 的 full FIM 全部 near-singular，但 interest FIM 的 near-singular 计数为 0。因此，本 scan 中 suppress full-FIM warning 是合理的：full nuisance 参数化病态不应刷屏；主参数 EFIM / interest block 的条件数仍在 summary 中保留。
+## 9. 限制与禁止解释
 
-## 图形解释
+- 不要把 CRB rollback 当作实际 RMSE rollback。
+- 不要把该结果用于证明 default `CP-U` estimator 没有 tail。
+- 不要把 full-FIM near-singular 解读成主参数 EFIM 不可用。
+- 不要混合 `centralRef` 与 `rightBiasedRef` 后解释 P-trend。
+- 不要把 SNR 曲线平坦解释成 noise 不重要；这里比较的是 known/unknown 的相对比值。
 
-当前 scan 的图应按以下方式解读：
+## 10. 恢复与复现
 
-1. **`fdRef CRB rollback versus frame count`**：主图。横轴为 `P`，纵轴为 `100*(U/K-1)`。它回答“unknown `fdRate` 相对 known `fdRate` 会让 `fdRef` 理论标准差增加多少”。该图应作为本文 nuisance-rate information-loss 机制图的优先候选。
-2. **`fdRef CRB rollback versus SNR`**：诊断图。若不同 SNR 曲线近似水平，说明 U/K rollback 主要由几何和时间窗口决定，而不是由 SNR 决定。该图可用于解释为什么不需要继续扩大 SNR 范围。
-3. **`Frame-interval sensitivity of fdRef rollback`**：诊断图。比较同一 `P` 下不同 `T_f` 的相对回退。若曲线接近，说明在当前设置中 `P` / time-origin placement 比帧间隔本身更主导相对损失；若后续要深入研究窗口时长，可将横轴改成 `windowMs` 另做专门 sensitivity scan。
+```matlab
+snapshotFile = 'test/data/cache/scan/scanMfKnownUnknownInformationLoss_20260428-151356.mat';
+loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'scanData'}}));
+```
 
-默认论文图建议只保留第 1 张；第 2 / 3 张放到补充结果或作为内部 sanity check。
+随后打开：
 
-## 当前结论
+```text
+`test/dev/scan/scanMfKnownUnknownInformationLoss.m`
+```
 
-当前结果没有明显数值问题。它支持以下论文表述：
+只运行 `Summary output and plotting` 小节，即可重出 compact table 和图。注意：当前脚本的默认 `saveSnapshot` 可能已经与该历史 snapshot 不同，复现实验时应以本节 snapshot 配置为准。
 
-> 在连续相位多帧模型中，把参考星 Doppler rate 作为 unknown nuisance parameter 主要带来参考星 `fdRef` 的 EFIM 信息损失，而对 DoA 主参数的理论性能影响很小。该 `fdRef` 损失随联合帧数增加快速下降，并且多星协作相较单星能进一步降低 unknown-rate 的相对回退。
+## 11. 历史备注
 
-同时，该结果也给出边界：
-
-- 这不是实际 estimator 性能图；
-- 不能用于证明 `CP-U` 实际 RMSE 一定优于或接近 `CP-K`；
-- 不能替代 flow / tooth-selection / same-tooth refine 的 replay 或 scan；
-- 不应把 full FIM near-singular 解读成主参数 EFIM 不可用，因为 interest FIM 当前没有 near-singular。
-
-## 对 replay / regression / 论文图的影响
-
-- 该 scan 可作为论文 Section 4 / Section 5 中 unknown-rate nuisance information-loss 的理论机制图候选。
-- 主文若只放一张图，建议画 multi / single 的 `fdRef rollback (%)` vs `P`，固定 `SNR=10 dB`、`T_f=1/750 s`、`rightBiasedRef`。
-- DoA rollback 可以不单独成图，只在文字或表格中说明其量级接近 0。
-- SNR 不建议继续扩大；若需要 SNR 曲线，应转到 estimator MC performance scan。
-- 帧数不建议混入奇数 P 默认主图；若要讨论 reference-time placement，则另开小节或新增专门 sensitivity 结果。
-- 该结果不应迁移为 regression。它是理论 scan 结果，不是 pass/fail 契约。
-
-## 后续建议
-
-1. 保留当前 scan 默认配置：偶数 `P`、主 `T_f=1/750 s`、主 `SNR=10 dB`。
-2. 不继续扩大 SNR 范围；当前 `[-5,0,5,10] dB` 已足以说明相对 rollback 对 SNR 不敏感。
-3. 若需要更完整的论文性能闭环，下一步应跑 controlled MC：比较实际 `CP-K / CP-U` RMSE 与 CRB / EFIM 的关系。
-4. 若要解释旧版奇偶锯齿，可单独写 reference-time placement sensitivity，不要混入该 scan 的默认主趋势。
-
-## 历史 / superseded snapshots
-
-- 当前未保留 superseded snapshot 记录；已删除的旧 cache 文件不再在本文档中索引。
+- 当前只绑定 `scanMfKnownUnknownInformationLoss_20260428-151356.mat` 作为代表性 snapshot。
+- 旧版若混入奇数 `P`，会引入 `centralRef / rightBiasedRef` time-origin 锯齿；默认主图不再混画该口径。

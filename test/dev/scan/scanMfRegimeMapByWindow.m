@@ -1,16 +1,16 @@
-% scanMfRegimeMapByWindow
-% Purpose: scan the physical DoA-static / Doppler-dynamic regime over
-% multi-frame observation windows without running Monte Carlo estimators.
-%
-% Usage: edit the configuration block below, then run this script directly.
+%SCANMFREGIMEMAPBYWINDOW Scan physical DoA-static / Doppler-dynamic regimes.
+% Dev scan only. It maps window length, frame interval, and frame count to
+% paper-level regime metrics without running Monte Carlo estimators.
 % The script leaves scanData in the workspace; saveSnapshot=true saves only
-% scanData via saveExpSnapshot.
+% lightweight scanData through saveExpSnapshot.
 
 clear; close all; clc;
 
 %% Scan configuration
 scanName = "scanMfRegimeMapByWindow";
-saveSnapshot = true;
+saveSnapshot = false;
+notifyTelegramEnable = true;
+checkpointEnable = false;
 frameCountList = (1:100).';
 frameIntvlMsList = [0.5; 0.75; 1; 1e3/750; 1.5; 2; 2.5; 3];
 curveWindowMsList = linspace(0, 130, 600).';
@@ -36,59 +36,67 @@ if ~any(abs(doaSlowTolDegList - primaryDoaSlowTolDeg) < 1e-12)
   doaSlowTolDegList = sort([doaSlowTolDegList; primaryDoaSlowTolDeg]);
 end
 
-config = struct();
-config.saveSnapshot = saveSnapshot;
-config.frameCountList = frameCountList;
-config.frameIntvlSecList = frameIntvlSecList;
-config.curveWindowSecList = curveWindowSecList;
-config.representativeFrameCountList = representativeFrameCountList;
-config.representativeFrameIntvlSecList = representativeFrameIntvlSecList;
-config.carrierFreqHz = carrierFreqHz;
-config.minSlantRangeM = minSlantRangeM;
-config.transverseVelocityMps = transverseVelocityMps;
-config.doaSlowTolDeg = primaryDoaSlowTolDeg;
-config.primaryDoaSlowTolDeg = primaryDoaSlowTolDeg;
-config.doaSlowTolDegList = doaSlowTolDegList;
-config.fdDynamicTolHz = fdDynamicTolHz;
-config.staticDopplerPhaseTolRad = staticDopplerPhaseTolRad;
-config.firstOrderFdResidualTolHz = firstOrderFdResidualTolHz;
-config.firstOrderPhaseResidualTolRad = firstOrderPhaseResidualTolRad;
+scanConfig = struct();
+scanConfig.scanName = string(scanName);
+scanConfig.saveSnapshot = logical(saveSnapshot);
+scanConfig.notifyTelegramEnable = logical(notifyTelegramEnable);
+scanConfig.checkpointEnable = logical(checkpointEnable);
+scanConfig.frameCountList = frameCountList;
+scanConfig.frameIntvlSecList = frameIntvlSecList;
+scanConfig.curveWindowSecList = curveWindowSecList;
+scanConfig.representativeFrameCountList = representativeFrameCountList;
+scanConfig.representativeFrameIntvlSecList = representativeFrameIntvlSecList;
+scanConfig.carrierFreqHz = carrierFreqHz;
+scanConfig.minSlantRangeM = minSlantRangeM;
+scanConfig.transverseVelocityMps = transverseVelocityMps;
+scanConfig.doaSlowTolDeg = primaryDoaSlowTolDeg;
+scanConfig.primaryDoaSlowTolDeg = primaryDoaSlowTolDeg;
+scanConfig.doaSlowTolDegList = doaSlowTolDegList;
+scanConfig.fdDynamicTolHz = fdDynamicTolHz;
+scanConfig.staticDopplerPhaseTolRad = staticDopplerPhaseTolRad;
+scanConfig.firstOrderFdResidualTolHz = firstOrderFdResidualTolHz;
+scanConfig.firstOrderPhaseResidualTolRad = firstOrderPhaseResidualTolRad;
 
-runKey = localBuildRunKey(char(scanName));
-localPrintScanHeader(scanName, config);
+scanConfig.numTask = numel(frameCountList) * numel(frameIntvlSecList);
 
-%% Build context and flow options
+runTic = tic;
+runKey = string(datetime('now', 'Format', 'yyyyMMdd-HHmmss'));
+checkpointDir = "";
+scanJustRan = false;
+printMfScanHeader(char(scanName), scanConfig, checkpointDir);
+
+%% Build context and scan tasks
 % This regime scan is deterministic and does not build estimator context or
 % flow options. It only uses paper-level physical order metrics.
-numConfig = numel(config.frameCountList) * numel(config.frameIntvlSecList);
+numConfig = scanConfig.numTask;
 rowCell = cell(numConfig, 1);
 configIdx = 0;
 
 %% Run scan batch
 try
-  localLog(sprintf('Build %d deterministic window-regime rows.', numConfig));
-  for iP = 1:numel(config.frameCountList)
-    numFrame = config.frameCountList(iP);
-    for iTf = 1:numel(config.frameIntvlSecList)
-      frameIntvlSec = config.frameIntvlSecList(iTf);
+  fprintf('[%s] Build %d deterministic window-regime rows.\n', char(datetime('now', 'Format', 'HH:mm:ss')), numConfig);
+  for iP = 1:numel(scanConfig.frameCountList)
+    numFrame = scanConfig.frameCountList(iP);
+    for iTf = 1:numel(scanConfig.frameIntvlSecList)
+      frameIntvlSec = scanConfig.frameIntvlSecList(iTf);
       configIdx = configIdx + 1;
-      rowCell{configIdx} = localBuildRegimeRow(config, numFrame, frameIntvlSec);
+      rowCell{configIdx} = localBuildRegimeRow(scanConfig, numFrame, frameIntvlSec);
     end
   end
 
   scanTable = struct2table([rowCell{:}].');
   aggregateTable = scanTable;
-  curveTable = localBuildCurveTable(config);
-  targetSummaryTable = localBuildTargetSummaryTable(scanTable, config);
-  representativeTable = localBuildRepresentativeTable(scanTable, config);
-  modelBoundaryTable = localBuildModelBoundaryTable(curveTable, config);
-  doaToleranceSummaryTable = localBuildDoaToleranceSummaryTable(curveTable, config);
+  curveTable = localBuildCurveTable(scanConfig);
+  targetSummaryTable = localBuildTargetSummaryTable(scanTable, scanConfig);
+  representativeTable = localBuildRepresentativeTable(scanTable, scanConfig);
+  modelBoundaryTable = localBuildModelBoundaryTable(curveTable, scanConfig);
+  doaToleranceSummaryTable = localBuildDoaToleranceSummaryTable(curveTable, scanConfig);
 
   %% Data storage
   scanData = struct();
   scanData.scanName = string(scanName);
   scanData.runKey = string(runKey);
-  scanData.config = config;
+  scanData.config = scanConfig;
   scanData.scanTable = scanTable;
   scanData.aggregateTable = aggregateTable;
   scanData.curveTable = curveTable;
@@ -97,16 +105,27 @@ try
   scanData.representativeTable = representativeTable;
   scanData.modelBoundaryTable = modelBoundaryTable;
   scanData.plotData = localBuildPlotData(scanTable, aggregateTable, curveTable, doaToleranceSummaryTable);
+  scanData.utcRun = datetime('now', 'TimeZone', 'local');
+  scanData.elapsedSec = toc(runTic);
+  scanData = finalizeMfScanResult(scanData, checkpointDir);
 
-  if config.saveSnapshot
+  if scanConfig.saveSnapshot
     saveOpt = struct('includeVars', {{'scanData'}}, ...
       'extraMeta', struct('scanName', char(scanName)), 'verbose', true);
     scanData.snapshotFile = saveExpSnapshot(char(scanName), saveOpt);
   else
     scanData.snapshotFile = "";
   end
+  scanJustRan = true;
 catch ME
   fprintf('Scan failed while building the deterministic regime table.\n');
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "FAILED", ...
+    'config', scanConfig, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
   rethrow(ME);
 end
 
@@ -115,26 +134,36 @@ if ~exist('scanData', 'var') || ~isstruct(scanData)
   error('Scan data is missing. Run the scan batch sections or load a snapshot containing scanData.');
 end
 
-config = localNormalizeConfig(scanData.config);
-scanData.config = config;
+scanConfig = localNormalizeConfig(scanData.config);
+scanData.config = scanConfig;
 scanTable = scanData.scanTable;
 aggregateTable = scanData.aggregateTable;
 curveTable = scanData.curveTable;
-scanData.modelBoundaryTable = localBuildModelBoundaryTable(curveTable, config);
+scanData.modelBoundaryTable = localBuildModelBoundaryTable(curveTable, scanConfig);
 if ~isfield(scanData, 'doaToleranceSummaryTable')
-  scanData.doaToleranceSummaryTable = localBuildDoaToleranceSummaryTable(curveTable, config);
+  scanData.doaToleranceSummaryTable = localBuildDoaToleranceSummaryTable(curveTable, scanConfig);
 end
 
-fprintf('\n========== Regime summary by frame interval ==========%s', newline);
-disp(scanData.targetSummaryTable);
-fprintf('\n========== DoA tolerance sensitivity ==========%s', newline);
-disp(scanData.doaToleranceSummaryTable);
-fprintf('\n========== Model boundary summary ==========%s', newline);
-disp(scanData.modelBoundaryTable);
-fprintf('\n========== Representative rows ==========%s', newline);
-disp(scanData.representativeTable);
+printMfScanSection('Regime summary by frame interval', scanData.targetSummaryTable);
+printMfScanSection('DoA tolerance sensitivity', scanData.doaToleranceSummaryTable);
+printMfScanSection('Model boundary summary', scanData.modelBoundaryTable);
+printMfScanSection('Representative rows', scanData.representativeTable);
 
-scanData.plotData = localPlotScan(scanTable, aggregateTable, curveTable, config, scanData.doaToleranceSummaryTable);
+scanData.plotData = localPlotScan(scanTable, aggregateTable, curveTable, scanConfig, scanData.doaToleranceSummaryTable);
+
+if exist('scanJustRan', 'var') && scanJustRan
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "DONE", ...
+    'config', scanConfig, ...
+    'snapshotFile', scanData.snapshotFile, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', scanData.elapsedSec, ...
+    'metricLineList', localBuildTelegramMetricLines(scanData), ...
+    'commentLineList', [ ...
+      "Regime window map completed."; ...
+      "Detailed tables remain in scanData and scan results docs."]));
+end
 
 %% Local helpers
 
@@ -452,45 +481,26 @@ scanConfig.doaSlowTolDegList = reshape(double(scanConfig.doaSlowTolDegList), [],
 end
 
 
-function localPrintScanHeader(scanName, scanConfig)
-%LOCALPRINTSCANHEADER Print compact deterministic scan configuration.
-fprintf('Running %s ...\n', char(scanName));
-fprintf('  window configs                  : %d x %d\n', ...
-  numel(scanConfig.frameCountList), numel(scanConfig.frameIntvlSecList));
-fprintf('  frame count range               : %d to %d\n', ...
-  min(scanConfig.frameCountList), max(scanConfig.frameCountList));
-fprintf('  frame interval list (ms)        : %s\n', localFormatRow(scanConfig.frameIntvlSecList * 1e3));
-fprintf('  carrier frequency (GHz)         : %.3f\n', scanConfig.carrierFreqHz / 1e9);
-fprintf('  slant range / v_perp            : %.3g km / %.3g km/s\n', ...
-  scanConfig.minSlantRangeM / 1e3, scanConfig.transverseVelocityMps / 1e3);
-fprintf('  primary DoA static tolerance    : %.4f deg\n', scanConfig.primaryDoaSlowTolDeg);
-fprintf('  DoA tolerance sweep (deg)       : %s\n', localFormatRow(scanConfig.doaSlowTolDegList));
-fprintf(['  target regime rule              : fixed DoA valid, static Doppler invalid, ', ...
-  'first-order Doppler valid\n']);
-fprintf('  save snapshot                   : %d\n', scanConfig.saveSnapshot);
+function metricLineList = localBuildTelegramMetricLines(scanData)
+%LOCALBUILDTELEGRAMMETRICLINES Build compact scan-specific notification lines.
+
+metricLineList = strings(0, 1);
+config = scanData.config;
+metricLineList(end + 1, 1) = sprintf('• Frame grid: <code>%d x %d</code>', ...
+  numel(config.frameCountList), numel(config.frameIntvlSecList));
+if isfield(scanData, 'targetSummaryTable') && ~isempty(scanData.targetSummaryTable)
+  targetCount = sum(scanData.targetSummaryTable.numTarget);
+  metricLineList(end + 1, 1) = sprintf('• Target-regime rows: <code>%d</code>', targetCount);
 end
-
-
-function localLog(messageText)
-%LOCALLOG Print one timestamped scan orchestration message.
-fprintf('[%s] %s\n', localNowString('HH:mm:ss'), char(messageText));
+if isfield(config, 'primaryDoaSlowTolDeg')
+  primaryDoaSlowTolDeg = config.primaryDoaSlowTolDeg;
+elseif isfield(config, 'doaSlowTolDeg')
+  primaryDoaSlowTolDeg = config.doaSlowTolDeg;
+else
+  primaryDoaSlowTolDeg = NaN;
 end
-
-
-function txt = localNowString(formatText)
-%LOCALNOWSTRING Format the current local time for compact logs.
-txt = char(datetime('now', 'Format', formatText));
+if isfinite(primaryDoaSlowTolDeg)
+  metricLineList(end + 1, 1) = sprintf('• Primary DoA tol: <code>%.4g deg</code>', ...
+    primaryDoaSlowTolDeg);
 end
-
-
-function txt = localFormatRow(x)
-%LOCALFORMATROW Format numeric row values for compact console output.
-txt = strjoin(compose('%.6g', x(:).'), ', ');
-end
-
-
-function runKey = localBuildRunKey(scriptName)
-%LOCALBUILDRUNKEY Build a lightweight run identifier for scanData metadata.
-timestamp = char(datetime('now', 'Format', 'yyyyMMdd-HHmmss'));
-runKey = sprintf('%s_%s', scriptName, timestamp);
 end

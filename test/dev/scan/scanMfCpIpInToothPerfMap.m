@@ -7,8 +7,10 @@
 clear; close all; clc;
 
 %% Scan configuration
+
 scanName = "scanMfCpIpInToothPerfMap";
 saveSnapshot = true;
+notifyTelegramEnable = true;
 checkpointEnable = true;
 checkpointResume = true;
 checkpointCleanupOnSuccess = true;
@@ -24,18 +26,13 @@ toothResidualTolHz = 50;
 
 seedList = baseSeed + (0:(numRepeat - 1));
 seedList = reshape(double(seedList), [], 1);
-numRepeat = numel(seedList);
 snrDbList = reshape(double(snrDbList), [], 1);
 frameCountList = reshape(double(frameCountList), [], 1);
 staticLocalDoaHalfWidthDeg = reshape(double(staticLocalDoaHalfWidthDeg), [], 1);
+numRepeat = numel(seedList);
 
 scanConfig = struct();
 scanConfig.scanName = string(scanName);
-scanConfig.saveSnapshot = logical(saveSnapshot);
-scanConfig.checkpointEnable = logical(checkpointEnable);
-scanConfig.checkpointResume = logical(checkpointResume);
-scanConfig.checkpointCleanupOnSuccess = logical(checkpointCleanupOnSuccess);
-scanConfig.optVerbose = logical(optVerbose);
 scanConfig.baseSeed = baseSeed;
 scanConfig.numRepeat = numRepeat;
 scanConfig.seedList = seedList;
@@ -45,24 +42,40 @@ scanConfig.oracleFdHalfToothFraction = oracleFdHalfToothFraction;
 scanConfig.oracleFdRateHalfWidthHzPerSec = oracleFdRateHalfWidthHzPerSec;
 scanConfig.staticLocalDoaHalfWidthDeg = staticLocalDoaHalfWidthDeg;
 scanConfig.toothResidualTolHz = toothResidualTolHz;
+scanConfig.saveSnapshot = logical(saveSnapshot);
+scanConfig.checkpointEnable = logical(checkpointEnable);
+scanConfig.checkpointResume = logical(checkpointResume);
+scanConfig.checkpointCleanupOnSuccess = logical(checkpointCleanupOnSuccess);
+scanConfig.notifyTelegramEnable = logical(notifyTelegramEnable);
+scanConfig.optVerbose = logical(optVerbose);
 
+runTic = tic;
 runKey = string(datetime('now', 'Format', 'yyyyMMdd-HHmmss'));
-localPrintScanHeader(scanName, scanConfig);
-
 checkpointDir = "";
 checkpointRunState = struct();
 checkpointCleanupReport = struct([]);
-try
-  %% Run scan batch
-  taskList = localBuildTaskList(frameCountList, snrDbList, seedList);
-  useParfor = localCanUseParfor(numel(taskList));
+scanData = struct();
 
+try
+  %% Build context and scan tasks
+
+  taskList = localBuildTaskList(frameCountList, snrDbList, seedList);
+  scanConfig.numTask = numel(taskList);
+  useParfor = localCanUseParfor(numel(taskList));
   if scanConfig.checkpointEnable
     checkpointOpt = localBuildCheckpointOpt(scanName, scanConfig, taskList, useParfor);
     checkpointDir = string(fullfile(checkpointOpt.outputRoot, checkpointOpt.runName, checkpointOpt.runKey));
+  else
+    checkpointOpt = struct();
+  end
+  printMfScanHeader(char(scanName), scanConfig, checkpointDir);
+
+  %% Run scan batch
+
+  if scanConfig.checkpointEnable
     pendingCount = localCountPendingCheckpointTasks(checkpointDir, numel(taskList));
     progressTracker = localCreateScanProgressTracker(pendingCount);
-    progressCleanup = onCleanup(@() localCloseScanProgressTracker(progressTracker));
+    progressCleanup = onCleanup(@() localCloseScanProgressTracker(progressTracker)); %#ok<NASGU>
     if progressTracker.enabled
       checkpointOpt.progressFcn = @(~) localAdvanceScanProgress(progressTracker, false);
     end
@@ -74,7 +87,7 @@ try
   else
     taskOutCell = cell(numel(taskList), 1);
     progressTracker = localCreateScanProgressTracker(numel(taskList));
-    progressCleanup = onCleanup(@() localCloseScanProgressTracker(progressTracker));
+    progressCleanup = onCleanup(@() localCloseScanProgressTracker(progressTracker)); %#ok<NASGU>
     if useParfor && progressTracker.enabled && ~isempty(progressTracker.queue)
       progressQueue = progressTracker.queue;
       parfor iTask = 1:numel(taskList)
@@ -106,6 +119,7 @@ try
     checkpointDir, checkpointCleanupReport);
 
   %% Data storage
+
   scanData = struct();
   scanData.scanName = string(scanName);
   scanData.runKey = string(runKey);
@@ -117,14 +131,47 @@ try
   scanData.checkpointSummaryTable = checkpointSummaryTable;
   scanData.checkpointCleanupReport = checkpointCleanupReport;
   scanData.plotData = localBuildPlotData(aggregateTable);
+  scanData.elapsedSec = toc(runTic);
 
-  if saveSnapshot
+  if ~scanConfig.checkpointEnable
+    scanData = finalizeMfScanResult(scanData, "");
+  end
+
+  if scanConfig.saveSnapshot
     saveOpt = struct('includeVars', {{'scanData'}}, ...
       'extraMeta', struct('scanName', char(scanName)), 'verbose', true);
     scanData.snapshotFile = saveExpSnapshot(char(scanName), saveOpt);
   else
     scanData.snapshotFile = "";
   end
+
+  %% Summary output and plotting
+
+  printMfScanSection('In-tooth CP/IP performance-map aggregate', scanData.aggregateTable);
+  fprintf('Frames                          : %s\n', localFormatRow(scanData.config.frameCountList));
+  fprintf('SNR list (dB)                   : %s\n', localFormatRow(scanData.config.snrDbList));
+  fprintf('Repeats per config              : %d\n', scanData.config.numRepeat);
+  fprintf('fdRef oracle half-tooth fraction: %.3f\n', scanData.config.oracleFdHalfToothFraction);
+  fprintf('fdRate oracle half-width        : %.2f Hz/s\n', scanData.config.oracleFdRateHalfWidthHzPerSec);
+  fprintf('Truth-tooth rule                : toothIdx == 0 and |residual| <= %.2f Hz\n', ...
+    scanData.config.toothResidualTolHz);
+  if height(scanData.checkpointSummaryTable) > 0
+    printMfScanSection('Checkpoint summary', scanData.checkpointSummaryTable);
+  end
+  scanData.plotData = localPlotScan(scanData);
+
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "DONE", ...
+    'config', scanData.config, ...
+    'snapshotFile', scanData.snapshotFile, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', scanData.elapsedSec, ...
+    'metricLineList', localBuildTelegramMetricLines(scanData), ...
+    'commentLineList', [ ...
+      "Controlled in-tooth CP/IP scan completed."; ...
+      "Use this result as the cleaner CP/IP trade-off reference, not a full-flow proof."]));
+
 catch ME
   if exist('progressTracker', 'var')
     localCloseScanProgressTracker(progressTracker);
@@ -134,30 +181,15 @@ catch ME
   end
   localPrintCheckpointFailureHint(checkpointDir);
   fprintf('Scan failed while building controlled in-tooth CP/IP performance data.\n');
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "FAILED", ...
+    'config', scanConfig, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
   rethrow(ME);
 end
-
-%% Summary output and plotting
-if ~exist('scanData', 'var') || ~isstruct(scanData)
-  error('scanMfCpIpInToothPerfMap:MissingScanData', ...
-    'Scan data is missing. Run the scan batch sections or load a snapshot containing scanData.');
-end
-
-fprintf('\n========== In-tooth CP/IP performance-map aggregate ==========\n');
-fprintf('Frames                          : %s\n', localFormatRow(scanData.config.frameCountList));
-fprintf('SNR list (dB)                   : %s\n', localFormatRow(scanData.config.snrDbList));
-fprintf('Repeats per config              : %d\n', scanData.config.numRepeat);
-fprintf('fdRef oracle half-tooth fraction: %.3f\n', scanData.config.oracleFdHalfToothFraction);
-fprintf('fdRate oracle half-width        : %.2f Hz/s\n', scanData.config.oracleFdRateHalfWidthHzPerSec);
-fprintf('Truth-tooth rule                : toothIdx == 0 and |residual| <= %.2f Hz\n', ...
-  scanData.config.toothResidualTolHz);
-disp(scanData.aggregateTable);
-if isfield(scanData, 'checkpointSummaryTable') && istable(scanData.checkpointSummaryTable) && ...
-    height(scanData.checkpointSummaryTable) > 0
-  fprintf('\n========== Checkpoint summary ==========\n');
-  disp(scanData.checkpointSummaryTable);
-end
-scanData.plotData = localPlotScan(scanData);
 
 %% Local helpers
 
@@ -762,20 +794,46 @@ function txt = localFormatRow(x)
 txt = strjoin(compose('%.6g', x(:).'), ', ');
 end
 
-function localPrintScanHeader(scanName, config)
-%LOCALPRINTSCANHEADER Print compact scan configuration before the batch run.
+function lineList = localBuildTelegramMetricLines(scanData)
+%LOCALBUILDTELEGRAMMETRICLINES Build compact HTML metric lines for notifications.
 
-fprintf('Running %s ...\n', char(scanName));
-fprintf('  frame count list                : %s\n', localFormatRow(config.frameCountList));
-fprintf('  SNR list (dB)                   : %s\n', localFormatRow(config.snrDbList));
-fprintf('  repeats per config             : %d\n', config.numRepeat);
-fprintf('  base seed                       : %d\n', config.baseSeed);
-fprintf('  save snapshot                   : %d\n', config.saveSnapshot);
-fprintf('  checkpoint enable               : %d (resume=%d, cleanupOnSuccess=%d)\n', ...
-  config.checkpointEnable, config.checkpointResume, config.checkpointCleanupOnSuccess);
-fprintf('  estimator verbose               : %d\n', config.optVerbose);
-fprintf('  fdRef oracle half-tooth fraction: %.3f\n', config.oracleFdHalfToothFraction);
-fprintf('  fdRate oracle half-width        : %.2f Hz/s\n', config.oracleFdRateHalfWidthHzPerSec);
+config = scanData.config;
+aggregateTable = scanData.aggregateTable;
+lineList = strings(0, 1);
+lineList(end + 1, 1) = "• Tasks: <code>" + string(localGetFieldOrDefault(config, 'numTask', height(scanData.perfTable))) + "</code>";
+lineList(end + 1, 1) = "• Grid: <code>P=" + string(localFormatRow(config.frameCountList)) + ", SNR=" + ...
+  string(localFormatRow(config.snrDbList)) + " dB</code>";
+cpU = localFindMetricRow(aggregateTable, "CP-U", max(config.snrDbList), max(config.frameCountList));
+ipU = localFindMetricRow(aggregateTable, "IP-U", max(config.snrDbList), max(config.frameCountList));
+if ~isempty(cpU)
+  lineList(end + 1, 1) = "• CP-U angle RMSE: <code>" + ...
+    string(sprintf('%.4g deg', cpU.angleRmseDeg)) + "</code>";
+  lineList(end + 1, 1) = "• CP-U fdRef RMSE: <code>" + ...
+    string(sprintf('%.4g Hz', cpU.fdRefRmseHz)) + "</code>";
+  lineList(end + 1, 1) = "• CP-U non-ref coh floor: <code>" + ...
+    string(sprintf('%.3f', cpU.nonRefCoherenceFloorMedian)) + "</code>";
+end
+if ~isempty(ipU)
+  lineList(end + 1, 1) = "• IP-U / CP-U angle ratio: <code>" + ...
+    string(sprintf('%.3f', ipU.angleRatioToCp)) + "</code>";
+  lineList(end + 1, 1) = "• IP-U / CP-U fd ratio: <code>" + ...
+    string(sprintf('%.3f', ipU.fdRatioToCp)) + "</code>";
+end
+end
+
+function row = localFindMetricRow(aggregateTable, displayName, snrDb, numFrame)
+%LOCALFINDMETRICROW Find one aggregate row for compact notification metrics.
+
+row = [];
+if isempty(aggregateTable) || ~istable(aggregateTable)
+  return;
+end
+mask = aggregateTable.displayName == string(displayName) & ...
+  aggregateTable.snrDb == snrDb & aggregateTable.numFrame == numFrame;
+idx = find(mask, 1, 'first');
+if ~isempty(idx)
+  row = aggregateTable(idx, :);
+end
 end
 
 function progressTracker = localCreateScanProgressTracker(totalCount)

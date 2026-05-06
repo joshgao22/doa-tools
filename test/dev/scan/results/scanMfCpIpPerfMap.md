@@ -1,137 +1,204 @@
 # scanMfCpIpPerfMap 结果记录
 
-## 对应 scan
+## 0. 状态摘要
 
-- `test/dev/scan/scanMfCpIpPerfMap.m`
+| 项目 | 内容 |
+|---|---|
+| 当前状态 | `stress-test` |
+| 最新代表性 snapshot | `test/data/cache/scan/scanMfCpIpPerfMap_20260428-195242.mat` |
+| 当前一句话结论 | 当前 full-flow CP/IP performance map 被 wrong-tooth 与 same-tooth bad basin 明显污染；IP 在表观 angle / `fdRef` RMSE 上更好，不能解释为 IP 理论上优于 CP。 |
+| 论文图定位 | `not for paper main figure`；可作为 appendix / internal stress-test，用于说明 full-flow threshold 与 tooth-acquisition 风险。 |
+| 决策影响 | 固定为 full-flow 负结果；不继续扩大 repeat；CP/IP 论文主图转向 controlled in-tooth 或 resolved/local 口径。 |
+| 下一步动作 | 暂停扩跑；若未来 flow 已稳定，再重跑并把本 snapshot 标为 `superseded`。 |
+| 禁止误用 | 不能把该 full-flow stress-test 负结果写成“CP 理论不如 IP”，也不能用它否定 continuous-phase 主模型。 |
 
-## 扫描目标
+## 1. Scan 身份
 
-扫描 `CP-K / CP-U / IP-K / IP-U` 在不同 SNR 与联合帧数下的实际估计性能。该 scan 使用当前 simple dynamic flow 生成 `CP-K / CP-U` 结果，再从同一 static seed 上重跑 `IP-K / IP-U`，用于观察当前完整 flow 下 CP/IP 与 known/unknown-rate 的性能表现。
+- 脚本：`test/dev/scan/scanMfCpIpPerfMap.m`
+- 结果文档：`test/dev/scan/results/scanMfCpIpPerfMap.md`
+- scan 类型：`full-flow stress scan / CP-IP performance-map candidate rejection`
+- 主要问题：当前 simple dynamic full flow 是否已经足够稳定，能够支撑 CP/IP、known/unknown-rate 的论文性能图。
+- 扫描对象：`SNR`、联合帧数 `P`、`CP-K / CP-U / IP-K / IP-U`，每个 `(P,SNR)` 使用 3 个 seed。
+- 不覆盖范围：不隔离 correct-tooth / in-tooth 条件；不做 CRB-normalized resolved comparison；不验证单独的 CP/IP 理论模型。
+- truth 使用口径：truth 只用于 offline evaluation，包括 `toothIdx`、`toothResidualHz` 与 truth-tooth hit-rate；不进入 runtime selector、gate、candidate adoption 或 final winner。
+- 是否 paper-facing：No，当前仅作为 full-flow stress / negative evidence。
 
-需要特别说明：该 scan 是 **full-flow performance map**，不是受控的 in-tooth oracle。它会同时受到 wrong-tooth、same-tooth bad basin、candidate adoption 和 unknown warm-anchor release 的影响。因此，当前结果只能用于判断“现有 flow 是否已经足以支撑 CP/IP 性能图”，不能直接解释为 CP/IP 统计模型本身的理论优劣。
+## 2. 术语与曲线口径
 
-## Snapshot index
+| 名称 / 字段 | 含义 | 是否使用 truth | 如何解读 | 禁止解释 |
+|---|---|---:|---|---|
+| `CP-K` | continuous-phase，known `fdRate`。 | Eval only | 观察当前 full-flow CP known-rate 路径能否停在正确 tooth / basin。 | 不能当作纯 CP 理论性能。 |
+| `CP-U` | continuous-phase，unknown `fdRate` nuisance。 | Eval only | 观察 unknown-stage release 与 CP flow 是否稳定。 | 不能把 tail 直接解释为 EFIM 信息损失。 |
+| `IP-K / IP-U` | independent-phase baseline，切断跨帧公共相位 tying。 | Eval only | 作为对比基线；当前实现中可能弱化 comb / basin 锁定。 | 不能写成 IP 是本文主物理模型。 |
+| `truth-tooth hit` | `toothIdx==0 && abs(toothResidualHz)<=50 Hz`。 | Eval only | 衡量 full-flow 是否落在 center tooth 附近。 | 不是 runtime gate，也不是论文最终成功标准。 |
+| `full-sample RMSE` | 全部 36 个 full-flow 样本统计。 | Eval only | 用于展示 stress-test tail 与 bad-basin 风险。 | 不能直接和 CRB 做 local asymptotic 对比。 |
 
-| snapshot | 状态 | 配置 | 结论 |
+常见 scan 口径在本文件中的取值：
+
+- `full-sample`：全部 `P x SNR x seed = 36` 个样本，作为 stress-test 统计。
+- `resolved-sample`：未定义；本 snapshot 没有用于论文 CRB 对比的 resolved filtering。
+- `outlier rate`：可由 wrong-tooth / residual fail 间接观察，但不是 paper-facing resolved/outlier 判据。
+- `truth-tooth / oracle range`：truth 只用于 offline label。
+- `stress-test`：是。
+
+## 3. Snapshot index
+
+| snapshot | 日期 | 状态 | 配置摘要 | 结论 | 覆盖 / 取代 |
+|---|---:|---|---|---|---|
+| `test/data/cache/scan/scanMfCpIpPerfMap_20260428-195242.mat` | 2026-04-28 | `representative` | `baseSeed=253`；`seedList=[253,254,255]`；`SNR=[0,5,10,15] dB`；`P=[8,10,20]`；`T_f=1/750 s`；每格 `numRepeat=3`；truth-tooth 判据 `toothIdx==0 && abs(toothResidualHz)<=50 Hz`。 | 36/36 个 task 跑通，但 CP-K / CP-U 的 truth-tooth hit-rate 和 RMSE 被 wrong-tooth / bad-basin tail 拉坏；该结果拒绝作为 CP/IP 论文性能图。 | none |
+
+## 4. 最新代表性运行
+
+### 4.1 配置
+
+- `baseSeed = 253`
+- `seedList = [253, 254, 255]`
+- `numRepeat = 3` per `(P,SNR)` grid
+- `snrDbList = [0, 5, 10, 15]`
+- `frameCountList = [8, 10, 20]`
+- `frameIntvlSec = 1/750`
+- 关键 scan 轴：`P`、`SNR`、`phaseMode=CP/IP`、`fdRateMode=known/unknown`
+- 关键 offline label：`toothIdx==0 && abs(toothResidualHz)<=50 Hz`
+- checkpoint：disabled / not recorded；本 scan 直接保存轻量 `scanData`。
+- snapshot 保存变量：`scanData`
+- 运行时间：控制台记录约 `22 min 11 s`。
+
+### 4.2 存档数据检查
+
+- 顶层变量：`data / meta / inventory`
+- `data.scanData` 字段：`scanName`、`runKey`、`utcRun`、`config`、`perfTable`、`aggregateTable`、`repeatOutCell`、`plotData`
+- 未保存大体量数据：未保存 `rxSigCell`、完整 `sceneSeq`、fixture cache、transition bundle、全量 objective map、完整 debug trace 或图片文件。
+- warning / fail 计数：运行日志出现 `84` 次 near-singular warning 和 `2` 次 singular warning，主要来自 unknown warm-anchor / local release 过程；未导致 hard fail，但说明该 full-flow stress scan 的 unknown-stage 局部条件数较差。
+
+## 5. 主要统计与曲线结果
+
+### 5.1 主表 / 主切片
+
+全部 `P x SNR x repeat = 36` 个样本按 case 汇总。`truth-tooth hit` 使用 strict offline 判据：`toothIdx==0 && abs(toothResidualHz)<=50 Hz`。
+
+| case | samples | truth-tooth hit | wrong-tooth / residual fail | angle RMSE (deg) | angle median (deg) | angle P95 (deg) | fdRef RMSE (Hz) | fdRef median (Hz) | fdRef P95 (Hz) | fdRate RMSE (Hz/s) | 备注 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| `CP-K` | 36 | 0.333 | 0.667 | 0.004460 | 0.003567 | 0.008434 | 267 | 124 | 563 | 0 | known-rate 仍经常未停在 center tooth。 |
+| `CP-U` | 36 | 0.222 | 0.778 | 0.007285 | 0.001214 | 0.014249 | 25800 | 1500 | 52500 | 714 | 中位数较小但远齿 tail 极重。 |
+| `IP-K` | 36 | 0.722 | 0.278 | 0.002254 | 0.000508 | 0.004486 | 66.8 | 30.6 | 150 | 0 | 当前 full-flow 下表观更稳。 |
+| `IP-U` | 36 | 0.667 | 0.333 | 0.001715 | 0.000495 | 0.002960 | 54.5 | 33.3 | 108 | 4660 | angle / fdRef 表观最好，但不能解释成物理主模型。 |
+
+### 5.2 按扫描轴汇总
+
+| P | case | truth-tooth hit | angle RMSE (deg) | fdRef RMSE (Hz) | fdRate RMSE (Hz/s) | 解释 |
+|---:|---|---:|---:|---:|---:|---|
+| 8 | `CP-K` | 0.250 | 0.004937 | 219 | 0 | CP-K 已受 wrong-tooth 影响。 |
+| 8 | `CP-U` | 0.250 | 0.007983 | 5587 | 78.3 | CP-U tail 已出现。 |
+| 8 | `IP-K` | 0.750 | 0.002577 | 45.6 | 0 | IP-K 表观稳定。 |
+| 8 | `IP-U` | 0.667 | 0.002063 | 47.3 | 5629 | IP-U angle 小但 `fdRate` 不作为主指标。 |
+| 10 | `CP-K` | 0.500 | 0.004123 | 148 | 0 | 仍不足以支撑论文图。 |
+| 10 | `CP-U` | 0.333 | 0.007815 | 16233 | 1079 | 远齿 tail 加重。 |
+| 10 | `IP-K` | 0.667 | 0.002471 | 56.9 | 0 | IP baseline 仍较稳。 |
+| 10 | `IP-U` | 0.583 | 0.001933 | 61.1 | 4709 | 表观 RMSE 小。 |
+| 20 | `CP-K` | 0.250 | 0.004277 | 380 | 0 | 长窗口没有自动修正 CP tooth。 |
+| 20 | `CP-U` | 0.083 | 0.005867 | 41202 | 600 | CP-U 在长窗口下 tooth hit 最差。 |
+| 20 | `IP-K` | 0.750 | 0.001581 | 89.9 | 0 | IP-K 表观继续改善。 |
+| 20 | `IP-U` | 0.750 | 0.000913 | 54.2 | 3367 | 高 P 下 angle 最小。 |
+
+代表高 SNR / 长窗口格点 `P=20, SNR=15 dB`：
+
+| case | truth-tooth hit | angle RMSE (deg) | angle P95 (deg) | fdRef RMSE (Hz) | fdRate RMSE (Hz/s) | 解释 |
+|---|---:|---:|---:|---:|---:|---|
+| `CP-K` | 0.667 | 0.003223 | 0.004465 | 203 | 0 | 仍有 CP tooth / basin 风险。 |
+| `CP-U` | 0.000 | 0.006823 | 0.010294 | 31235 | 1017 | 明显不能作为 CP-U 论文性能点。 |
+| `IP-K` | 1.000 | 0.000269 | 0.000291 | 12.7 | 0 | full-flow 表观很好。 |
+| `IP-U` | 1.000 | 0.000269 | 0.000291 | 13.6 | 1831 | 表观同样很好。 |
+
+### 5.3 图形口径
+
+| 图 | 横轴 | 纵轴 | 曲线 | 是否论文候选 | 注意事项 |
+|---|---|---|---|---:|---|
+| `Full-flow CP/IP angle RMSE` | `SNR` 或 `P` | full-sample angle RMSE | `CP-K / CP-U / IP-K / IP-U` | No | 当前会把 flow failure 误写成 phase-model 差异。 |
+| `Truth-tooth hit-rate stress plot` | `P` 或 `SNR` | truth-tooth hit-rate | four cases | Appendix / diagnostic | 只作为 full-flow stress / tooth acquisition 风险说明。 |
+| `fdRef tail plot` | `P` 或 `SNR` | `fdRef` RMSE / P95 | four cases | Diagnostic | 用于暴露 CP-U 远齿 tail，不直接和 CRB 比。 |
+
+## 6. 可观察现象
+
+### 6.1 支持当前结论的现象
+
+- CP-K / CP-U 的 truth-tooth hit-rate 分别只有 `0.333 / 0.222`，说明 full-flow CP 路径经常没有停在 center tooth。
+- CP-U 的 angle median 为 `0.001214 deg`，但 RMSE 为 `0.007285 deg`；`fdRef` median 为 `1500 Hz`，但 RMSE 达 `25800 Hz`、P95 达 `52500 Hz`。这说明是远齿 / bad-basin tail，而不是平滑噪声退化。
+- `P=20, SNR=15 dB` 下 IP-K / IP-U 的 truth-tooth hit-rate 为 `1.0`，而 CP-U 为 `0.0`。若直接画论文图，会得到错误叙事。
+- SNR 提高不能自动修 CP-U：`P=10/20, SNR=15 dB` 下 CP-U 仍有大 `fdRef` tail。
+
+### 6.2 反向、污染或未解决现象
+
+- IP 在当前 full-flow 里看起来更好，但这更可能来自 independent-phase 弱化了当前 CP flow 的 comb / basin 锁定，而不是 IP 理论上更优。
+- CP-K 已知 rate 仍有 tooth failure，说明问题不只在 unknown-rate nuisance release。
+- 该 scan 没有 resolved/local filtering，因此不能拿 full-sample RMSE 对 CRB。
+
+### 6.3 代表性异常格点 / strategy / seed
+
+| 条件 | 类型 | 现象 | 对结论的作用 |
 |---|---|---|---|
-| `test/data/cache/scan/scanMfCpIpPerfMap_20260428-195242.mat` | current | `baseSeed=253`，`seedList=[253,254,255]`，`SNR=[0,5,10,15] dB`，`P=[8,10,20]`，`T_f=1/750 s`，每格 `numRepeat=3`，truth-tooth 判据为 `toothIdx==0 && abs(toothResidualHz)<=50 Hz`，只保存轻量 `scanData` | 当前代表性结果。完整 36 个 task 均跑通，但 CP-K / CP-U 的 truth-tooth hit-rate 明显低于 IP-K / IP-U；该结果不能作为“CP 优于 IP”的论文性能图，只能说明当前 full flow 仍被 wrong-tooth / same-tooth basin 污染。 |
+| `P=20, SNR=10 dB, seed=254, CP-U` | far-tooth outlier | `fdRefAbsErrHz≈100443 Hz`，`toothIdx=-134` | 说明 CP-U 可落到非常远的 comb tooth。 |
+| `P=20, SNR=5 dB, seed=254, CP-U` | far-tooth outlier | `fdRefAbsErrHz≈57000 Hz`，`toothIdx=76` | 说明 tail 不是单个格点偶然。 |
+| `P=10, SNR=15 dB, seed=253, CP-U` | far-tooth outlier | `fdRefAbsErrHz≈50988 Hz`，`toothIdx=68` | 说明高 SNR 不能自动修正 tooth / basin。 |
 
-## 存档数据检查
+## 7. 机制解释
 
-`scanMfCpIpPerfMap_20260428-195242.mat` 为 `saveExpSnapshot` 生成的轻量 scan snapshot：
+### 7.1 当前解释
 
-- 顶层变量为 `data / meta / inventory`。
-- `data` 中只保存 `scanData`。
-- `scanData` 包含 `config`、`perfTable`、`aggregateTable`、`repeatOutCell` 与 `plotData`。
-- `config` 中记录 `baseSeed=253`、`numRepeat=3`、`seedList=[253,254,255]`、`snrDbList=[0,5,10,15]`、`frameCountList=[8,10,20]`、`toothResidualTolHz=50`。
-- snapshot 中未保存大体量 `rxSigCell`、完整 `sceneSeq`、完整 fixture cache 或图片文件，符合 scan cache 的轻量保存口径。
+该 scan 测到的是完整 flow 结果，而不是纯 CP/IP 统计模型差异。CP 模型保留跨帧公共相位 tying，因此在正确局部 basin 内可提供 `fdRef` / coherence consistency；但 full-flow 若先落入 wrong tooth 或 same-tooth bad basin，CP objective 也会在该错误中心附近形成稳定支路。IP / relaxed baseline 切断跨帧公共相位后，可能弱化当前实现中的 comb 锁定，使 angle 表观更好，但这同时意味着它不再保留本文主模型的连续相位信息。
 
-运行日志显示 36/36 个 task 完成，总耗时约 `22 min 11 s`。日志中出现 `84` 次 `矩阵接近奇异值` warning 和 `2` 次 `矩阵在工作精度内为奇异的` warning，主要来自 unknown warm-anchor / fmincon 内部 release seed 链路。这些 warning 没有导致 hard fail，但说明当前 full-flow scan 的 unknown-stage 局部优化条件数仍然较差，后续应在 scan 层做 compact warning 计数，而不是把 warning 压到 estimator 主核里。
+因此，本 snapshot 应作为 “full-flow 仍不稳定” 的负结果，而不是 CP/IP 理论优劣的证据。真正可用于论文 CP/IP trade-off 的结果应使用 controlled in-tooth 或 resolved/local 口径。
 
-## 当前代表性结果
+### 7.2 这个 scan 支持什么
 
-### 全部格点汇总
+- 支持当前 full-flow CP/IP performance map 被 wrong-tooth / same-tooth basin 污染。
+- 支持 full-flow CP-U 的远齿 tail 是结构性风险，不能靠扩大 SNR 或 repeat 自然消失。
+- 支持把 `scanMfCpIpInToothPerfMap` 作为 CP/IP 论文口径，而不是使用本 full-flow scan。
+- 支持将 full-flow CP/IP 结果保留为 stress-test / engineering boundary。
 
-下表把 `P x SNR x repeat` 的 36 个样本按 case 汇总。`truthToothHitRate` 使用当前 scan 的 strict 判据：`toothIdx==0 && abs(toothResidualHz)<=50 Hz`。
+### 7.3 这个 scan 不证明什么
 
-| case | samples | truth-tooth hit | wrong-tooth / residual fail | angle RMSE (deg) | angle median (deg) | angle p95 (deg) | fdRef RMSE (Hz) | fdRef median (Hz) | fdRef p95 (Hz) | fdRate RMSE (Hz/s) |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `CP-K` | 36 | 0.333 | 0.667 | 0.004460 | 0.003567 | 0.008434 | 267 | 124 | 563 | 0 |
-| `CP-U` | 36 | 0.222 | 0.778 | 0.007285 | 0.001214 | 0.014249 | 25800 | 1500 | 52500 | 714 |
-| `IP-K` | 36 | 0.722 | 0.278 | 0.002254 | 0.000508 | 0.004486 | 66.8 | 30.6 | 150 | 0 |
-| `IP-U` | 36 | 0.667 | 0.333 | 0.001715 | 0.000495 | 0.002960 | 54.5 | 33.3 | 108 | 4660 |
+- 不证明 IP 理论上优于 CP。
+- 不证明 continuous-phase 主模型错误。
+- 不证明 `CP-U` 的 EFIM 信息损失会导致这些远齿 outlier。
+- 不证明 estimator 默认路径应该改成 IP。
+- 不证明可以写 regression 契约。
 
-该表的关键现象非常直接：当前 full-flow 下，`IP-K / IP-U` 在 hit-rate、angle RMSE 与 `fdRef` RMSE 上都优于 `CP-K / CP-U`。这与论文主线中希望展示的“连续相位利用跨帧信息带来增益”并不一致，因此这版 full-flow 结果不能作为 CP/IP 论文性能图。
+## 8. 对主流程的影响
 
-### 按帧数汇总
+| 项目 | 影响 |
+|---|---|
+| estimator 默认路径 | 不改；该 scan 只暴露 full-flow stress failure，不触碰 estimator 主核。 |
+| flow 默认路径 | 暂不改；若要修 flow，应回到 selected tooth / same-tooth rescue 的 replay 或 scan。 |
+| replay 下一步 | 不因本 scan 单独新增 replay；已有 in-tooth / subset / tail replay 可解释该类污染。 |
+| regression | 不写；full-flow stress 负结果不是稳定契约。 |
+| 论文图 | 不作为主图；最多作为 appendix / engineering diagnostic。 |
+| 排障记录 | 保留“full-flow CP/IP 被污染，controlled in-tooth 结果才可解释”的结论即可，不复制长表。 |
 
-| P | case | truth-tooth hit | angle RMSE (deg) | fdRef RMSE (Hz) | fdRate RMSE (Hz/s) |
-|---:|---|---:|---:|---:|---:|
-| 8 | `CP-K` | 0.250 | 0.004937 | 219 | 0 |
-| 8 | `CP-U` | 0.250 | 0.007983 | 5587 | 78.3 |
-| 8 | `IP-K` | 0.750 | 0.002577 | 45.6 | 0 |
-| 8 | `IP-U` | 0.667 | 0.002063 | 47.3 | 5629 |
-| 10 | `CP-K` | 0.500 | 0.004123 | 148 | 0 |
-| 10 | `CP-U` | 0.333 | 0.007815 | 16233 | 1079 |
-| 10 | `IP-K` | 0.667 | 0.002471 | 56.9 | 0 |
-| 10 | `IP-U` | 0.583 | 0.001933 | 61.1 | 4709 |
-| 20 | `CP-K` | 0.250 | 0.004277 | 380 | 0 |
-| 20 | `CP-U` | 0.083 | 0.005867 | 41202 | 600 |
-| 20 | `IP-K` | 0.750 | 0.001581 | 89.9 | 0 |
-| 20 | `IP-U` | 0.750 | 0.000913 | 54.2 | 3367 |
+## 9. 限制与禁止解释
 
-随着 `P` 增加到 20，`IP-U` 的 angle RMSE 继续下降到 `9.13e-4 deg`，但 `CP-U` 的 truth-tooth hit-rate 反而降到 `0.083`，`fdRef` RMSE 增大到 `4.12e4 Hz`。这说明当前 CP-U 不是在长窗口中稳定利用连续相位，而是更容易被 comb tooth / release basin 拉到远齿上。
+- 不要用该 full-flow stress-test 负结果直接否定 CP 理论模型。
+- 不要把 IP 表观 RMSE 更小写成 IP 物理上更好。
+- 不要把 truth-tooth hit-rate 迁移成 runtime selector / gate。
+- 不要把 full-sample RMSE 与 CRB 做 resolved/local 对比。
+- 不要继续扩大 repeat 试图把该 snapshot 变成论文主图；需要先隔离 tooth / basin 污染。
 
-### 高 SNR / 长窗口代表格点
+## 10. 恢复与复现
 
-`P=20, SNR=15 dB` 是最接近论文性能图直觉的高 SNR 长窗口格点，但当前结果仍不支持 CP 性能图：
+```matlab
+snapshotFile = 'test/data/cache/scan/scanMfCpIpPerfMap_20260428-195242.mat';
+loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'scanData'}}));
+```
 
-| case | truth-tooth hit | angle RMSE (deg) | angle p95 (deg) | fdRef RMSE (Hz) | fdRate RMSE (Hz/s) |
-|---|---:|---:|---:|---:|---:|
-| `CP-K` | 0.667 | 0.003223 | 0.004465 | 203 | 0 |
-| `CP-U` | 0.000 | 0.006823 | 0.010294 | 31235 | 1017 |
-| `IP-K` | 1.000 | 0.000269 | 0.000291 | 12.7 | 0 |
-| `IP-U` | 1.000 | 0.000269 | 0.000291 | 13.6 | 1831 |
+随后打开：
 
-如果直接把该格点画进论文，会得到“IP 明显优于 CP”的错误叙事。更合理的解释是：当前 `scanMfCpIpPerfMap` 测到的是完整 flow 失败模式，而不是纯 CP/IP 模型差异。
+```text
+`test/dev/scan/scanMfCpIpPerfMap.m`
+```
 
-## 可观察现象
+只运行 `Summary output and plotting` 小节，即可重出 compact table 和图。注意：若后续脚本已按 template 修改，默认通知 / checkpoint 外壳可能与该历史 snapshot 不完全一致；复现结论以本节配置为准。
 
-### 1. full-flow CP 结果仍被 wrong-tooth 主导
+## 11. 历史备注
 
-`CP-K` 的整体 truth-tooth hit-rate 只有 `0.333`，`CP-U` 只有 `0.222`。这说明 CP 路径仍经常没有停在 center tooth。对于 CP-K，`fdRate` 已知且 `fdRate RMSE=0`，但 `fdRef` RMSE 仍达到 `267 Hz`，说明问题不是 unknown-rate release 本身，而是 `fdRef` tooth / same-tooth basin 没有被 flow 稳定接住。
-
-### 2. CP-U 的中位数和 RMSE 分离，说明存在远齿 tail
-
-`CP-U` 的 angle median 只有 `0.001214 deg`，但 angle RMSE 为 `0.007285 deg`；`fdRef` median 为 `1500 Hz`，但 `fdRef` RMSE 达到 `25800 Hz`，p95 达到 `52500 Hz`。这不是平滑噪声导致的性能退化，而是少数远 tooth / bad-basin 样本把 RMSE 和 p95 拉坏。
-
-典型远齿样本包括：
-
-- `P=20, SNR=10 dB, seed=254`，`CP-U fdRefAbsErrHz=100443 Hz`，`toothIdx=-134`；
-- `P=20, SNR=5 dB, seed=254`，`CP-U fdRefAbsErrHz=57000 Hz`，`toothIdx=76`；
-- `P=10, SNR=15 dB, seed=253`，`CP-U fdRefAbsErrHz=50988 Hz`，`toothIdx=68`。
-
-这些样本说明 CP-U 的 release 可以落到非常远的 comb tooth，而不是只在 `±1/T_f` 邻近齿间摇摆。
-
-### 3. IP 在当前实现里看起来更好，但不能解释为 IP 理论上更优
-
-`IP-K / IP-U` 的 hit-rate 和 RMSE 明显优于 CP，但这不应直接写成“IP 模型优于 CP 模型”。IP baseline 切断了跨帧公共相位 tying，它可能弱化了当前 flow 中的 comb / bad-basin 锁定，使局部优化更容易得到小 angle error；但它同时也不是本文主物理模型，不能替代 CP 的机制论证。
-
-因此，这个结果更适合写成：当前 full-flow CP 路径仍有选齿和 same-tooth basin 风险；在该风险未隔离前，CP/IP 性能图会被算法 flow 失败污染。
-
-### 4. SNR 提高不能自动修复 CP-U
-
-`CP-U` 在 `SNR=15 dB` 下的整体表现并没有随 SNR 单调变好。尤其：
-
-- `P=10, SNR=15 dB`：`truth-tooth hit=0`，`angle RMSE=0.0130 deg`，`fdRef RMSE=31365 Hz`；
-- `P=20, SNR=15 dB`：`truth-tooth hit=0`，`angle RMSE=0.00682 deg`，`fdRef RMSE=31235 Hz`。
-
-这说明当前瓶颈不是低 SNR 噪声主导，而是结构性 tooth / basin 问题。继续增加 SNR 或 repeat，不会把这个 scan 变成可用的 CP/IP 性能图。
-
-### 5. 该结果与 CP/IP tying mechanism scan 一致但分工不同
-
-`scanMfCpIpTying` 已经说明：CP continuous 在 truth center 上仍把 center tooth 作为最低点，但 flow / final center 一旦落到 wrong tooth，CP objective 也会稳定支持该错齿。因此，`scanMfCpIpPerfMap` 当前失败并不推翻 CP 物理模型；它只是说明当前完整 flow 仍没有可靠地把 CP 解带到正确 tooth / 正确 DoA basin。
-
-## 当前结论
-
-当前代表性结果应写成：**`scanMfCpIpPerfMap` 工程上已经跑通，但科学结论上不能作为 CP/IP 论文性能图。它显示当前完整 dynamic flow 下 CP-K / CP-U 仍被 wrong-tooth 与 bad-basin 主导，导致 IP baseline 在表观 RMSE 和 hit-rate 上反而更好。**
-
-因此，本文档不把该 snapshot 作为“CP 优于 IP”的证据，而把它作为一个负结果 / gating evidence：在进入正式 CP/IP performance map 前，必须先完成受控 in-tooth 对比或先让 subset / rescue / same-tooth refine 更稳定。
-
-## 对代码、replay 和论文图的影响
-
-- `scanMfCpIpPerfMap.m` 可以继续保留为 full-flow CP/IP stress test，但当前结果不应进入论文主图。
-- 下一步如果要服务论文 CP/IP 主线，应新增或运行受控入口，例如 `scanMfCpIpInToothPerfMap.m`：固定 correct tooth / truth-centered half-tooth `fdRef` range 后，再比较 `CP-K / CP-U / IP-K / IP-U` 的 SNR 与 frame-count 性能。
-- 若目标是修 flow，应回到 `scanMfSubsetBankCoverage`、`replayMfPeriodicVsSubsetToothSelect`、`replayMfInToothTailCaseDiagnose` 与 conditional same-tooth refine，而不是继续扩大 `scanMfCpIpPerfMap` 的 repeat。
-- 若后续仍使用 full-flow CP/IP 图，必须先保证 CP 路径的 truth-tooth hit-rate 与 same-tooth tail 不再主导 RMSE；否则图会把 flow 失败误写成 phase-model 差异。
-
-## 后续建议
-
-1. 不继续扩大本 snapshot 的 repeat。当前 `numRepeat=3` 已足以暴露 CP full-flow 失败模式；扩大 repeat 只会更稳定地证明该负结果。
-2. 单开受控 in-tooth scan，而不是把 in-tooth 逻辑塞进本脚本。full-flow 与 controlled in-tooth 是两种不同口径，混在同一脚本会污染结果解释。
-3. 后续如果修改 `scanMfCpIpPerfMap.m`，优先做 warning compact summary 和结果口径标注，不改 estimator 默认路径、不吞掉主核 warning。
-4. 若 flow 稳定后重跑本 scan，应把当前 snapshot 保留为 superseded 负结果，新的 current snapshot 必须重新说明 truth-tooth hit-rate、angle RMSE 和 `fdRef` tail 是否已经恢复到可解释状态。
-
-## 历史 / superseded snapshots
-
-- 当前未保留更早的 superseded snapshot。前两次运行中的 frame subset 越界与 `msKnownDoaHalfWidth` 缺字段属于脚本合规清理过程中的工程错误，已修复后才产生本次 current snapshot。
+- 当前只绑定 `scanMfCpIpPerfMap_20260428-195242.mat` 作为代表性 full-flow stress snapshot。
+- 早期 frame subset 越界与 `msKnownDoaHalfWidth` 缺字段属于脚本合规清理过程中的工程错误，不作为结果结论保留。
+- 若未来 flow 稳定后重跑，应保留本 snapshot 作为 `superseded` negative baseline，并明确新结果如何消除了 wrong-tooth / same-tooth tail。

@@ -6,7 +6,9 @@ clear; close all; clc;
 
 %% Scan configuration
 scanName = "scanMfKnownUnknownInformationLoss";
-saveSnapshot = true;
+saveSnapshot = false;
+notifyTelegramEnable = true;
+checkpointEnable = true;
 contextSeed = 253;
 snrDbList = [-5; 0; 5; 10];
 frameCountList = 8:2:20;
@@ -19,23 +21,33 @@ frameCountList = reshape(double(frameCountList), [], 1);
 frameIntvlSecList = reshape(double(frameIntvlSecList), [], 1);
 
 scanConfig = struct();
-scanConfig.saveSnapshot = saveSnapshot;
+scanConfig.scanName = string(scanName);
+scanConfig.saveSnapshot = logical(saveSnapshot);
+scanConfig.notifyTelegramEnable = logical(notifyTelegramEnable);
+scanConfig.checkpointEnable = logical(checkpointEnable);
 scanConfig.contextSeed = contextSeed;
 scanConfig.snrDbList = snrDbList;
 scanConfig.frameCountList = frameCountList;
 scanConfig.frameIntvlSecList = frameIntvlSecList;
 scanConfig.primaryPlotSnrDb = primaryPlotSnrDb;
 scanConfig.primaryFrameIntvlSec = primaryFrameIntvlSec;
+scanConfig.numTask = numel(snrDbList) * numel(frameCountList) * numel(frameIntvlSecList);
 
+runTic = tic;
 runKey = string(datetime('now', 'Format', 'yyyyMMdd-HHmmss'));
-localPrintScanHeader(scanName, scanConfig);
+checkpointDir = "";
+scanJustRan = false;
+printMfScanHeader(char(scanName), scanConfig, checkpointDir);
 
 try
-  %% Run scan batch
+  %% Build context and scan tasks
+
   crbSummaryCell = cell(0, 1);
   lossRowList = repmat(localEmptyLossRow(), 0, 1);
   bundleCell = cell(0, 1);
   fimDiagRowList = repmat(localEmptyFimDiagRow(), 0, 1);
+
+  %% Run scan batch
 
   for iP = 1:numel(frameCountList)
     numFrame = frameCountList(iP);
@@ -109,16 +121,26 @@ try
   scanData.snrSensitivityDisplayTable = snrSensitivityDisplayTable;
   scanData.crbBundleSummaryCell = bundleCell;
   scanData.plotData = localBuildPlotData(primarySliceTable);
+  scanData.elapsedSec = toc(runTic);
+  scanData = finalizeMfScanResult(scanData, checkpointDir);
 
-  if saveSnapshot
+  if scanConfig.saveSnapshot
     saveOpt = struct('includeVars', {{'scanData'}}, ...
       'extraMeta', struct('scanName', char(scanName)), 'verbose', true);
     scanData.snapshotFile = saveExpSnapshot(char(scanName), saveOpt);
   else
     scanData.snapshotFile = "";
   end
+  scanJustRan = true;
 catch ME
   fprintf('Scan failed while building known/unknown information-loss data.\n');
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "FAILED", ...
+    'config', scanConfig, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
   rethrow(ME);
 end
 
@@ -128,19 +150,33 @@ if ~exist('scanData', 'var') || ~isstruct(scanData)
     'Scan data is missing. Run the scan batch sections or load a snapshot containing scanData.');
 end
 
-fprintf('\n========== Main U/K information-loss slice ==========%s', newline);
+printMfScanSection('Main U/K information-loss slice');
 fprintf('K = known fdRate, U = unknown fdRate nuisance. Loss percentages are 100*(U/K - 1).\n');
 fprintf('Main table uses one consistent time-origin class: %s.\n', char(scanData.mainTimeOriginClass));
 disp(scanData.primaryDisplayTable);
 if height(scanData.timeOriginSummaryTable) > 1
-  fprintf('\n========== Time-origin classes in primary SNR slice ==========\n');
+  printMfScanSection('Time-origin classes in primary SNR slice');
   fprintf('Central-reference rows are kept in scanData but excluded from the main P-trend table.\n');
   disp(scanData.timeOriginSummaryTable);
 end
-fprintf('\n========== FIM condition summary ==========%s', newline);
+printMfScanSection('FIM condition summary');
 fprintf('Expected full-FIM ill-conditioning warnings are suppressed in this scan; see the compact summary below.\n');
 disp(scanData.fimDiagSummaryTable);
 scanData.plotData = localPlotScan(scanData);
+
+if exist('scanJustRan', 'var') && scanJustRan
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "DONE", ...
+    'config', scanConfig, ...
+    'snapshotFile', scanData.snapshotFile, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', scanData.elapsedSec, ...
+    'metricLineList', localBuildTelegramMetricLines(scanData), ...
+    'commentLineList', [ ...
+      "Known/unknown-rate CRB information-loss scan completed."; ...
+      "Detailed tables remain in scanData and scan results docs."]));
+end
 
 %% Local helpers
 
@@ -561,6 +597,43 @@ frameCountList = unique([frameCountListIn(1); frameCountListIn(midIdx); frameCou
 end
 
 
+function metricLineList = localBuildTelegramMetricLines(scanData)
+%LOCALBUILDTELEGRAMMETRICLINES Build HTML-ready notification metrics for this scan.
+metricLineList = strings(0, 1);
+config = scanData.config;
+metricLineList(end + 1, 1) = "• CRB grid cases=<code>" + string(config.numTask) + "</code>";
+metricLineList(end + 1, 1) = "• primary SNR=<code>" + string(config.primaryPlotSnrDb) + " dB</code>, Tf=<code>" + ...
+  string(config.primaryFrameIntvlSec * 1e3) + " ms</code>";
+metricLineList(end + 1, 1) = "• main origin=<code>" + localHtmlEscape(scanData.mainTimeOriginClass) + "</code>";
+if isfield(scanData, 'primaryDisplayTable') && istable(scanData.primaryDisplayTable) && ...
+    height(scanData.primaryDisplayTable) > 0
+  multiMask = scanData.primaryDisplayTable.satMode == "multi";
+  if any(multiMask)
+    fdLoss = scanData.primaryDisplayTable.fdRefLossPct(multiMask);
+    metricLineList(end + 1, 1) = "• max multi fdRef rollback=<code>" + ...
+      string(sprintf('%.3g%%', localFiniteMax(fdLoss))) + "</code>";
+  end
+end
+end
+
+function textValue = localHtmlEscape(textValue)
+%LOCALHTMLESCAPE Escape text for Telegram HTML fragments.
+textValue = string(textValue);
+textValue = replace(textValue, "&", "&amp;");
+textValue = replace(textValue, "<", "&lt;");
+textValue = replace(textValue, ">", "&gt;");
+end
+
+function value = localFiniteMax(x)
+%LOCALFINITEMAX Return the maximum finite value from a numeric vector.
+x = x(isfinite(x));
+if isempty(x)
+  value = NaN;
+else
+  value = max(x);
+end
+end
+
 function txt = localFormatIntegerList(x)
 %LOCALFORMATINTEGERLIST Format integer vector values for compact diagnostic tables.
 if isempty(x)
@@ -655,19 +728,4 @@ if isempty(fim) || any(~isfinite(fim(:)))
 end
 fimSym = 0.5 * (fim + fim.');
 minEig = min(real(eig(fimSym)));
-end
-
-
-function localPrintScanHeader(scanName, scanConfig)
-%LOCALPRINTSCANHEADER Print compact scan settings before heavy work starts.
-fprintf('Running %s ...\n', char(scanName));
-fprintf('  context seed                    : %d\n', scanConfig.contextSeed);
-fprintf('  SNR list (dB)                   : %s\n', localFormatRow(scanConfig.snrDbList));
-fprintf('  frame count list                : %s\n', localFormatRow(scanConfig.frameCountList));
-fprintf('  frame interval list (ms)        : %s\n', localFormatRow(scanConfig.frameIntvlSecList * 1e3));
-fprintf('  primary plot SNR (dB)           : %.2f\n', scanConfig.primaryPlotSnrDb);
-fprintf('  primary frame interval (ms)     : %.6g\n', scanConfig.primaryFrameIntvlSec * 1e3);
-fprintf('  CRB grid cases                  : %d\n', ...
-  numel(scanConfig.snrDbList) * numel(scanConfig.frameCountList) * numel(scanConfig.frameIntvlSecList));
-fprintf('  save snapshot                   : %d\n', logical(scanConfig.saveSnapshot));
 end

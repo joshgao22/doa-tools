@@ -7,6 +7,9 @@ clear; close all; clc;
 
 %% Scan configuration
 scanName = "scanMfCpIpTying";
+saveSnapshot = true;
+notifyTelegramEnable = true;
+checkpointEnable = false;
 
 numUsr = 1;
 numFrame = 20;
@@ -50,7 +53,10 @@ optVerbose = false;
 weightSweepAlpha = [0; 0.25; 0.5; 1];
 
 scanConfig = struct();
-scanConfig.saveSnapshot = true;
+scanConfig.scanName = string(scanName);
+scanConfig.saveSnapshot = logical(saveSnapshot);
+scanConfig.notifyTelegramEnable = logical(notifyTelegramEnable);
+scanConfig.checkpointEnable = logical(checkpointEnable);
 scanConfig.runKnown = true;
 scanConfig.runUnknown = true;
 scanConfig.phaseList = ["continuous"; "relaxed"; "independent"];
@@ -59,16 +65,23 @@ scanConfig.centerListUnknown = ["truth"; "cpKnownSeed"; "finalEstimate"];
 scanConfig.numAliasSide = 2;
 scanConfig.numGrid = 801;
 scanConfig.scanHalfWidthHz = [];
+scanConfig.numFrame = numFrame;
+scanConfig.frameCountList = numFrame;
+scanConfig.frameIntvlSec = frameIntvlSec;
+scanConfig.snrDb = snrDb;
+scanConfig.numTask = scanConfig.numGrid * numel(scanConfig.phaseList) * ...
+  (scanConfig.runKnown * numel(scanConfig.centerListKnown) + ...
+   scanConfig.runUnknown * numel(scanConfig.centerListUnknown));
 
-fprintf('Running %s ...\n', scanName);
-fprintf('  frames                          : %d\n', numFrame);
-fprintf('  frame interval (s)              : %.9g\n', frameIntvlSec);
-fprintf('  SNR (dB)                        : %.2f\n', snrDb);
-fprintf('  phase modes                     : %s\n', strjoin(scanConfig.phaseList(:).', ', '));
-fprintf('  fdRef grid count                : %d\n', scanConfig.numGrid);
-fprintf('  save snapshot                   : %d\n', scanConfig.saveSnapshot);
+runTic = tic;
+runKey = string(datetime('now', 'Format', 'yyyyMMdd-HHmmss'));
+checkpointDir = "";
+scanJustRan = false;
+scanConfig.runKey = runKey;
+printMfScanHeader(char(scanName), scanConfig, checkpointDir);
 
-%% Select satellites and build scene
+try
+%% Build context and scan tasks
 [~, satAccessRef] = findVisibleSatFromTle(utcRef, tle, usrLla);
 [satIdx, satPickAux] = pickVisibleSatByElevation(satAccessRef, 2, 1, "available");
 refSatIdxGlobal = satIdx(1);
@@ -204,7 +217,7 @@ caseDynMsUnknown = runDynamicDoaDopplerCase("MS-MF-CP-U", "multi", ...
 
 centerRegistry = localBuildCenterRegistry(truth, bestStaticMsCase, caseDynMsKnown, caseDynMsUnknown);
 
-%% Run tying scans
+%% Run scan batch
 scanResult = struct();
 scanResult.truth = truth;
 scanResult.scanConfig = scanConfig;
@@ -231,8 +244,12 @@ end
 
 %% Data storage
 scanData = scanResult;
-scanData.scanName = scanName;
+scanData.scanName = string(scanName);
+scanData.runKey = string(runKey);
+scanData.config = scanConfig;
 scanData.utcRun = datetime('now', 'TimeZone', 'local');
+scanData.elapsedSec = toc(runTic);
+scanData = finalizeMfScanResult(scanData, checkpointDir);
 scanData.snapshotFile = "";
 if scanConfig.saveSnapshot
   saveOpt = struct('includeVars', {{'scanData'}}, ...
@@ -240,27 +257,37 @@ if scanConfig.saveSnapshot
     'verbose', true);
   scanData.snapshotFile = string(saveExpSnapshot(char(scanName), saveOpt));
 end
+scanJustRan = true;
+catch ME
+  fprintf('Scan failed while building CP/IP tying data.\n');
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "FAILED", ...
+    'config', scanConfig, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
+  rethrow(ME);
+end
 
 %% Summary output and plotting
 scanResult = scanData;
-scanConfig = scanData.scanConfig;
+scanConfig = scanData.config;
 
 if isfield(scanResult, 'cpKnown')
-  disp('========== CP-K phase-tying summary ==========');
+  printMfScanSection('CP-K phase-tying summary');
   localDisplayPhaseSummary('CP-K', scanResult.cpKnown);
 end
 if isfield(scanResult, 'cpUnknown')
-  disp('========== CP-U phase-tying summary ==========');
+  printMfScanSection('CP-U phase-tying summary');
   localDisplayPhaseSummary('CP-U', scanResult.cpUnknown);
 end
 
 if isfield(scanResult, 'cpKnown')
-  disp('========== CP-K alias-tooth table ==========');
-  disp(scanResult.cpKnown.toothTable);
+  printMfScanSection('CP-K alias-tooth table', scanResult.cpKnown.toothTable);
 end
 if isfield(scanResult, 'cpUnknown')
-  disp('========== CP-U alias-tooth table ==========');
-  disp(scanResult.cpUnknown.toothTable);
+  printMfScanSection('CP-U alias-tooth table', scanResult.cpUnknown.toothTable);
 end
 
 if isfield(scanResult, 'cpKnown')
@@ -276,7 +303,21 @@ if isfield(scanResult, 'cpUnknown')
   localPlotPhaseFoldedFigure(scanResult.cpUnknown, 'CP-U');
 end
 
+if exist('scanJustRan', 'var') && scanJustRan
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "DONE", ...
+    'config', scanConfig, ...
+    'snapshotFile', scanData.snapshotFile, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', scanData.elapsedSec, ...
+    'metricLineList', localBuildTelegramMetricLines(scanData), ...
+    'commentLineList', [ ...
+      "CP/IP phase-tying scan completed."; ...
+      "Detailed tables remain in scanData and scan results docs."]));
+end
 
+%% Local helpers
 
 function modeResult = localRunPhaseCompareSet(viewMs, pilotWave, sampleRate, carrierFreq, ...
     fdRange, fdRateRange, centerRegistry, scanConfig, truth, fdRateMode)
@@ -669,6 +710,39 @@ pointInfo.lon = doaParam(2);
 pointInfo.latlon = doaParam(1:2);
 pointInfo.fdRef = fdRef;
 pointInfo.fdRate = fdRate;
+end
+
+function metricLineList = localBuildTelegramMetricLines(scanData)
+%LOCALBUILDTELEGRAMMETRICLINES Build compact scan-specific notification lines.
+
+metricLineList = strings(0, 1);
+config = scanData.config;
+metricLineList(end + 1, 1) = sprintf('• Phase modes: <code>%s</code>', ...
+  strjoin(string(config.phaseList(:)).', ', '));
+metricLineList(end + 1, 1) = sprintf('• fdRef grid: <code>%d</code>', config.numGrid);
+if isfield(scanData, 'cpKnown') && isfield(scanData.cpKnown, 'summaryTable')
+  row = localFindMetricRow(scanData.cpKnown.summaryTable, "continuous", "truth");
+  if ~isempty(row)
+    metricLineList(end + 1, 1) = sprintf('• CP-K truth min tooth: <code>%+.0f</code>', row.minAliasIndex);
+  end
+end
+if isfield(scanData, 'cpUnknown') && isfield(scanData.cpUnknown, 'summaryTable')
+  row = localFindMetricRow(scanData.cpUnknown.summaryTable, "continuous", "cpKnownSeed");
+  if ~isempty(row)
+    metricLineList(end + 1, 1) = sprintf('• CP-U cpKnownSeed min tooth: <code>%+.0f</code>', row.minAliasIndex);
+  end
+end
+end
+
+function row = localFindMetricRow(summaryTable, phaseMode, centerName)
+%LOCALFINDMETRICROW Return one summary row for notification metrics.
+
+idx = summaryTable.phaseMode == string(phaseMode) & summaryTable.centerName == string(centerName);
+if any(idx)
+  row = summaryTable(find(idx, 1, 'first'), :);
+else
+  row = [];
+end
 end
 
 function localDisplayPhaseSummary(modeLabel, modeResult)

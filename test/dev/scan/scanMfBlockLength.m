@@ -9,7 +9,14 @@
 clear; close all; clc;
 
 %% Scan configuration
+
 scanName = "scanMfBlockLength";
+saveSnapshot = true;
+notifyTelegramEnable = true;
+checkpointEnable = true;
+checkpointResume = true;
+checkpointCleanupOnSuccess = true;
+contextSeed = 253;
 
 numUsr = 1;
 numFrame = 10;
@@ -24,7 +31,7 @@ standardBlockLen = 4 * baseBlockLen;
 numSym = round(standardBlockLen / osf);
 carrierFreq = 11.7e9;
 wavelength = 299792458 / carrierFreq;
-rng(253);
+rng(contextSeed);
 
 elemSpace = wavelength / 2;
 numElem = [4 4];
@@ -55,15 +62,18 @@ optVerbose = false;
 weightSweepAlpha = [0; 0.25; 0.5; 1];
 
 doBaseHalfWidth = [0.01; 0.01];
-
 doaLocalHalfWidthKnown = [0.003; 0.003];
 doaLocalHalfWidthUnknown = [0.002; 0.002];
 
 scanConfig = struct();
-scanConfig.saveSnapshot = false;
-scanConfig.checkpointEnable = true;
-scanConfig.checkpointResume = true;
-scanConfig.checkpointCleanupOnSuccess = true;
+scanConfig.scanName = string(scanName);
+scanConfig.contextSeed = contextSeed;
+scanConfig.snrDb = snrDb;
+scanConfig.saveSnapshot = logical(saveSnapshot);
+scanConfig.checkpointEnable = logical(checkpointEnable);
+scanConfig.checkpointResume = logical(checkpointResume);
+scanConfig.checkpointCleanupOnSuccess = logical(checkpointCleanupOnSuccess);
+scanConfig.notifyTelegramEnable = logical(notifyTelegramEnable);
 scanConfig.runKnown = true;
 scanConfig.runUnknown = true;
 scanConfig.centerListKnown = ["truth"; "staticSeed"; "finalEstimate"];
@@ -74,209 +84,232 @@ scanConfig.numAliasSide = 2;
 scanConfig.numGrid = 801;
 scanConfig.scanHalfWidthHz = [];
 
+runTic = tic;
 runKey = string(datetime('now', 'Format', 'yyyyMMdd-HHmmss'));
-%% Build context and flow options
-[~, satAccessRef] = findVisibleSatFromTle(utcRef, tle, usrLla);
-[satIdx, satPickAux] = pickVisibleSatByElevation(satAccessRef, 2, 1, "available");
-refSatIdxGlobal = satIdx(1);
-
-sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, [], arrUpa, ...
-  15, 55, "satellite", refSatIdxGlobal, refFrameIdx);
-sceneRef = sceneSeq.sceneCell{sceneSeq.refFrameIdx};
-[refState, refSatIdxLocal] = resolveReferenceSatState(sceneRef, sceneRef.satPosEci, sceneRef.satVelEci);
-if sceneSeq.numSat ~= 2
-  error('doaDopplerDynBlockLengthScan:InvalidNumSat', ...
-    'This script expects exactly two selected satellites.');
-end
-otherSatIdxLocal = setdiff(1:sceneSeq.numSat, refSatIdxLocal);
-otherSatIdxGlobal = satIdx(otherSatIdxLocal);
-
-linkParamCell = cell(1, sceneSeq.numFrame);
-for iFrame = 1:sceneSeq.numFrame
-  linkParamCell{iFrame} = getLinkParam(sceneSeq.sceneCell{iFrame}, wavelength);
-end
-
-truth = buildDynTruthFromLinkParam(linkParamCell, sceneSeq.timeOffsetSec, sampleRate, 1);
-truth.utcRef = sceneSeq.utcRef;
-truth.latlonTrueDeg = usrLla(1:2, 1);
-truth.refSatIdxGlobal = refSatIdxGlobal;
-truth.refSatIdxLocal = refSatIdxLocal;
-truth.selectedSatIdxGlobal = satIdx(:).';
-truth.usrElevationDeg = reshape(sceneRef.accessInfo.usrElevationDeg(:, 1), 1, []);
-truth.refWeight = sceneRef.ref.weight(:);
-truth.refStateSource = string(refState.source);
-truth.pickAux = satPickAux;
-truth.fdRefTrueHz = truth.fdRefSeries(sceneSeq.refFrameIdx);
-truth.fdRateTrueHzPerSec = truth.fdRateFit;
-truth.fdSatTrueHz = reshape(truth.fdSatSeries(:, sceneSeq.refFrameIdx), [], 1);
-truth.deltaFdTrueHz = reshape(truth.deltaFdSeries(:, sceneSeq.refFrameIdx), [], 1);
-
-fdRange = expandRangeToTruth(fdRange, [truth.fdRefFit; truth.fdSatTrueHz(:)], 0.1, 2e4);
-fdRateTruthCand = [truth.fdRateFit; truth.fdRateFit + reshape(localGetFieldOrDefault(truth, 'deltaFdRate', []), [], 1)];
-fdRateRange = expandRangeToTruth(fdRateRange, fdRateTruthCand, 0.1, 5e2);
-
-%% Generate pilot waveform and snapshots
-[pilotSym, ~] = genPilotSymbol(numUsr, numSym, 'pn', pwrSource);
-pulseOpt = struct();
-pulseOpt.rolloff = 0.25;
-pulseOpt.span = 8;
-[pilotWaveFull, waveInfo] = genPilotWaveform(pilotSym, symbolRate, osf, 'rrc', pulseOpt);
-
-numPilotSampleFull = localGetSignalLength(pilotWaveFull);
-if numPilotSampleFull ~= standardBlockLen
-  error('doaDopplerDynBlockLengthScan:UnexpectedPilotLength', ...
-    ['Generated pilot length is %d samples, but this script expected the generated max ' ...
-     'pilot block length to be %d samples. Keep genPilotSymbol / genPilotWaveform ' ...
-     'consistent with the long-block scan configuration before running the scan.'], ...
-    numPilotSampleFull, standardBlockLen);
-end
-
-blockLenListReq = reshape(scanConfig.blockLenList, [], 1);
-blockLenList = blockLenListReq(blockLenListReq > 0 & blockLenListReq <= standardBlockLen);
-blockLenList = unique(round(blockLenList), 'stable');
-if isempty(blockLenList)
-  error('doaDopplerDynBlockLengthScan:EmptyBlockLenList', ...
-    'Requested blockLenList is empty after clipping to the standard block length.');
-end
-scanConfig.blockLenList = blockLenList;
-localPrintScanHeader(scanName, scanConfig, numFrame, frameIntvlSec, snrDb, ...
-  waveInfo.sampleRate, symbolRate, baseBlockLen, standardBlockLen, numSym);
-
-
-snapOpt = struct();
-snapOpt.spatial.model = 'dynamic';
-snapOpt.spatial.refFrameIdx = sceneSeq.refFrameIdx;
-snapOpt.phase.timeModel = 'global';
-snapOpt.phase.frameModel = 'shared';
-snapOpt.phase.sharedPhase = 2 * pi * rand(sceneSeq.numSat, sceneSeq.numUser);
-snapOpt.wave.delayModel = 'phaseOnly';
-snapOpt.wave.timeRef = 'zero';
-snapOpt.wave.carrierPhaseModel = 'none';
-snapOpt.precomp.linkParamCell = linkParamCell;
-
-pathGainCell = repmat({ones(sceneSeq.numSat, sceneSeq.numUser)}, 1, sceneSeq.numFrame);
-[rxSigCellFull, ~, ~, ~, ~] = genMultiFrameSnapshots( ...
-  sceneSeq, pilotWaveFull, carrierFreq, waveInfo.sampleRate, ...
-  pwrNoise, pathGainCell, snapOpt);
-
-%% Run scan batch
-scanResult = struct();
-scanResult.truth = truth;
-scanResult.scanConfig = scanConfig;
-scanResult.frameInfo = struct( ...
-  'frameIntvlSec', frameIntvlSec, ...
-  'timeOffsetSec', sceneSeq.timeOffsetSec(:), ...
-  'numFrame', sceneSeq.numFrame, ...
-  'baseBlockLen', baseBlockLen, ...
-  'standardBlockLen', standardBlockLen, ...
-  'numPilotSampleFull', numPilotSampleFull, ...
-  'refFrameIdx', sceneSeq.refFrameIdx, ...
-  'refSatIdxLocal', refSatIdxLocal, ...
-  'refSatIdxGlobal', refSatIdxGlobal, ...
-  'otherSatIdxGlobal', otherSatIdxGlobal, ...
-  'refStateSource', string(refState.source));
-scanResult.blockLenList = blockLenList;
-
-blockTaskGrid = localBuildBlockTaskGrid(blockLenList);
-blockSharedData = localBuildBlockSharedData(sceneSeq, sceneRef, refSatIdxLocal, ...
-  otherSatIdxLocal, otherSatIdxGlobal, pilotWaveFull, rxSigCellFull, gridSize, ...
-  searchRange, E, wavelength, carrierFreq, waveInfo.sampleRate, fdRange, ...
-  fdRateRange, truth, optVerbose, weightSweepAlpha, doBaseHalfWidth, ...
-  doaLocalHalfWidthKnown, doaLocalHalfWidthUnknown, scanConfig, baseBlockLen, ...
-  numPilotSampleFull);
-
 checkpointDir = "";
 checkpointRunState = struct();
+checkpointCleanupReport = struct([]);
+scanData = struct();
+
 try
+  %% Build context and scan tasks
+
+  [~, satAccessRef] = findVisibleSatFromTle(utcRef, tle, usrLla);
+  [satIdx, satPickAux] = pickVisibleSatByElevation(satAccessRef, 2, 1, "available");
+  refSatIdxGlobal = satIdx(1);
+
+  sceneSeq = genMultiFrameScene(utcVec, tle, usrLla, satIdx, [], arrUpa, ...
+    15, 55, "satellite", refSatIdxGlobal, refFrameIdx);
+  sceneRef = sceneSeq.sceneCell{sceneSeq.refFrameIdx};
+  [refState, refSatIdxLocal] = resolveReferenceSatState(sceneRef, sceneRef.satPosEci, sceneRef.satVelEci);
+  if sceneSeq.numSat ~= 2
+    error('doaDopplerDynBlockLengthScan:InvalidNumSat', ...
+      'This script expects exactly two selected satellites.');
+  end
+  otherSatIdxLocal = setdiff(1:sceneSeq.numSat, refSatIdxLocal);
+  otherSatIdxGlobal = satIdx(otherSatIdxLocal);
+
+  linkParamCell = cell(1, sceneSeq.numFrame);
+  for iFrame = 1:sceneSeq.numFrame
+    linkParamCell{iFrame} = getLinkParam(sceneSeq.sceneCell{iFrame}, wavelength);
+  end
+
+  truth = buildDynTruthFromLinkParam(linkParamCell, sceneSeq.timeOffsetSec, sampleRate, 1);
+  truth.utcRef = sceneSeq.utcRef;
+  truth.latlonTrueDeg = usrLla(1:2, 1);
+  truth.refSatIdxGlobal = refSatIdxGlobal;
+  truth.refSatIdxLocal = refSatIdxLocal;
+  truth.selectedSatIdxGlobal = satIdx(:).';
+  truth.usrElevationDeg = reshape(sceneRef.accessInfo.usrElevationDeg(:, 1), 1, []);
+  truth.refWeight = sceneRef.ref.weight(:);
+  truth.refStateSource = string(refState.source);
+  truth.pickAux = satPickAux;
+  truth.fdRefTrueHz = truth.fdRefSeries(sceneSeq.refFrameIdx);
+  truth.fdRateTrueHzPerSec = truth.fdRateFit;
+  truth.fdSatTrueHz = reshape(truth.fdSatSeries(:, sceneSeq.refFrameIdx), [], 1);
+  truth.deltaFdTrueHz = reshape(truth.deltaFdSeries(:, sceneSeq.refFrameIdx), [], 1);
+
+  fdRange = expandRangeToTruth(fdRange, [truth.fdRefFit; truth.fdSatTrueHz(:)], 0.1, 2e4);
+  fdRateTruthCand = [truth.fdRateFit; truth.fdRateFit + reshape(localGetFieldOrDefault(truth, 'deltaFdRate', []), [], 1)];
+  fdRateRange = expandRangeToTruth(fdRateRange, fdRateTruthCand, 0.1, 5e2);
+
+  blockLenListReq = reshape(scanConfig.blockLenList, [], 1);
+  blockLenList = blockLenListReq(blockLenListReq > 0 & blockLenListReq <= standardBlockLen);
+  blockLenList = unique(round(blockLenList), 'stable');
+  if isempty(blockLenList)
+    error('doaDopplerDynBlockLengthScan:EmptyBlockLenList', ...
+      'Requested blockLenList is empty after clipping to the standard block length.');
+  end
+  scanConfig.blockLenList = blockLenList;
+  scanConfig.numTask = numel(blockLenList);
+  blockTaskGrid = localBuildBlockTaskGrid(blockLenList);
   if scanConfig.checkpointEnable
     checkpointOpt = localBuildCheckpointOpt(scanName, scanConfig, blockLenList, snrDb, ...
-      waveInfo.sampleRate, symbolRate, carrierFreq);
+      sampleRate, symbolRate, carrierFreq);
     checkpointDir = string(fullfile(checkpointOpt.outputRoot, checkpointOpt.runName, checkpointOpt.runKey));
+  else
+    checkpointOpt = struct();
+  end
+  printMfScanHeader(char(scanName), scanConfig, checkpointDir);
+  localPrintBlockScanDetails(scanConfig, numFrame, frameIntvlSec, snrDb, ...
+    sampleRate, symbolRate, baseBlockLen, standardBlockLen, numSym);
+
+  [pilotSym, ~] = genPilotSymbol(numUsr, numSym, 'pn', pwrSource);
+  pulseOpt = struct();
+  pulseOpt.rolloff = 0.25;
+  pulseOpt.span = 8;
+  [pilotWaveFull, waveInfo] = genPilotWaveform(pilotSym, symbolRate, osf, 'rrc', pulseOpt);
+
+  numPilotSampleFull = localGetSignalLength(pilotWaveFull);
+  if numPilotSampleFull ~= standardBlockLen
+    error('doaDopplerDynBlockLengthScan:UnexpectedPilotLength', ...
+      ['Generated pilot length is %d samples, but this script expected the generated max ' ...
+       'pilot block length to be %d samples. Keep genPilotSymbol / genPilotWaveform ' ...
+       'consistent with the long-block scan configuration before running the scan.'], ...
+      numPilotSampleFull, standardBlockLen);
+  end
+
+  snapOpt = struct();
+  snapOpt.spatial.model = 'dynamic';
+  snapOpt.spatial.refFrameIdx = sceneSeq.refFrameIdx;
+  snapOpt.phase.timeModel = 'global';
+  snapOpt.phase.frameModel = 'shared';
+  snapOpt.phase.sharedPhase = 2 * pi * rand(sceneSeq.numSat, sceneSeq.numUser);
+  snapOpt.wave.delayModel = 'phaseOnly';
+  snapOpt.wave.timeRef = 'zero';
+  snapOpt.wave.carrierPhaseModel = 'none';
+  snapOpt.precomp.linkParamCell = linkParamCell;
+
+  pathGainCell = repmat({ones(sceneSeq.numSat, sceneSeq.numUser)}, 1, sceneSeq.numFrame);
+  [rxSigCellFull, ~, ~, ~, ~] = genMultiFrameSnapshots( ...
+    sceneSeq, pilotWaveFull, carrierFreq, waveInfo.sampleRate, ...
+    pwrNoise, pathGainCell, snapOpt);
+
+  scanResult = struct();
+  scanResult.truth = truth;
+  scanResult.scanConfig = scanConfig;
+  scanResult.frameInfo = struct( ...
+    'frameIntvlSec', frameIntvlSec, ...
+    'timeOffsetSec', sceneSeq.timeOffsetSec(:), ...
+    'numFrame', sceneSeq.numFrame, ...
+    'baseBlockLen', baseBlockLen, ...
+    'standardBlockLen', standardBlockLen, ...
+    'numPilotSampleFull', numPilotSampleFull, ...
+    'refFrameIdx', sceneSeq.refFrameIdx, ...
+    'refSatIdxLocal', refSatIdxLocal, ...
+    'refSatIdxGlobal', refSatIdxGlobal, ...
+    'otherSatIdxGlobal', otherSatIdxGlobal, ...
+    'refStateSource', string(refState.source));
+  scanResult.blockLenList = blockLenList;
+
+  blockSharedData = localBuildBlockSharedData(sceneSeq, sceneRef, refSatIdxLocal, ...
+    otherSatIdxLocal, otherSatIdxGlobal, pilotWaveFull, rxSigCellFull, gridSize, ...
+    searchRange, E, wavelength, carrierFreq, waveInfo.sampleRate, fdRange, ...
+    fdRateRange, truth, optVerbose, weightSweepAlpha, doBaseHalfWidth, ...
+    doaLocalHalfWidthKnown, doaLocalHalfWidthUnknown, scanConfig, baseBlockLen, ...
+    numPilotSampleFull);
+
+  %% Run scan batch
+
+  if scanConfig.checkpointEnable
     checkpointRunState = runPerfTaskGridWithCheckpoint(blockTaskGrid, blockSharedData, ...
       @localRunBlockCheckpointTask, checkpointOpt);
     blockResult = localCollectBlockTaskResults(checkpointRunState.resultCell, blockLenList);
   else
     blockResult = localRunBlockTaskList(blockTaskGrid, blockSharedData);
   end
-catch ME
-  localPrintCheckpointFailureHint(checkpointDir);
-  rethrow(ME);
-end
 
-scanResult.blockResult = blockResult;
-scanResult.summaryKnown = table();
-scanResult.summaryUnknown = table();
-scanResult.toothKnown = table();
-scanResult.toothUnknown = table();
-if scanConfig.runKnown
-  scanResult.summaryKnown = localBuildBlockSummaryTable(blockResult, 'known');
-  scanResult.toothKnown = localBuildMergedToothTable(blockResult, 'known');
-end
-if scanConfig.runUnknown
-  scanResult.summaryUnknown = localBuildBlockSummaryTable(blockResult, 'unknown');
-  scanResult.toothUnknown = localBuildMergedToothTable(blockResult, 'unknown');
-end
-scanResult.aggregateTable = localBuildAggregateTable(scanResult.summaryKnown, scanResult.summaryUnknown);
-checkpointCleanupReport = struct([]);
-if scanConfig.checkpointEnable
-  if localGetFieldOrDefault(checkpointRunState, 'isComplete', false) && scanConfig.checkpointCleanupOnSuccess
+  scanResult.blockResult = blockResult;
+  scanResult.summaryKnown = table();
+  scanResult.summaryUnknown = table();
+  scanResult.toothKnown = table();
+  scanResult.toothUnknown = table();
+  if scanConfig.runKnown
+    scanResult.summaryKnown = localBuildBlockSummaryTable(blockResult, 'known');
+    scanResult.toothKnown = localBuildMergedToothTable(blockResult, 'known');
+  end
+  if scanConfig.runUnknown
+    scanResult.summaryUnknown = localBuildBlockSummaryTable(blockResult, 'unknown');
+    scanResult.toothUnknown = localBuildMergedToothTable(blockResult, 'unknown');
+  end
+  scanResult.aggregateTable = localBuildAggregateTable(scanResult.summaryKnown, scanResult.summaryUnknown);
+  if scanConfig.checkpointEnable && localGetFieldOrDefault(checkpointRunState, 'isComplete', false) && ...
+      scanConfig.checkpointCleanupOnSuccess
     checkpointCleanupReport = cleanupPerfTaskGridCheckpoint(checkpointRunState, ...
       struct('verbose', false, 'logEnable', true, 'removeEmptyParent', true));
   end
-end
-scanResult.checkpointSummaryTable = localBuildCheckpointSummaryTable(checkpointRunState, ...
-  checkpointDir, checkpointCleanupReport);
-scanResult.checkpointCleanupReport = checkpointCleanupReport;
+  scanResult.checkpointSummaryTable = localBuildCheckpointSummaryTable(checkpointRunState, ...
+    checkpointDir, checkpointCleanupReport);
+  scanResult.checkpointCleanupReport = checkpointCleanupReport;
 
-%% Data storage
-scanData = scanResult;
-scanData.scanName = scanName;
-scanData.runKey = runKey;
-scanData.utcRun = datetime('now', 'TimeZone', 'local');
-scanData.snapshotFile = "";
-if scanConfig.saveSnapshot
-  saveOpt = struct('includeVars', {{'scanData'}}, ...
-    'extraMeta', struct('scanName', char(scanName)), ...
-    'verbose', true);
-  scanData.snapshotFile = string(saveExpSnapshot(char(scanName), saveOpt));
+  %% Data storage
+
+  scanData = scanResult;
+  scanData.scanName = string(scanName);
+  scanData.runKey = string(runKey);
+  scanData.utcRun = datetime('now', 'TimeZone', 'local');
+  scanData.config = scanConfig;
+  scanData.elapsedSec = toc(runTic);
+  scanData.snapshotFile = "";
+  if scanConfig.saveSnapshot
+    saveOpt = struct('includeVars', {{'scanData'}}, ...
+      'extraMeta', struct('scanName', char(scanName)), ...
+      'verbose', true);
+    scanData.snapshotFile = string(saveExpSnapshot(char(scanName), saveOpt));
+  end
+
+  %% Summary output and plotting
+
+  scanConfig = scanData.scanConfig;
+  blockResult = scanData.blockResult;
+
+  printMfScanSection('Block-length aggregate summary', scanData.aggregateTable);
+  if height(scanData.checkpointSummaryTable) > 0
+    printMfScanSection('Checkpoint summary', scanData.checkpointSummaryTable);
+  end
+  if scanConfig.runKnown
+    printMfScanSection('CP-K block-length alias-tooth table', scanData.toothKnown);
+  end
+  if scanConfig.runUnknown
+    printMfScanSection('CP-U block-length alias-tooth table', scanData.toothUnknown);
+  end
+
+  if scanConfig.runKnown
+    localPlotBlockDeltaFigure(blockResult, 'known', 'CP-K');
+    localPlotBlockFoldedFigure(blockResult, 'known', 'CP-K');
+    localPlotBlockPeakFigure(blockResult, 'known', 'CP-K');
+  end
+  if scanConfig.runUnknown
+    localPlotBlockDeltaFigure(blockResult, 'unknown', 'CP-U');
+    localPlotBlockFoldedFigure(blockResult, 'unknown', 'CP-U');
+    localPlotBlockPeakFigure(blockResult, 'unknown', 'CP-U');
+  end
+
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "DONE", ...
+    'config', scanData.config, ...
+    'snapshotFile', scanData.snapshotFile, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', scanData.elapsedSec, ...
+    'metricLineList', localBuildTelegramMetricLines(scanData), ...
+    'commentLineList', [ ...
+      "Block-length comb scan completed."; ...
+      "Use aggregate and tooth tables for long-block sensitivity interpretation."]));
+
+catch ME
+  localPrintCheckpointFailureHint(checkpointDir);
+  notifyMfScanStatus(struct( ...
+    'scanName', scanName, ...
+    'statusText', "FAILED", ...
+    'config', scanConfig, ...
+    'checkpointDir', checkpointDir, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
+  rethrow(ME);
 end
 
-%% Summary output and plotting
-if ~exist('scanData', 'var') || ~isstruct(scanData)
-  error('scanMfBlockLength:MissingScanData', ...
-    'Run the scan batch sections or load a snapshot containing scanData.');
-end
-
-scanConfig = scanData.scanConfig;
-blockResult = scanData.blockResult;
-
-fprintf('\n========== Block-length aggregate summary ==========%s', newline);
-disp(scanData.aggregateTable);
-if isfield(scanData, 'checkpointSummaryTable') && istable(scanData.checkpointSummaryTable) && ...
-    height(scanData.checkpointSummaryTable) > 0
-  fprintf('\n========== Checkpoint summary ==========%s', newline);
-  disp(scanData.checkpointSummaryTable);
-end
-if scanConfig.runKnown
-  fprintf('\n========== CP-K block-length alias-tooth table ==========%s', newline);
-  disp(scanData.toothKnown);
-end
-if scanConfig.runUnknown
-  fprintf('\n========== CP-U block-length alias-tooth table ==========%s', newline);
-  disp(scanData.toothUnknown);
-end
-
-if scanConfig.runKnown
-  localPlotBlockDeltaFigure(blockResult, 'known', 'CP-K');
-  localPlotBlockFoldedFigure(blockResult, 'known', 'CP-K');
-  localPlotBlockPeakFigure(blockResult, 'known', 'CP-K');
-end
-if scanConfig.runUnknown
-  localPlotBlockDeltaFigure(blockResult, 'unknown', 'CP-U');
-  localPlotBlockFoldedFigure(blockResult, 'unknown', 'CP-U');
-  localPlotBlockPeakFigure(blockResult, 'unknown', 'CP-U');
-end
-
+%% Local helpers
 
 function taskGrid = localBuildBlockTaskGrid(blockLenList)
 %LOCALBUILDBLOCKTASKGRID Build one independent checkpoint task per block length.
@@ -542,26 +575,58 @@ scanDir = fileparts(mfilename('fullpath'));
 repoRoot = fileparts(fileparts(fileparts(scanDir)));
 end
 
-function localPrintScanHeader(scanName, scanConfig, numFrame, frameIntvlSec, snrDb, ...
+function localPrintBlockScanDetails(scanConfig, numFrame, frameIntvlSec, snrDb, ...
     sampleRate, symbolRate, baseBlockLen, standardBlockLen, numSym)
-%LOCALPRINTSCANHEADER Print compact scan configuration.
+%LOCALPRINTBLOCKSCANDETAILS Print block-length-specific configuration fields.
 
-fprintf('Running %s ...\n', char(scanName));
 fprintf('  frame count                     : %d\n', numFrame);
 fprintf('  frame interval (ms)             : %.6f\n', frameIntvlSec * 1e3);
 fprintf('  sample rate (MHz)               : %.3f\n', sampleRate / 1e6);
 fprintf('  symbol rate (MHz)               : %.3f\n', symbolRate / 1e6);
-fprintf('  baseline block length             : %d samples\n', baseBlockLen);
-fprintf('  generated max block length         : %d samples (%.1fx baseline)\n', ...
+fprintf('  baseline block length           : %d samples\n', baseBlockLen);
+fprintf('  generated max block length      : %d samples (%.1fx baseline)\n', ...
   standardBlockLen, standardBlockLen / baseBlockLen);
-fprintf('  generated pilot symbols            : %d\n', numSym);
+fprintf('  generated pilot symbols         : %d\n', numSym);
 fprintf('  snr (dB)                        : %.2f\n', snrDb);
 fprintf('  block lengths (samples)         : %s\n', char(localFormatIntegerRow(scanConfig.blockLenList)));
 fprintf('  run known / unknown             : %d / %d\n', scanConfig.runKnown, scanConfig.runUnknown);
 fprintf('  fdRef scan grid count           : %d\n', scanConfig.numGrid);
 fprintf('  alias side count                : %d\n', scanConfig.numAliasSide);
-fprintf('  checkpoint enable               : %d (resume=%d, cleanupOnSuccess=%d)\n', ...
-  scanConfig.checkpointEnable, scanConfig.checkpointResume, scanConfig.checkpointCleanupOnSuccess);
+end
+
+function lineList = localBuildTelegramMetricLines(scanData)
+%LOCALBUILDTELEGRAMMETRICLINES Build compact HTML metric lines for notifications.
+
+config = scanData.config;
+lineList = strings(0, 1);
+lineList(end + 1, 1) = "• Block lengths: <code>" + string(localFormatIntegerRow(config.blockLenList)) + "</code>";
+lineList(end + 1, 1) = "• Grid samples: <code>" + string(config.numGrid) + "</code>";
+if isfield(scanData, 'aggregateTable') && istable(scanData.aggregateTable)
+  lineList(end + 1, 1) = "• Aggregate rows: <code>" + string(height(scanData.aggregateTable)) + "</code>";
+end
+if isfield(scanData, 'toothKnown') && istable(scanData.toothKnown) && height(scanData.toothKnown) > 0
+  rowKnown = scanData.toothKnown(end, :);
+  lineList(end + 1, 1) = "• CP-K last-block alias gap: <code>" + ...
+    string(sprintf('%.4g', localGetTableScalar(rowKnown, 'aliasGap1'))) + "</code>";
+end
+if isfield(scanData, 'toothUnknown') && istable(scanData.toothUnknown) && height(scanData.toothUnknown) > 0
+  rowUnknown = scanData.toothUnknown(end, :);
+  lineList(end + 1, 1) = "• CP-U last-block alias gap: <code>" + ...
+    string(sprintf('%.4g', localGetTableScalar(rowUnknown, 'aliasGap1'))) + "</code>";
+end
+end
+
+function value = localGetTableScalar(tableRow, fieldName)
+%LOCALGETTABLESCALAR Read a scalar table value when present.
+
+value = NaN;
+if ~istable(tableRow) || ~ismember(fieldName, tableRow.Properties.VariableNames) || height(tableRow) < 1
+  return;
+end
+cand = tableRow.(fieldName);
+if isnumeric(cand) && ~isempty(cand)
+  value = cand(1);
+end
 end
 
 function blockInfo = localBuildBlockInfo(blockLen, baseBlockLen, fullBlockLen, sampleRate, truth)

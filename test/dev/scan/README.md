@@ -2,6 +2,22 @@
 
 `test/dev/scan/` 中的文件用于较重的参数、schedule、曲线或曲面扫描。scan 不是 regression，也不是 replay：它通常扫描一个维度或二维网格，用于解释机制和生成可复查的 `scanData`。
 
+## 模板入口
+
+新增 scan 时，优先复制：
+
+```text
+test/dev/scan/template/scanTemplate.m
+```
+
+到：
+
+```text
+test/dev/scan/scanYourTopic.m
+```
+
+然后只修改 `Scan configuration`、task grid、summary 和 plot。模板只统一 section、checkpoint / snapshot / Telegram 壳和轻量 `scanData` 组织方式；不要把具体 strategy、schedule、candidate selection、resolved/outlier 分类或 metric parser 提前公共化。短 scan 保持 `checkpointEnable=false`，重 scan 才启用 `tmp/<scanName>/<stableRunKey>/` checkpoint。
+
 ## 统一脚本格式
 
 每个 scan 文件头部采用固定形式：
@@ -20,11 +36,22 @@ clear; close all; clc;
 ## 固定 section 顺序
 
 1. `Scan configuration`：显式写扫描参数、seed、grid、是否保存 snapshot。
-2. `Build context and flow options`：构造场景、truth、fixture、model option 或 flow option。
+2. `Build context and scan tasks`：构造场景、truth、fixture、model / flow option 和显式 task grid。
 3. `Run scan batch`：执行扫描，可在外层使用 `parfor`，不可用时自动退回串行。
 4. `Data storage`：构造轻量 `scanData`，用 `saveExpSnapshot` 只保存 `scanData`，并清理 tmp。
 5. `Summary output and plotting`：只依赖 `scanData` 输出 summary 并画图。恢复 snapshot 后可直接运行这一节。
 6. `Local helpers`：仅放本脚本私有 glue、summary 和绘图 helper。
+
+
+## 公共工程 helper
+
+scan 顶层工程外壳可使用 `test/common/scan/` 的薄 helper：
+
+- `printMfScanHeader` / `printMfScanSection` 统一头部与 section 打印；
+- `notifyMfScanStatus` 统一 best-effort HTML Telegram 状态壳；
+- `finalizeMfScanResult` 在成功构造轻量 `scanData` 后清理普通 tmp 目录，短 scan 可传空 run dir。
+
+这些 helper 不解析具体 `scanData` 表格、不构造论文指标、不处理 strategy / schedule / candidate / resolved 逻辑；具体 metric line、summary table 和 plot 仍保留在各 scan 本地。
 
 ## 可选运行通知
 
