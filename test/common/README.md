@@ -126,6 +126,8 @@
 
 - `runSimpleDynamicFlowReplayBatch.m`
 - `printMfReplayHeader.m`
+- `printMfReplaySection.m`
+- `notifyMfReplayStatus.m`
 - `finalizeMfReplayResult.m`
 - `test/common/flow/runPerfTaskGridWithCheckpoint.m`
 - `test/common/flow/cleanupPerfTaskGridCheckpoint.m`
@@ -133,10 +135,10 @@
 使用边界：
 
 - 顶层 replay 是脚本，文件头固定为英文说明 + `clear; close all; clc;` + `Replay configuration`，默认参数写在配置 section；
-- common/replay helper 只负责 replay / scan 的 batch 执行、header、progressbar 和 checkpoint glue；checkpoint run 目录清理由 `test/common/flow/cleanupPerfTaskGridCheckpoint.m` 统一处理，replay / scan 脚本不再维护私有 cleanup helper；固定单样本 replay 或短 scan 如果没有中间落盘需求，不创建 tmp，也不打印占位行；checkpoint/tmp 统一位于仓库根目录 `tmp/`；
+- common/replay helper 只负责 replay / scan 的 batch 执行、header、section banner、best-effort Telegram 状态壳、progressbar 和 checkpoint glue；checkpoint run 目录清理由 `test/common/flow/cleanupPerfTaskGridCheckpoint.m` 统一处理，replay / scan 脚本不再维护私有 cleanup helper；固定单样本 replay 或短 scan 如果没有中间落盘需求，不创建 tmp，也不打印占位行；checkpoint/tmp 统一位于仓库根目录 `tmp/`；
 - 数据落盘由 replay / scan 脚本的 `Data storage` section 调用 `saveExpSnapshot` 完成；
 - summary 与画图由 replay / scan 脚本的 `Summary output and plotting` section 完成，且应只依赖 `replayData` 或 `scanData`；
-- common/replay 不保存图片，也不维护具体 replay 的 plot helper。
+- common/replay 不保存图片，也不维护具体 replay 的 plot helper、metric parser、policy recommendation 或 winner adoption 逻辑。
 
 不应包含：
 

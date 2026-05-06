@@ -4,6 +4,12 @@
 
 详细运行结果、长表格、观察现象和 snapshot 绑定统一放在 `test/dev/replay/results/`；本 README 只保留脚本规范、入口索引和当前一句话结论。
 
+## 模板入口
+
+新增 replay 时先复制 `test/dev/replay/template/replayTemplate.m`，再改名到 `test/dev/replay/replayXxx.m`。模板只规范 section、checkpoint/snapshot/Telegram 壳和打印风格，不是可运行实验入口，也不是统一 replay 框架。
+
+模板目录 `test/dev/replay/template/` 不放正式 replay；正式入口仍只放在 `test/dev/replay/` 根目录。
+
 ## 统一脚本格式
 
 每个 replay 文件头部采用固定形式：
@@ -30,9 +36,9 @@ clear; close all; clc;
 
 ## 可选运行通知
 
-长时间 replay 可在顶层脚本结束、失败 `catch` 或 snapshot 保存后调用 `utils/io/notifyTelegram.m` 发送可选 Telegram 通知。通知必须是 best-effort：发送失败只 `warning`，不得改变 `replayData`、snapshot、图表数据、数值路径或任何 replay 结论口径。
+长时间 replay 可在顶层脚本结束、失败 `catch` 或 snapshot 保存后调用 `test/common/replay/notifyMfReplayStatus.m` 发送可选 HTML Telegram 通知；该 helper 内部只包装 `utils/io/notifyTelegram.m` 的通用 I/O 壳。通知必须是 best-effort：发送失败只 `warning`，不得改变 `replayData`、snapshot、图表数据、数值路径或任何 replay 结论口径。
 
-通知内容只保留脚本名、状态、耗时、snapshot 路径和少量关键 summary；详细结果仍写入 `test/dev/replay/results/`，不要在通知 helper 中维护第二套 replay results 解析逻辑。
+通知内容只保留脚本名、状态、耗时、snapshot 路径和少量关键 summary。具体 metric line 由各 replay 本地构造并传入 common helper；common helper 不解析 `replayData` 中的具体结果表，不维护第二套 replay results parser。详细结果仍写入 `test/dev/replay/results/`。
 
 ## 推荐推进顺序
 
@@ -144,6 +150,17 @@ clear; close all; clc;
 - 主要输出：`ordinarySeedTable`、`ordinaryCandidateTable`、`ordinaryAggregateTable`、`ordinaryFamilyAggregateTable`、原有 method / gated rescue 辅助表、runtime timing summary，以及 ordinary miss 角误差 / gain / coherence 对比图。
 - Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存后发送 HTML `DONE` 通知，在 batch / storage 失败时发送 `FAILED` 通知并继续 `rethrow`；通知只包含脚本名、耗时、seed、snapshot 与少量 ordinary summary，发送失败只 warning。
 - 当前结论：新增为 controlled in-tooth DoA 主线的 ordinary-miss 分叉诊断入口；用于判断剩余 `>0.002 deg` miss 是否可由 small polish 或 basin-entry truth-free 候选解释，不据此直接放宽 hard-collapse rescue gate。
+
+#### `replayMfInToothOrdinaryWideGateDiagnose.m`
+
+- 作用：在 controlled in-tooth 条件下专门诊断 ordinary miss 的 `wide` basin-entry 候选能否被 truth-free gate / adoption 接住。
+- 选帧与初始化口径：沿用 truth-centered half-tooth `fdRef` 范围，不做 subset tooth selection，不改变默认 flow；truth 只用于 offline miss label、rescue / damage 评价和 truth-DoA oracle 上限。
+- gate 口径：policy sweep 只使用 default / wide candidate 的 objective gain、non-ref coherence、DoA step 上下界、fdRef / fdRate step 与 default non-collapse 状态；不读取 truth tooth、truth DoA、truth `fdRef/fdRate` 或人工 case label。当前默认细扫 objective gain `0~200`，并增加 default-vs-wide DoA-disagreement 下限，用于观察能否压低 easy trigger 同时保留 ordinary rescue。
+- 推荐 policy 口径：当前 replay-level 首选 ordinary-wide gate 固定为 `objGain >= 10`、`0.001 <= |wide DoA step| <= 0.004 deg`、wide-only、default non-collapse、candidate coherence `>=0.95`。脚本会额外生成 `wideGateRecommendedPolicyTable`，按 full ordinary rescue、zero damage、低 easy trigger、低整体 tail 的顺序自动选择最稳候选，避免命令行和 Telegram 误选第一个过宽 pass policy。
+- 旁路口径：该脚本已按 `template/replayTemplate.m` 的外壳整理为 common header、checkpoint/snapshot、summary 与 `notifyMfReplayStatus` 通知壳；默认旁路已证伪或非本入口主线的 `final-small-polish` probe、`single-MF` ordinary basin-entry probe 与 hard-collapse auxiliary tables。若要复核旧负结果，可在头部显式打开 `includeFinalSmallPolishProbe`、`includeSingleMfBasinEntryProbe` 或 `includeHardCollapseAuxTables`。
+- 主要输出：继承 ordinary replay 的 `ordinarySeedTable`、`ordinaryCandidateTable`、`ordinaryAggregateTable`，并新增 `wideGateFeatureTable`、`wideGateDecisionTable`、`wideGatePolicyTable`、`wideGateRecommendedPolicyTable`，用于比较不同 objective-gain / DoA-step lower/upper guard 下的 ordinary rescue、easy trigger / damage、fd-negative damage 和 overall tail。默认旁路的 legacy probe 不再出现在 ordinary family aggregate 中。
+- Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存后通过 `notifyMfReplayStatus` 发送 HTML `DONE` 通知，在 batch / storage 失败时发送 `FAILED` 通知并继续 `rethrow`；通知只包含脚本名、耗时、seed、snapshot、ordinary summary、自动选择的 wide-gate policy 摘要及 easy trigger/damage 口径，发送失败只 warning。
+- 当前结论：作为 `replayMfInToothOrdinaryAngleMissDiagnose` 的后续 gate/adoption 诊断入口；它只判断 `wide` candidate 是否存在可用 truth-free proxy。即使某个 policy 标为 `preferred-candidate` 或 `candidate`，也只是 replay-level gate 候选，不据此直接打开 blanket wide 或修改 estimator 主核。
 
 #### `replayMfFlowLikeGatedBasinEntryEffectiveness.m`
 

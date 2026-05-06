@@ -1,5 +1,5 @@
 function printMfReplayHeader(replayName, replayConfig, runDir)
-%PRINTMFREPLAYHEADER Print compact runtime settings for replay functions.
+%PRINTMFREPLAYHEADER Print compact runtime settings for replay scripts.
 
 arguments
   replayName (1,:) char
@@ -8,29 +8,65 @@ arguments
 end
 
 fprintf('Running %s ...\n', replayName);
-if isfield(replayConfig, 'numRepeat')
-  fprintf('  repeats                         : %d\n', localGetFieldOrDefault(replayConfig, 'numRepeat', NaN));
+localPrintField(replayConfig, 'numRepeat', 'repeats', '%d');
+localPrintField(replayConfig, 'numSearchRepeat', 'search repeats', '%d');
+localPrintField(replayConfig, 'snrDb', 'snr (dB)', '%.2f');
+localPrintField(replayConfig, 'baseSeed', 'base seed', '%d');
+if isfield(replayConfig, 'contextBaseSeed')
+  localPrintField(replayConfig, 'contextBaseSeed', 'context base seed', '%d');
 end
-fprintf('  snr (dB)                        : %.2f\n', localGetFieldOrDefault(replayConfig, 'snrDb', NaN));
-fprintf('  base seed                       : %d\n', localGetFieldOrDefault(replayConfig, 'baseSeed', NaN));
-if isfield(replayConfig, 'numRepeat')
-  fprintf('  repeat mode                     : %s\n', 'parfor-auto');
+if isfield(replayConfig, 'numRepeat') || isfield(replayConfig, 'numSearchRepeat')
+  fprintf('  %-32s : %s\n', 'repeat mode', 'parfor-auto');
 end
-fprintf('  save snapshot                   : %d\n', logical(localGetFieldOrDefault(replayConfig, 'saveSnapshot', false)));
+localPrintLogicalField(replayConfig, 'saveSnapshot', 'save snapshot');
+localPrintLogicalField(replayConfig, 'checkpointEnable', 'checkpoint');
+localPrintLogicalField(replayConfig, 'notifyTelegramEnable', 'telegram notify');
+localPrintTextField(replayConfig, 'runKey', 'run key');
+
 if isstring(runDir)
   runDir = char(runDir);
 end
 if ~isempty(runDir)
-  fprintf('  run dir                         : %s\n', runDir);
+  fprintf('  %-32s : %s\n', 'run dir', runDir);
 end
 end
 
-function value = localGetFieldOrDefault(dataStruct, fieldName, defaultValue)
-value = defaultValue;
-if isstruct(dataStruct) && isfield(dataStruct, fieldName)
-  rawValue = dataStruct.(fieldName);
-  if ~isempty(rawValue)
-    value = rawValue;
-  end
+function localPrintField(dataStruct, fieldName, labelText, formatText)
+% Print one scalar field when present.
+if ~isstruct(dataStruct) || ~isfield(dataStruct, fieldName)
+  return;
 end
+value = dataStruct.(fieldName);
+if isempty(value)
+  return;
+end
+if ~(isnumeric(value) || islogical(value)) || ~isscalar(value)
+  fprintf('  %-32s : %s\n', labelText, char(string(value)));
+  return;
+end
+fprintf(['  %-32s : ' formatText '\n'], labelText, value);
+end
+
+function localPrintLogicalField(dataStruct, fieldName, labelText)
+% Print one logical field when present.
+if ~isstruct(dataStruct) || ~isfield(dataStruct, fieldName)
+  return;
+end
+value = dataStruct.(fieldName);
+if isempty(value)
+  return;
+end
+fprintf('  %-32s : %d\n', labelText, logical(value));
+end
+
+function localPrintTextField(dataStruct, fieldName, labelText)
+% Print one text field when present.
+if ~isstruct(dataStruct) || ~isfield(dataStruct, fieldName)
+  return;
+end
+value = dataStruct.(fieldName);
+if isempty(value)
+  return;
+end
+fprintf('  %-32s : %s\n', labelText, char(string(value)));
 end
