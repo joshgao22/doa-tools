@@ -49,14 +49,10 @@ end
 lineList = [lineList; localBuildConfigLines(config)]; %#ok<AGROW>
 
 if strlength(snapshotFile) > 0
-  lineList(end + 1, 1) = "";
-  lineList(end + 1, 1) = "<b>Snapshot</b>";
-  lineList(end + 1, 1) = "<code>" + localHtmlEscape(snapshotFile) + "</code>";
+  lineList = [lineList; localBuildSnapshotPathLines(snapshotFile)]; %#ok<AGROW>
 end
 if strlength(checkpointDir) > 0
-  lineList(end + 1, 1) = "";
-  lineList(end + 1, 1) = "<b>Checkpoint</b>";
-  lineList(end + 1, 1) = "<code>" + localHtmlEscape(checkpointDir) + "</code>";
+  lineList = [lineList; localBuildDirectoryPathLines("Checkpoint dir", checkpointDir)]; %#ok<AGROW>
 end
 if ~isempty(metricLineList)
   lineList(end + 1, 1) = "";
@@ -75,9 +71,60 @@ if isa(errorObj, 'MException')
   lineList(end + 1, 1) = "<b>Error</b>";
   lineList(end + 1, 1) = "<code>" + localHtmlEscape(errorObj.identifier) + "</code>";
   lineList(end + 1, 1) = localHtmlEscape(errorObj.message);
+  [fileName, lineNumber] = localGetErrorLocation(errorObj);
+  if strlength(fileName) > 0
+    lineList(end + 1, 1) = ""; %#ok<AGROW>
+    lineList(end + 1, 1) = "<b>Location</b>"; %#ok<AGROW>
+    lineList(end + 1, 1) = localHtmlEscape(fileName + ":" + string(lineNumber)); %#ok<AGROW>
+  end
 end
 
 messageText = strjoin(lineList, newline);
+end
+
+function lineList = localBuildSnapshotPathLines(snapshotFile)
+% Build mobile-friendly snapshot path lines without code-wrapping long paths.
+lineList = strings(0, 1);
+snapshotFile = string(snapshotFile);
+if strlength(snapshotFile) == 0
+  return;
+end
+[fileDir, fileName, fileExt] = fileparts(snapshotFile);
+fileName = string(fileName) + string(fileExt);
+lineList(end + 1, 1) = "";
+lineList(end + 1, 1) = "<b>Snapshot file</b>";
+if strlength(fileName) > 0
+  lineList(end + 1, 1) = localHtmlEscape(fileName);
+else
+  lineList(end + 1, 1) = localHtmlEscape(snapshotFile);
+end
+if strlength(fileDir) > 0
+  lineList(end + 1, 1) = "";
+  lineList(end + 1, 1) = "<b>Snapshot dir</b>";
+  lineList(end + 1, 1) = localHtmlEscape(fileDir);
+end
+end
+
+function lineList = localBuildDirectoryPathLines(titleText, dirPath)
+% Build mobile-friendly directory path lines.
+lineList = strings(0, 1);
+dirPath = string(dirPath);
+if strlength(dirPath) == 0
+  return;
+end
+lineList(end + 1, 1) = "";
+lineList(end + 1, 1) = "<b>" + localHtmlEscape(titleText) + "</b>";
+lineList(end + 1, 1) = localHtmlEscape(dirPath);
+end
+
+function [fileName, lineNumber] = localGetErrorLocation(errorObj)
+% Get the first stack location for compact failed-run notifications.
+fileName = "";
+lineNumber = -1;
+if isa(errorObj, 'MException') && ~isempty(errorObj.stack)
+  fileName = string(errorObj.stack(1).file);
+  lineNumber = errorObj.stack(1).line;
+end
 end
 
 function lineList = localBuildConfigLines(config)

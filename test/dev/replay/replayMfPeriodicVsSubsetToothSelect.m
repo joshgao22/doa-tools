@@ -7,6 +7,7 @@
 % Usage: edit the configuration block below, then run this script directly.
 % The script leaves replayData in the workspace; checkpointEnable=true resumes
 % interrupted repeat runs from per-repeat files under the repo-root tmp/.
+% saveSnapshot=true saves only replayData via saveExpSnapshot. Telegram notice is best-effort only.
 
 clear; close all; clc;
 
@@ -22,6 +23,7 @@ snrDb = 10;                         % Snapshot SNR used to generate rx signals.
 baseSeed = 253;                     % First seed of the small replay batch.
 numRepeat = 100;                    % Number of consecutive seeds to replay.
 saveSnapshot = true;                % true saves the lightweight replayData only.
+notifyTelegramEnable = true;        % true sends best-effort HTML Telegram notice on completion or failure.
 optVerbose = false;                 % true enables compact estimator/flow trace.
 checkpointEnable = true;            % true enables per-repeat checkpoint/resume under repo-root tmp/.
 toothHistogramBinCount = 8;         % Target number of |toothIdx| histogram bins; fewer bins merge wider tooth ranges.
@@ -33,6 +35,12 @@ toothHistogramBinCount = 8;         % Target number of |toothIdx| histogram bins
 seedList = baseSeed + (0:(numRepeat - 1));  % Consecutive task seeds for the batch.
 seedList = reshape(double(seedList), [], 1);
 numRepeat = numel(seedList);
+runTic = tic;
+replayData = struct();
+config = struct();
+checkpointRunDir = "";
+
+try
 
 %% Build context and flow options
 
@@ -42,30 +50,22 @@ config.baseSeed = baseSeed;
 config.numRepeat = numRepeat;
 config.seedList = seedList;
 config.saveSnapshot = saveSnapshot;
+config.notifyTelegramEnable = notifyTelegramEnable;
 config.optVerbose = optVerbose;
 config.checkpointEnable = checkpointEnable;
 config.toothHistogramBinCount = toothHistogramBinCount;
 config.checkpointResume = true;
 config.checkpointCleanupOnSuccess = true;
 
-fprintf('Running %s ...\n', char(replayName));
-fprintf('  repeats                         : %d\n', config.numRepeat);
-fprintf('  snr (dB)                        : %.2f\n', config.snrDb);
-fprintf('  base seed                       : %d\n', config.baseSeed);
-fprintf('  repeat mode                     : %s\n', 'parfor-auto');
-fprintf('  save snapshot                   : %d\n', config.saveSnapshot);
-fprintf('  checkpoint                      : %d\n', config.checkpointEnable);
-
 % Build compact flow options here so the replay documents exactly which stages
 % are being compared. The shared helper still owns fixture and signal creation.
 replayBatchOpt = localBuildBatchOpt(replayName, config);
-checkpointRunDir = "";
 if config.checkpointEnable
-  checkpointRunDir = replayBatchOpt.checkpointOpt.runDir;
-  config.checkpointRunDir = string(checkpointRunDir);
-  fprintf('  checkpoint resume               : %d\n', config.checkpointResume);
-  fprintf('  checkpoint dir                  : %s\n', checkpointRunDir);
+  checkpointRunDir = string(replayBatchOpt.checkpointOpt.runDir);
+  config.checkpointRunDir = checkpointRunDir;
 end
+printMfReplayHeader(char(replayName), config, char(checkpointRunDir));
+localPrintPeriodicReplayConfig(config);
 
 %% Run replay batch
 
@@ -76,7 +76,7 @@ if config.checkpointEnable
   try
     [repeatTable, repeatCell, context, flowOpt, runState] = runSimpleDynamicFlowReplayBatch(replayBatchOpt);
   catch ME
-    fprintf('Replay failed. Checkpoint artifacts kept at: %s\n', checkpointRunDir);
+    fprintf('Replay failed. Checkpoint artifacts kept at: %s\n', char(checkpointRunDir));
     rethrow(ME);
   end
 else
@@ -100,7 +100,7 @@ replayData.toothHistogramTable = toothHistogramTable;
 replayData.repeatTable = repeatTable;
 replayData.repeatCell = localStripRepeatCell(repeatCell);
 if config.checkpointEnable
-  replayData.checkpointSummary = localBuildCheckpointSummary(runState);
+  replayData.checkpointSummary = buildMfReplayCheckpointSummary(runState);
 end
 
 if config.saveSnapshot
@@ -119,6 +119,31 @@ if config.checkpointEnable
     replayData.checkpointSummary.cleanedOnSuccess = false;
   end
 end
+replayData.elapsedSec = toc(runTic);
+
+notifyMfReplayStatus(struct( ...
+  'replayName', replayName, ...
+  'statusText', "DONE", ...
+  'config', config, ...
+  'snapshotFile', replayData.snapshotFile, ...
+  'checkpointDir', checkpointRunDir, ...
+  'elapsedSec', replayData.elapsedSec, ...
+  'metricLineList', localBuildTelegramMetricLines(replayData), ...
+  'commentLineList', "Periodic/subset tooth selection replay completed."));
+catch ME
+  if strlength(string(checkpointRunDir)) > 0
+    fprintf('Replay failed. Checkpoint artifacts kept at: %s\n', char(checkpointRunDir));
+  end
+  notifyMfReplayStatus(struct( ...
+    'replayName', replayName, ...
+    'statusText', "FAILED", ...
+    'config', config, ...
+    'checkpointDir', checkpointRunDir, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME, ...
+    'commentLineList', "Periodic/subset tooth selection replay failed."));
+  rethrow(ME);
+end
 
 %% Summary output and plotting
 
@@ -135,16 +160,8 @@ else
 end
 toothHistogramTable = replayData.toothHistogramTable;
 
-fprintf('Running replayMfPeriodicVsSubsetToothSelect ...\n');
-fprintf('  repeats                         : %d\n', height(compareTable));
-fprintf('  snr (dB)                        : %.2f\n', config.snrDb);
-fprintf('  base seed                       : %d\n', config.baseSeed);
-if isfield(config, 'checkpointEnable')
-  fprintf('  checkpoint                      : %d\n', config.checkpointEnable);
-end
-if isfield(config, 'checkpointRunDir')
-  fprintf('  checkpoint dir                  : %s\n', char(config.checkpointRunDir));
-end
+printMfReplayHeader(char(replayData.replayName), config, localGetFieldOrDefault(config, 'checkpointRunDir', ""));
+localPrintPeriodicReplayConfig(config);
 fprintf('\n========== Periodic vs subset compare ==========\n');
 localDisplayCompareTable(compareTable);
 fprintf('\n========== Aggregate summary ==========\n');
@@ -182,16 +199,7 @@ contextOpt = struct( ...
   'numSubsetRandomTrial', 0, ...
   'parallelOpt', parallelOpt);
 
-checkpointOpt = struct('enable', config.checkpointEnable);
-if config.checkpointEnable
-  checkpointRunKey = localBuildCheckpointRunKey(config);
-  checkpointOutputRoot = fullfile(localGetRepoRoot(), 'tmp');
-  checkpointOpt.resume = true;
-  checkpointOpt.runName = string(replayName);
-  checkpointOpt.runKey = checkpointRunKey;
-  checkpointOpt.outputRoot = checkpointOutputRoot;
-  checkpointOpt.runDir = fullfile(checkpointOutputRoot, char(replayName), char(checkpointRunKey));
-end
+checkpointOpt = localBuildCheckpointOpt(replayName, config);
 
 replayBatchOpt = struct( ...
   'replayName', string(replayName), ...
@@ -209,6 +217,46 @@ replayBatchOpt = struct( ...
 end
 
 
+function checkpointOpt = localBuildCheckpointOpt(replayName, config)
+%LOCALBUILDCHECKPOINTOPT Build stable per-repeat checkpoint options for this replay.
+
+checkpointMeta = struct( ...
+  'snrDb', config.snrDb, ...
+  'seedList', reshape(config.seedList, 1, []), ...
+  'toothHistogramBinCount', config.toothHistogramBinCount);
+checkpointOpt = buildMfReplayCheckpointOpt(replayName, config, struct( ...
+  'runKey', localBuildCheckpointRunKey(config), ...
+  'meta', checkpointMeta));
+end
+
+function localPrintPeriodicReplayConfig(config)
+%LOCALPRINTPERIODICREPLAYCONFIG Print replay-specific non-default settings.
+
+fprintf('  %-32s : %d\n', 'tooth histogram bins', config.toothHistogramBinCount);
+end
+
+function metricLineList = localBuildTelegramMetricLines(replayData)
+%LOCALBUILDTELEGRAMMETRICLINES Build compact HTML metric lines for notification.
+
+metricLineList = strings(0, 1);
+if ~isfield(replayData, 'aggregateTable') || isempty(replayData.aggregateTable)
+  return;
+end
+agg = replayData.aggregateTable;
+metricLineList(end + 1, 1) = sprintf('• aggregate rows: <code>%d</code>', height(agg));
+if all(ismember({'stageLabel', 'toothHitRate'}, agg.Properties.VariableNames))
+  for iRow = 1:height(agg)
+    metricLineList(end + 1, 1) = sprintf('• <code>%s</code> tooth hit: <code>%.3f</code>', ...
+      char(string(agg.stageLabel(iRow))), agg.toothHitRate(iRow));
+  end
+end
+if isfield(replayData, 'compareTable') && ~isempty(replayData.compareTable) && ...
+    ismember('finalToothIdx', replayData.compareTable.Properties.VariableNames)
+  metricLineList(end + 1, 1) = sprintf('• final tooth hit: <code>%.3f</code>', ...
+    mean(double(replayData.compareTable.finalToothIdx == 0), 'omitnan'));
+end
+end
+
 function runKey = localBuildCheckpointRunKey(config)
 % Build a stable checkpoint key for this replay configuration.
 seedList = reshape(double(config.seedList), 1, []);
@@ -223,17 +271,6 @@ function repoRoot = localGetRepoRoot()
 % Resolve the repository root from the replay script location.
 scriptDir = fileparts(mfilename('fullpath'));
 repoRoot = fileparts(fileparts(fileparts(scriptDir)));
-end
-
-
-function checkpointSummary = localBuildCheckpointSummary(runState)
-% Store lightweight checkpoint status without keeping checkpoint task results twice.
-checkpointSummary = struct();
-checkpointSummary.runDir = string(localGetFieldOrDefault(runState, 'runDir', ""));
-checkpointSummary.numTask = localGetFieldOrDefault(runState, 'numTask', 0);
-checkpointSummary.numDone = localGetFieldOrDefault(runState, 'numDone', 0);
-checkpointSummary.isComplete = logical(localGetFieldOrDefault(runState, 'isComplete', false));
-checkpointSummary.cleanedOnSuccess = false;
 end
 
 

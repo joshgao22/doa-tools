@@ -1,8 +1,10 @@
 % replayTemplate
 % Copy this file to test/dev/replay/replayYourTopic.m before editing.
 % The template standardizes replay sections, snapshot storage, compact
-% summary output, and best-effort Telegram notification. It is not a shared
-% replay framework and should not be run as a real experiment.
+% summary output, and best-effort Telegram notification. It also shows the
+% mobile-friendly Telegram report style: a fixed shell plus short flexible
+% replay-specific metric lines. It is not a shared replay framework and
+% should not be run as a real experiment.
 
 clear; close all; clc;
 
@@ -78,6 +80,11 @@ try
 
   printMfReplaySection('Template summary', replayData.summaryTable);
 
+  % Telegram report style:
+  % - The common shell owns status, script, elapsed time, common config, and snapshot.
+  % - Local metric lines should stay short and HTML-ready.
+  % - Use <code> only for short numbers or tags; do not code-wrap long paths or long candidate names.
+  % - Comment lines should carry the replay-level conclusion or recommendation.
   metricLineList = localBuildTelegramMetricLines(replayData);
   notifyMfReplayStatus(struct( ...
     'replayName', replayName, ...
@@ -86,7 +93,9 @@ try
     'snapshotFile', replayData.snapshotFile, ...
     'elapsedSec', replayData.elapsedSec, ...
     'metricLineList', metricLineList, ...
-    'commentLineList', "Template completed. Replace placeholder logic before use."));
+    'commentLineList', [ ...
+      "Template completed. Replace placeholder logic before use."; ...
+      "Recommendation: use this line for the replay-level decision, not for long tables."]));
 
 catch ME
   notifyMfReplayStatus(struct( ...
@@ -132,12 +141,27 @@ end
 function metricLineList = localBuildTelegramMetricLines(replayData)
 %LOCALBUILDTELEGRAMMETRICLINES Build replay-specific HTML-ready metric lines.
 % Keep replay-specific metrics local. The common notification helper only
-% wraps these preformatted lines in the standard Telegram shell.
+% wraps these preformatted lines in the standard Telegram shell. Escape any
+% dynamic text that is not intentionally used as Telegram HTML markup.
 
 metricLineList = strings(0, 1);
 if isfield(replayData, 'summaryTable') && ~isempty(replayData.summaryTable)
-  metricLineList(end + 1, 1) = "• repeats: <code>" + string(height(replayData.summaryTable)) + "</code>";
+  summaryTable = replayData.summaryTable;
+  metricLineList(end + 1, 1) = "• template: repeats=<code>" + ...
+    string(height(summaryTable)) + "</code>, status=<code>" + ...
+    localHtmlEscape(string(summaryTable.status(1))) + "</code>";
 end
+metricLineList(end + 1, 1) = ...
+  "• report style: short metric lines, snapshot handled by common shell";
+end
+
+function textValue = localHtmlEscape(textValue)
+%LOCALHTMLESCAPE Escape dynamic text for Telegram HTML metric lines.
+
+textValue = string(textValue);
+textValue = replace(textValue, "&", "&amp;");
+textValue = replace(textValue, "<", "&lt;");
+textValue = replace(textValue, ">", "&gt;");
 end
 
 function repoRoot = localFindRepoRoot()

@@ -38,7 +38,9 @@ clear; close all; clc;
 
 长时间 replay 可在顶层脚本结束、失败 `catch` 或 snapshot 保存后调用 `test/common/replay/notifyMfReplayStatus.m` 发送可选 HTML Telegram 通知；该 helper 内部只包装 `utils/io/notifyTelegram.m` 的通用 I/O 壳。通知必须是 best-effort：发送失败只 `warning`，不得改变 `replayData`、snapshot、图表数据、数值路径或任何 replay 结论口径。
 
-通知内容只保留脚本名、状态、耗时、snapshot 路径和少量关键 summary。具体 metric line 由各 replay 本地构造并传入 common helper；common helper 不解析 `replayData` 中的具体结果表，不维护第二套 replay results parser。详细结果仍写入 `test/dev/replay/results/`。
+通知内容只保留脚本名、状态、耗时、snapshot 文件/目录和少量关键 summary。具体 metric line 由各 replay 本地构造并传入 common helper；common helper 不解析 `replayData` 中的具体结果表，不维护第二套 replay results parser。详细结果仍写入 `test/dev/replay/results/`。
+
+Telegram HTML 格式遵循 `template/replayTemplate.m` 的示例：固定外壳统一，正文指标弹性；`<code>` 只用于短数字、短 tag 或短状态，不包裹完整路径、长 candidate family 名或长错误文本；`commentLineList` 应写 replay-level 结论、recommendation 或下一步判断，而不只是 `completed`。
 
 ## 推荐推进顺序
 
@@ -60,8 +62,9 @@ clear; close all; clc;
 #### `replayMfPeriodicVsSubsetToothSelect.m`
 
 - 作用：对比 periodic wide、selected subset、final periodic refine 的选齿与细化分工。
-- 配置：头部只保留 `snrDb / baseSeed / numRepeat / saveSnapshot / optVerbose / checkpointEnable / toothHistogramBinCount`，并用英文注释说明；共享场景、卫星、TLE、waveform 与 frame offset 由 `runSimpleDynamicFlowReplayBatch` 调用 `buildDynamicDualSatEciContext` 构造。
+- 配置：头部只保留 `snrDb / baseSeed / numRepeat / saveSnapshot / notifyTelegramEnable / optVerbose / checkpointEnable / toothHistogramBinCount`，并用英文注释说明；共享场景、卫星、TLE、waveform 与 frame offset 由 `runSimpleDynamicFlowReplayBatch` 调用 `buildDynamicDualSatEciContext` 构造。
 - 临时存档：每个 repeat 运行时间较长，头部 `checkpointEnable=true` 时启用 per-repeat checkpoint / resume；设为 `false` 时不创建 tmp、不恢复、不清理。任务文件写入仓库根目录 `tmp/replayMfPeriodicVsSubsetToothSelect/<runKey>/task/task_*.mat`。
+- Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存与 checkpoint 清理后通过 `notifyMfReplayStatus` 发送 HTML `DONE` 通知，在失败时发送 `FAILED` 通知；通知只包含脚本名、耗时、snapshot / checkpoint 与少量 tooth-selection 指标，发送失败只 warning。
 - 进度条：`Run replay batch` 阶段必须显示外层 repeat progressbar；启用 checkpoint 时，progressbar 只统计未完成的 todo repeat；并行时由 checkpoint runner 的 `parallel.pool.DataQueue` 在 client 侧更新。
 - 先看现象：subset 是否缩小 tooth error，periodic refine 是否只在同齿内改善 angle / fd。
 - 主要输出：三阶段 `toothIdx`、angle error、fdRef error 的 compare table、aggregate table 与合并 subplot 图。
@@ -96,7 +99,9 @@ clear; close all; clc;
 - 先看现象：当 wrong-tooth 被 oracle 排除后，`MS-MF-CP-U-in-tooth` 是否优于单星、单帧与 wide baseline；若它仍不优于这些上限基线，说明论文主张上限不足，应先回查模型层级或 same-tooth refine，而不是继续扩大 subset bank。
 - 主要输出：method aggregate、MS-MF wide-vs-oracle pair compare、paper-claim upper-bound compare、runtime timing summary、oracle fd/fdRate range preview、`singleMultiCompareTable`、`tailCaseTable` 与两张分布 / tail 诊断图。
 - 表格口径：`aggregateTable` 额外保留 `satMode / frameMode / modelClass / rateMode / oracleLevel / wallTimeMedianMs`，`paperCompareTable` 以 `MS-MF-CP-U-in-tooth` 为 target，正 gain 表示 target 优于对应 baseline；`singleMultiCompareTable` 逐 seed 比较 `SS-MF-CP-U-in-tooth` 与 `MS-MF-CP-U-in-tooth`；`timingTable / timingAggregateTable` 只记录 repeat 级轻量 wall-clock 计时，用于判断 static bundle 与 dynamic method 的耗时占比。
-- 命令行口径：`rangeTable` 仍完整保存在 `replayData`，但命令行只打印前四行和后四行，避免 repeat 较多时长表刷屏。
+- 命令行口径：`rangeTable` 仍完整保存在 `replayData`，但命令行通过 `dispMfReplayTablePreview` 只打印前四行和后四行，避免 repeat 较多时长表刷屏。
+- 临时存档：默认 `checkpointEnable=true`，按 repeat 在仓库根目录 `tmp/replayMfInToothFdRangeOracle/<runKey>/task/` 保存轻量 checkpoint；成功保存 `replayData` 后默认清理，失败时保留并打印路径。
+- Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存与 checkpoint 清理后发送 HTML `DONE` 通知，在失败时发送 `FAILED` 通知；通知只包含脚本名、耗时、snapshot / checkpoint、MS-MF better angle rate、median angle gain 和 tail case 数量。
 - 图形口径：默认不再画 method-level RMSE bar，也不再叠加多个方法的直方图；改为 angle / fdRef / fdRate 经验 CDF、单独的 MS-vs-SS angle gain 直方图与 paired SS-MF vs MS-MF seed scatter。
 - 当前结论：只作为论文主张上限 replay，不进入默认 flow / regression，不改变 no-truth-leak selector。
 
@@ -105,6 +110,8 @@ clear; close all; clc;
 - 作用：固定 `replayMfInToothFdRangeOracle` 暴露出的 tail seed，默认回放 coherence-collapse tail seed `277 / 283 / 298 / 256` 与负样本 `293 / 280 / 268 / 284`，重放 `SS-MF-in-tooth / MS-MF-in-tooth / MS-MF-truth-DoA-oracle` 等核心 case，并分类 same-tooth tail。
 - 选帧与初始化口径：该 replay 已经在 in-tooth oracle 范围内定位 tail，不做 subset tooth selection，也不使用 curated subset 初始化；DoA seed 只来自 static seed 或 truth-DoA oracle；`contextBaseSeed` 固定为源 oracle replay 的 base seed，避免因为只改 seed 列表顺序而换掉共享场景上下文。
 - 主要输出：`identityTable`、`aggregateTable`、`tailDiagnosisTable`、`detailDiagnosticTable`、`candidateProbeTable`、`candidateWinnerTable`、`lineProbeSummaryTable`、`rescueBankSummaryTable`、`rescueBankAggregateTable`、oracle range / runtime summary，以及 gated rescue 前后 angle / coherence 对比图。
+- 临时存档：默认 `checkpointEnable=true`，按 tail seed 在仓库根目录 `tmp/replayMfInToothTailCaseDiagnose/<runKey>/task/` 保存轻量 checkpoint；成功保存 `replayData` 后默认清理，失败时保留并打印路径。
+- Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存与 checkpoint 清理后发送 HTML `DONE` 通知，在失败时发送 `FAILED` 通知；通知只包含脚本名、耗时、snapshot / checkpoint、tail seed 数量和 rescue aggregate 行数。
 - 对照口径：除 static / truth DoA 可释放分支外，额外包含 `static-doa-fixed` 与 `truth-doa-fixed` 对照，用于判断只释放 `fdRef/fdRate` 时 non-ref coherence 是否可恢复。
 - 诊断口径：`identityTable` 用于核对同一 seed 的 truth DoA、static DoA、oracle fd/fdRate 范围和 method count 是否与源 oracle replay一致；`detailDiagnosticTable` 优先展开非 light tail seed，若本轮没有非 light seed，则展开全部 seed 的 init/final per-sat coherence、residual 与差分 Doppler / rate 误差，方便判断 collapse 是初值已坏、优化后被拉坏，还是坏点已不复现；`candidateProbeTable` 只重评估 default / fixed-DoA / wide / truth-DoA、final 附近的小网格、wide-final 附近的小网格、default/static 到 truth DoA 的加密 line probe，以及 default final/static MS/SS-MF final/wide final 这些不含 truth 的 implementable center 粗 DoA 网格，不改变 solver adoption；`candidateWinnerTable` 总结每个 seed 是否可由 final-centered、wide-centered、implementable-center 或 line-to-truth 候选救回；`lineProbeSummaryTable` 记录 line probe 中 objective / coherence / angle 最早在什么 alpha 恢复，用于判断好 basin 离 default/static 有多远；`rescueBankSummaryTable` 与 `rescueBankAggregateTable` 比较 disabled、wide-centered coarse、single-MF-centered coarse 与 wide+single-MF bank，专门观察 hard seed 的救回率以及 easy / fd-not-healthy 负样本是否被误伤；默认图形只画 default MS-MF 与 `gated-wide-single-bank` selected result 的前后对比，不再用连线连接不同 seed。
 - 分类口径：区分 `wrong-tooth`、`same-tooth + fd not healthy`、`same-tooth + fd healthy + non-ref coherence collapsed`、`same-tooth + fd healthy + DoA/local-state basin` 与轻微/不明确 tail。
@@ -126,6 +133,7 @@ clear; close all; clc;
 - 选帧与初始化口径：只做 replay-level objective surface 诊断，不做 subset tooth selection，不改变 solver adoption；`static-ms / single-mf / wide` 是可实现 center，`truth` 仍只作 oracle 方向。`fixed-list` 模式保留为手动复查入口。
 - 主要输出：`selectedEnvelopeSeedTable`、`scoutTailDiagnosisTable`、`candidateCoverageTable`、`policyRecommendationTable`、`envelopeSummaryTable`、`rangeRecommendationTable`、`ridgeSummaryTable`、`centerLineSummaryTable`、`candidateProbeTable`、`tailDiagnosisTable`、oracle range / runtime summary。
 - 临时存储：默认 `checkpointEnable=true`，scout 与 envelope 两个阶段分别在仓库根目录 `tmp/replayMfInToothDoaFdRangeEnvelope-scout/<runKey>/task/` 与 `tmp/replayMfInToothDoaFdRangeEnvelope-envelope/<runKey>/task/` 保存 per-seed checkpoint；成功保存 `replayData` 后默认清理，失败时保留并打印路径。
+- Telegram 通知：头部 `notifyTelegramEnable=true` 时在两阶段 checkpoint summary 与 snapshot 保存后发送 HTML `DONE` 通知，在失败时发送 `FAILED` 通知；通知只包含脚本名、耗时、snapshot、scout/envelope checkpoint 路径和少量 seed / coverage / policy 指标。
 - 诊断口径：重点看每个 center/surface 的 `minDoaOffsetDeg`、`minFdRefOffsetHz`、`boundaryHit`、`p95AbsDoaOffsetDeg` 与 `p95AbsFdOffsetHz`；同时用 `candidateCoverageTable` 判断 implementable center 是否覆盖 truth-DoA oracle 的 hit，用 `policyRecommendationTable` 离线比较 gate threshold、family DoA step 与 safe coherence 的组合。若 hard seed minimum 频繁贴边界，应先扩大 replay envelope，不把该范围直接写进 rescue bank。
 - 当前结论：新增为搜索范围决策入口；默认两阶段运行，避免把全部 scout seed 都做重 surface。它不替代 `replayMfInToothGatedRescueEffectiveness` 的效果验证，只为后者是否需要 joint DoA-fdRef candidate bank 提供范围依据。
 - 详细结果：`results/replayMfInToothDoaFdRangeEnvelope.md`。
@@ -136,6 +144,7 @@ clear; close all; clc;
 - 选帧与初始化口径：使用 truth-centered half-tooth `fdRef` 范围，只验证 tooth 已正确时的 basin-entry rescue；不做 subset tooth selection，也不改变默认 flow。
 - 候选口径：`caseRole / isHardRescued / isDamaged` 可用 truth 做离线评价；`rescueTriggered / triggerReason / selectedCandidateFamily` 只能由默认估计的 non-ref coherence、phase residual、candidate objective 和卫星几何回代诊断决定。当前 gate 采用 `coherence-v1`，只用 default non-ref coherence collapse 触发；phase residual 仅保留字段占位，不参与本 replay 的触发。
 - 主要输出：`inToothDoaLadderTable`、`rescueEffectAggregateTable`、`rescueEffectVerdictTable`、`rescueEffectCaseTable`、`rescueBankDecisionTable`、`triggerReasonTable`、`hardMissSummaryTable`、`candidateProbeTable`、method / range / timing summary，以及按 task seed 画出的 default / gated / blanket / truth-DoA oracle angle / coherence 线图和 trigger / case-role 线图。
+- 工程外壳：该脚本已按第一批 replayTemplate 化口径接入 common header、checkpoint option / summary、长表预览与 `notifyMfReplayStatus` 通知壳；run-key signature 与 gated-rescue metric lines 仍保留在本地，避免改变 checkpoint 兼容性和结果解释口径。
 - 对照 bank：默认保留 `disabled`、严格 DoA safe-adopt 的 `gated-wide-single-bank-safe-adopt`，以及新增的 `gated-wide-single-bank-family-safe-adopt`。后者只放宽 wide / single-MF basin-entry center 的 DoA step guard，用于验证 seed 256 这类被统一阈值拒绝的好 candidate 是否可安全采纳。已验证无增益或不稳的 `wide-only / single-mf-only / unsafe gated / blanket` 默认旁路。如需复查旧路径，可显式打开 `includeLegacyFailedBanks`。
 - joint bank 口径：DoA-fdRef joint candidate 仍保留为 opt-in 诊断分支，只有在文件头打开 `includeJointSafeAdoptBank` 时才生成 joint grid 并输出 `gated-wide-single-joint-bank-safe-adopt`，避免默认增加候选和表格噪声。
 - safe adoption 口径：safe-adopt 只在 replay 层增加 truth-free adoption guard，要求 candidate 相对 default 有 objective gain、non-ref coherence 恢复、DoA step 和 fdRef step 均不超过头部阈值；family-safe 仅对 wide / single-MF center 使用更宽的 `familySafeAdoptMaxAbsDoaStepDeg`，default/final-centered candidate 仍用严格阈值。不改变 estimator、flow 或 objective。
@@ -148,6 +157,7 @@ clear; close all; clc;
 - 选帧与初始化口径：沿用 truth-centered half-tooth `fdRef` 范围，不做 subset tooth selection，不改变默认 flow；truth 只用于 offline miss label 与 truth-DoA oracle 上限。
 - 候选口径：比较 default final、final-centered small DoA polish、wide-centered DoA-only basin-entry、single-MF-centered DoA-only basin-entry、best implementable 与 truth-DoA oracle；final-centered polish 只作为 replay probe，不进入 estimator / flow 默认路径。
 - 主要输出：`ordinarySeedTable`、`ordinaryCandidateTable`、`ordinaryAggregateTable`、`ordinaryFamilyAggregateTable`、原有 method / gated rescue 辅助表、runtime timing summary，以及 ordinary miss 角误差 / gain / coherence 对比图。
+- 工程外壳：该脚本已按第一批 replayTemplate 化口径接入 common header、checkpoint option / summary、长表预览与 `notifyMfReplayStatus` 通知壳；run-key signature 与 ordinary metric lines 仍保留在本地，避免改变 checkpoint 兼容性和结果解释口径。
 - Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存后发送 HTML `DONE` 通知，在 batch / storage 失败时发送 `FAILED` 通知并继续 `rethrow`；通知只包含脚本名、耗时、seed、snapshot 与少量 ordinary summary，发送失败只 warning。
 - 当前结论：新增为 controlled in-tooth DoA 主线的 ordinary-miss 分叉诊断入口；用于判断剩余 `>0.002 deg` miss 是否可由 small polish 或 basin-entry truth-free 候选解释，不据此直接放宽 hard-collapse rescue gate。
 
@@ -157,7 +167,7 @@ clear; close all; clc;
 - 选帧与初始化口径：沿用 truth-centered half-tooth `fdRef` 范围，不做 subset tooth selection，不改变默认 flow；truth 只用于 offline miss label、rescue / damage 评价和 truth-DoA oracle 上限。
 - gate 口径：policy sweep 只使用 default / wide candidate 的 objective gain、non-ref coherence、DoA step 上下界、fdRef / fdRate step 与 default non-collapse 状态；不读取 truth tooth、truth DoA、truth `fdRef/fdRate` 或人工 case label。当前默认细扫 objective gain `0~200`，并增加 default-vs-wide DoA-disagreement 下限，用于观察能否压低 easy trigger 同时保留 ordinary rescue。
 - 推荐 policy 口径：当前 replay-level 首选 ordinary-wide gate 固定为 `objGain >= 10`、`0.001 <= |wide DoA step| <= 0.004 deg`、wide-only、default non-collapse、candidate coherence `>=0.95`。脚本会额外生成 `wideGateRecommendedPolicyTable`，按 full ordinary rescue、zero damage、低 easy trigger、低整体 tail 的顺序自动选择最稳候选，避免命令行和 Telegram 误选第一个过宽 pass policy。
-- 旁路口径：该脚本已按 `template/replayTemplate.m` 的外壳整理为 common header、checkpoint/snapshot、summary 与 `notifyMfReplayStatus` 通知壳；默认旁路已证伪或非本入口主线的 `final-small-polish` probe、`single-MF` ordinary basin-entry probe 与 hard-collapse auxiliary tables。若要复核旧负结果，可在头部显式打开 `includeFinalSmallPolishProbe`、`includeSingleMfBasinEntryProbe` 或 `includeHardCollapseAuxTables`。
+- 旁路口径：该脚本已按第一批 replayTemplate 化口径整理为 common header、checkpoint option / summary、snapshot、长表预览与 `notifyMfReplayStatus` 通知壳；默认旁路已证伪或非本入口主线的 `final-small-polish` probe、`single-MF` ordinary basin-entry probe 与 hard-collapse auxiliary tables。若要复核旧负结果，可在头部显式打开 `includeFinalSmallPolishProbe`、`includeSingleMfBasinEntryProbe` 或 `includeHardCollapseAuxTables`。run-key signature 与 wide-gate metric lines 仍保留在本地，避免改变 checkpoint 兼容性和结果解释口径。
 - 主要输出：继承 ordinary replay 的 `ordinarySeedTable`、`ordinaryCandidateTable`、`ordinaryAggregateTable`，并新增 `wideGateFeatureTable`、`wideGateDecisionTable`、`wideGatePolicyTable`、`wideGateRecommendedPolicyTable`，用于比较不同 objective-gain / DoA-step lower/upper guard 下的 ordinary rescue、easy trigger / damage、fd-negative damage 和 overall tail。默认旁路的 legacy probe 不再出现在 ordinary family aggregate 中。
 - Telegram 通知：头部 `notifyTelegramEnable=true` 时在 snapshot 保存后通过 `notifyMfReplayStatus` 发送 HTML `DONE` 通知，在 batch / storage 失败时发送 `FAILED` 通知并继续 `rethrow`；通知只包含脚本名、耗时、seed、snapshot、ordinary summary、自动选择的 wide-gate policy 摘要及 easy trigger/damage 口径，发送失败只 warning。
 - 当前结论：作为 `replayMfInToothOrdinaryAngleMissDiagnose` 的后续 gate/adoption 诊断入口；它只判断 `wide` candidate 是否存在可用 truth-free proxy。即使某个 policy 标为 `preferred-candidate` 或 `candidate`，也只是 replay-level gate 候选，不据此直接打开 blanket wide 或修改 estimator 主核。

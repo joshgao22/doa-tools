@@ -5,8 +5,9 @@
 % in-tooth upper bound after wrong-tooth selection is factored out.
 %
 % Usage: edit the configuration block below, then run this script directly.
-% The script leaves replayData in the workspace; saveSnapshot=true saves only
-% replayData via saveExpSnapshot.
+% The script leaves replayData in the workspace; checkpointEnable=true resumes
+% interrupted repeat runs from per-repeat files under the repo-root tmp.
+% saveSnapshot=true saves only replayData via saveExpSnapshot. Telegram notice is best-effort only.
 
 clear; close all; clc;
 
@@ -17,6 +18,7 @@ snrDb = 10;                         % Snapshot SNR used to generate rx signals.
 baseSeed = 253;                     % First seed of the small replay batch.
 numRepeat = 50;                     % Number of consecutive seeds to replay.
 saveSnapshot = true;                % true saves the lightweight replayData only.
+notifyTelegramEnable = true;        % true sends best-effort HTML Telegram notice on completion or failure.
 optVerbose = false;                 % true enables compact estimator / branch trace.
 oracleFdHalfToothFraction = 0.49;   % Half-width fraction of the 1/T_f tooth step.
 oracleFdRateHalfWidthHzPerSec = 1000; % Local truth-centered fdRate half-width for oracle-rate variants.
@@ -24,10 +26,18 @@ staticLocalDoaHalfWidthDeg = [0.002; 0.002]; % Local DoA box around the static M
 staticWideDoaHalfWidthDeg = [0.010; 0.010];  % Wider same-tooth DoA box for stress comparison.
 truthLocalDoaHalfWidthDeg = [0.002; 0.002];  % Local DoA box around the truth DoA seed.
 histogramBinCount = 12;             % Bin count for compact distribution plots.
+checkpointEnable = true;            % true enables per-repeat checkpoint/resume under repo-root tmp/.
 
 seedList = baseSeed + (0:(numRepeat - 1));
 seedList = reshape(double(seedList), [], 1);
 numRepeat = numel(seedList);
+runTic = tic;
+replayData = struct();
+config = struct();
+checkpointRunDir = "";
+runState = struct();
+
+try
 
 %% Build context and flow options
 config = struct();
@@ -36,7 +46,11 @@ config.baseSeed = baseSeed;
 config.numRepeat = numRepeat;
 config.seedList = seedList;
 config.saveSnapshot = saveSnapshot;
+config.notifyTelegramEnable = notifyTelegramEnable;
 config.optVerbose = optVerbose;
+config.checkpointEnable = checkpointEnable;
+config.checkpointResume = true;
+config.checkpointCleanupOnSuccess = true;
 config.oracleFdHalfToothFraction = oracleFdHalfToothFraction;
 config.oracleFdRateHalfWidthHzPerSec = oracleFdRateHalfWidthHzPerSec;
 config.staticLocalDoaHalfWidthDeg = staticLocalDoaHalfWidthDeg(:);
@@ -44,14 +58,13 @@ config.staticWideDoaHalfWidthDeg = staticWideDoaHalfWidthDeg(:);
 config.truthLocalDoaHalfWidthDeg = truthLocalDoaHalfWidthDeg(:);
 config.histogramBinCount = histogramBinCount;
 
-fprintf('Running %s ...\n', char(replayName));
-fprintf('  repeats                         : %d\n', config.numRepeat);
-fprintf('  snr (dB)                        : %.2f\n', config.snrDb);
-fprintf('  base seed                       : %d\n', config.baseSeed);
-fprintf('  repeat mode                     : %s\n', 'parfor-auto');
-fprintf('  save snapshot                   : %d\n', config.saveSnapshot);
-fprintf('  fd oracle half-tooth fraction   : %.3f\n', config.oracleFdHalfToothFraction);
-fprintf('  fdRate oracle half-width        : %.2f Hz/s\n', config.oracleFdRateHalfWidthHzPerSec);
+checkpointOpt = localBuildCheckpointOpt(replayName, config);
+if config.checkpointEnable
+  checkpointRunDir = string(checkpointOpt.runDir);
+  config.checkpointRunDir = checkpointRunDir;
+end
+printMfReplayHeader(char(replayName), config, char(checkpointRunDir));
+localPrintOracleReplayConfig(config);
 
 parallelOpt = struct( ...
   'enableSubsetEvalParfor', false, ...
@@ -77,28 +90,12 @@ context = localDisableSubsetBankForOracle(context);
 fprintf('[%s] Shared dynamic context built.\n', char(datetime('now', 'Format', 'HH:mm:ss')));
 
 %% Run replay batch
-numTask = config.numRepeat;
-repeatCell = cell(numTask, 1);
-useParfor = localCanUseParfor() && numTask > 1;
-tracker = localCreateProgressTracker(sprintf('%s repeat batch (%s)', char(replayName), localModeText(useParfor)), numTask, useParfor);
 try
-  if useParfor
-    progressQueue = tracker.queue;
-    parfor iRepeat = 1:numTask
-      repeatCell{iRepeat} = localRunOneRepeat(iRepeat, config.seedList(iRepeat), context, flowOpt, methodList, config);
-      if ~isempty(progressQueue)
-        send(progressQueue, iRepeat);
-      end
-    end
-  else
-    for iRepeat = 1:numTask
-      repeatCell{iRepeat} = localRunOneRepeat(iRepeat, config.seedList(iRepeat), context, flowOpt, methodList, config);
-      localAdvanceProgressTracker(tracker);
-    end
-  end
-  localCloseProgressTracker(tracker);
+  [repeatCell, runState] = localRunRepeatBatch(context, flowOpt, methodList, config, replayName);
 catch ME
-  localCloseProgressTracker(tracker);
+  if strlength(string(checkpointRunDir)) > 0
+    fprintf('Replay failed. Checkpoint artifacts kept at: %s\n', char(checkpointRunDir));
+  end
   rethrow(ME);
 end
 
@@ -131,6 +128,9 @@ replayData.timingAggregateTable = timingAggregateTable;
 replayData.representative = representative;
 replayData.plotData = plotData;
 replayData.methodList = localStripMethodList(methodList);
+if config.checkpointEnable
+  replayData.checkpointSummary = buildMfReplayCheckpointSummary(runState);
+end
 
 if config.saveSnapshot
   saveOpt = struct('includeVars', {{'replayData'}}, ...
@@ -138,6 +138,40 @@ if config.saveSnapshot
   replayData.snapshotFile = saveExpSnapshot(char(replayName), saveOpt);
 else
   replayData.snapshotFile = "";
+end
+
+if config.checkpointEnable
+  if config.checkpointCleanupOnSuccess
+    replayData.checkpointSummary.cleanupReport = cleanupPerfTaskGridCheckpoint(runState, struct('verbose', false));
+    replayData.checkpointSummary.cleanedOnSuccess = true;
+  else
+    replayData.checkpointSummary.cleanedOnSuccess = false;
+  end
+end
+replayData.elapsedSec = toc(runTic);
+
+notifyMfReplayStatus(struct( ...
+  'replayName', replayName, ...
+  'statusText', "DONE", ...
+  'config', config, ...
+  'snapshotFile', replayData.snapshotFile, ...
+  'checkpointDir', checkpointRunDir, ...
+  'elapsedSec', replayData.elapsedSec, ...
+  'metricLineList', localBuildTelegramMetricLines(replayData), ...
+  'commentLineList', "In-tooth fd-range oracle replay completed."));
+catch ME
+  if strlength(string(checkpointRunDir)) > 0
+    fprintf('Replay failed. Checkpoint artifacts kept at: %s\n', char(checkpointRunDir));
+  end
+  notifyMfReplayStatus(struct( ...
+    'replayName', replayName, ...
+    'statusText', "FAILED", ...
+    'config', config, ...
+    'checkpointDir', checkpointRunDir, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME, ...
+    'commentLineList', "In-tooth fd-range oracle replay failed."));
+  rethrow(ME);
 end
 
 %% Summary output and plotting
@@ -175,11 +209,9 @@ else
 end
 representative = replayData.representative;
 
-fprintf('Running replayMfInToothFdRangeOracle ...\n');
-fprintf('  repeats                         : %d\n', numel(unique(methodTable.taskSeed)));
-fprintf('  methods                         : %d\n', numel(unique(methodTable.methodLabel)));
-fprintf('  snr (dB)                        : %.2f\n', replayData.config.snrDb);
-fprintf('  base seed                       : %d\n', replayData.config.baseSeed);
+printMfReplayHeader(char(replayData.replayName), replayData.config, localGetFieldOrDefault(replayData.config, 'checkpointRunDir', ""));
+localPrintOracleReplayConfig(replayData.config);
+fprintf('  %-32s : %d\n', 'methods', numel(unique(methodTable.methodLabel)));
 fprintf('\n========== Oracle method aggregate ==========\n');
 disp(aggregateTable);
 fprintf('\n========== MS-MF wide-vs-oracle pair compare ==========\n');
@@ -191,7 +223,7 @@ if ~isempty(timingAggregateTable)
   disp(timingAggregateTable);
 end
 fprintf('\n========== Oracle range summary ==========\n');
-localDispTablePreview(rangeTable, 4);
+dispMfReplayTablePreview(rangeTable, 4);
 fprintf('\n========== Single-vs-multi in-tooth tail summary ==========\n');
 fprintf('  per-seed rows stored            : %d\n', height(singleMultiCompareTable));
 fprintf('  MS-MF better angle rate         : %.3f\n', mean(double(singleMultiCompareTable.multiBetterAngle), 'omitnan'));
@@ -205,6 +237,169 @@ fprintf('  representative fdRef err        : %.6g Hz\n', representative.fdRefErr
 localPlotReplay(replayData.plotData);
 
 %% Local helpers
+
+function checkpointOpt = localBuildCheckpointOpt(replayName, config)
+%LOCALBUILDCHECKPOINTOPT Build stable per-repeat checkpoint options for this replay.
+
+checkpointMeta = struct( ...
+  'snrDb', config.snrDb, ...
+  'seedList', reshape(config.seedList, 1, []), ...
+  'oracleFdHalfToothFraction', config.oracleFdHalfToothFraction, ...
+  'oracleFdRateHalfWidthHzPerSec', config.oracleFdRateHalfWidthHzPerSec, ...
+  'staticLocalDoaHalfWidthDeg', reshape(config.staticLocalDoaHalfWidthDeg, 1, []), ...
+  'staticWideDoaHalfWidthDeg', reshape(config.staticWideDoaHalfWidthDeg, 1, []), ...
+  'truthLocalDoaHalfWidthDeg', reshape(config.truthLocalDoaHalfWidthDeg, 1, []));
+checkpointOpt = buildMfReplayCheckpointOpt(replayName, config, struct( ...
+  'runKey', localBuildCheckpointRunKey(config), ...
+  'meta', checkpointMeta));
+end
+
+function runKey = localBuildCheckpointRunKey(config)
+%LOCALBUILDCHECKPOINTRUNKEY Build a checkpoint key that changes with oracle ranges.
+
+seedList = reshape(double(config.seedList), 1, []);
+runKey = string(sprintf('seed%dto%d_rep%d_snr%.2f_fdfrac%.3f_fdrate%.0f_local%.4f_wide%.4f_truth%.4f', ...
+  seedList(1), seedList(end), numel(seedList), config.snrDb, ...
+  config.oracleFdHalfToothFraction, config.oracleFdRateHalfWidthHzPerSec, ...
+  max(abs(config.staticLocalDoaHalfWidthDeg)), max(abs(config.staticWideDoaHalfWidthDeg)), ...
+  max(abs(config.truthLocalDoaHalfWidthDeg))));
+runKey = replace(runKey, '.', 'p');
+runKey = replace(runKey, '-', 'm');
+end
+
+function localPrintOracleReplayConfig(config)
+%LOCALPRINTORACLEREPLAYCONFIG Print replay-specific oracle settings.
+
+fprintf('  %-32s : %.3f\n', 'fd oracle half-tooth fraction', config.oracleFdHalfToothFraction);
+fprintf('  %-32s : %.2f Hz/s\n', 'fdRate oracle half-width', config.oracleFdRateHalfWidthHzPerSec);
+fprintf('  %-32s : %s deg\n', 'static local DoA half-width', mat2str(config.staticLocalDoaHalfWidthDeg(:).'));
+fprintf('  %-32s : %s deg\n', 'static wide DoA half-width', mat2str(config.staticWideDoaHalfWidthDeg(:).'));
+fprintf('  %-32s : %s deg\n', 'truth DoA half-width', mat2str(config.truthLocalDoaHalfWidthDeg(:).'));
+end
+
+function [repeatCell, runState] = localRunRepeatBatch(context, flowOpt, methodList, config, replayName)
+%LOCALRUNREPEATBATCH Run oracle repeats with optional checkpointing.
+
+numTask = config.numRepeat;
+useParfor = localCanUseParfor() && numTask > 1;
+tracker = localCreateProgressTracker(sprintf('%s repeat batch (%s)', char(replayName), localModeText(useParfor)), numTask, useParfor);
+runState = struct();
+try
+  if localCheckpointEnabled(config)
+    checkpointOpt = localBuildCheckpointOpt(replayName, config);
+    checkpointOpt.useParfor = useParfor;
+    numDoneTask = localCountCheckpointTaskFile(fullfile(checkpointOpt.runDir, 'task'), numTask);
+    localAdvanceProgressByStep(tracker, numDoneTask);
+    taskGrid = localBuildRepeatTaskGrid(config.seedList);
+    sharedData = struct('context', context, 'flowOpt', flowOpt, 'methodList', methodList, 'config', config);
+    checkpointRunnerOpt = localBuildCheckpointRunnerOpt(checkpointOpt, tracker);
+    runState = runPerfTaskGridWithCheckpoint(taskGrid, sharedData, @localCheckpointTaskRunner, checkpointRunnerOpt);
+    repeatCell = runState.resultCell;
+  elseif useParfor
+    repeatCell = cell(numTask, 1);
+    progressQueue = tracker.queue;
+    seedList = config.seedList;
+    parfor iRepeat = 1:numTask
+      repeatCell{iRepeat} = localRunOneRepeat(iRepeat, seedList(iRepeat), context, flowOpt, methodList, config);
+      if ~isempty(progressQueue)
+        send(progressQueue, iRepeat);
+      end
+    end
+  else
+    repeatCell = cell(numTask, 1);
+    for iRepeat = 1:numTask
+      repeatCell{iRepeat} = localRunOneRepeat(iRepeat, config.seedList(iRepeat), context, flowOpt, methodList, config);
+      localAdvanceProgressTracker(tracker);
+    end
+  end
+  localCloseProgressTracker(tracker);
+catch ME
+  localCloseProgressTracker(tracker);
+  rethrow(ME);
+end
+end
+
+function tf = localCheckpointEnabled(config)
+%LOCALCHECKPOINTENABLED Return true when per-repeat checkpointing is requested.
+
+tf = logical(localGetFieldOrDefault(config, 'checkpointEnable', false));
+end
+
+function taskGrid = localBuildRepeatTaskGrid(seedList)
+%LOCALBUILDREPEATTASKGRID Build one checkpoint task per repeat seed.
+
+numTask = numel(seedList);
+taskGrid = repmat(struct('taskIndex', 0, 'repeatIndex', 0, 'taskSeed', 0), numTask, 1);
+for iTask = 1:numTask
+  taskGrid(iTask).taskIndex = iTask;
+  taskGrid(iTask).repeatIndex = iTask;
+  taskGrid(iTask).taskSeed = seedList(iTask);
+end
+end
+
+function repeatOut = localCheckpointTaskRunner(taskInfo, sharedData)
+%LOCALCHECKPOINTTASKRUNNER Run one checkpointed oracle repeat task.
+
+repeatOut = localRunOneRepeat(taskInfo.repeatIndex, taskInfo.taskSeed, ...
+  sharedData.context, sharedData.flowOpt, sharedData.methodList, sharedData.config);
+end
+
+function checkpointRunnerOpt = localBuildCheckpointRunnerOpt(checkpointOpt, tracker)
+%LOCALBUILDCHECKPOINTRUNNEROPT Keep only fields accepted by checkpoint runner.
+
+checkpointRunnerOpt = struct();
+checkpointRunnerOpt.runName = checkpointOpt.runName;
+checkpointRunnerOpt.runKey = checkpointOpt.runKey;
+checkpointRunnerOpt.outputRoot = checkpointOpt.outputRoot;
+checkpointRunnerOpt.useParfor = checkpointOpt.useParfor;
+checkpointRunnerOpt.resume = checkpointOpt.resume;
+checkpointRunnerOpt.meta = checkpointOpt.meta;
+checkpointRunnerOpt.progressFcn = @(step) localAdvanceProgressByStep(tracker, step);
+checkpointRunnerOpt.cleanupOnSuccess = false;
+checkpointRunnerOpt.cleanupOpt = struct();
+end
+
+function numDone = localCountCheckpointTaskFile(taskDir, numTask)
+%LOCALCOUNTCHECKPOINTTASKFILE Count existing completed checkpoint task files.
+
+numDone = 0;
+if ~isfolder(taskDir)
+  return;
+end
+for iTask = 1:numTask
+  if isfile(fullfile(taskDir, sprintf('task_%06d.mat', iTask)))
+    numDone = numDone + 1;
+  end
+end
+end
+
+function localAdvanceProgressByStep(tracker, step)
+%LOCALADVANCEPROGRESSBYSTEP Advance progressbar by a checkpoint runner step count.
+
+if ~tracker.active
+  return;
+end
+for iStep = 1:step
+  progressbar('advance');
+end
+end
+
+function metricLineList = localBuildTelegramMetricLines(replayData)
+%LOCALBUILDTELEGRAMMETRICLINES Build compact HTML metric lines for notification.
+
+metricLineList = strings(0, 1);
+if isfield(replayData, 'aggregateTable') && ~isempty(replayData.aggregateTable)
+  metricLineList(end + 1, 1) = sprintf('• method rows: <code>%d</code>', height(replayData.aggregateTable));
+end
+if isfield(replayData, 'singleMultiCompareTable') && ~isempty(replayData.singleMultiCompareTable)
+  tbl = replayData.singleMultiCompareTable;
+  metricLineList(end + 1, 1) = sprintf('• MS-MF better angle rate: <code>%.3f</code>', mean(double(tbl.multiBetterAngle), 'omitnan'));
+  metricLineList(end + 1, 1) = sprintf('• median angle gain: <code>%.6g deg</code>', median(tbl.angleGainDeg, 'omitnan'));
+end
+if isfield(replayData, 'tailCaseTable') && ~isempty(replayData.tailCaseTable)
+  metricLineList(end + 1, 1) = sprintf('• tail cases stored: <code>%d</code>', height(replayData.tailCaseTable));
+end
+end
 
 function context = localDisableSubsetBankForOracle(context)
 %LOCALDISABLESUBSETBANKFORORACLE Skip curated subset fixtures in this oracle replay.
@@ -896,22 +1091,6 @@ plotData.distributionTable = methodTable(coreMask, {'taskSeed', 'methodLabel', '
 plotData.singleMultiCompareTable = singleMultiCompareTable;
 end
 
-
-function localDispTablePreview(dataTable, edgeCount)
-%LOCALDISPTABLEPREVIEW Display short first/last preview for long tables.
-
-if nargin < 2 || isempty(edgeCount)
-  edgeCount = 4;
-end
-if isempty(dataTable) || height(dataTable) <= 2 * edgeCount
-  disp(dataTable);
-  return;
-end
-fprintf('  showing first %d and last %d of %d rows\n', edgeCount, edgeCount, height(dataTable));
-disp(dataTable(1:edgeCount, :));
-fprintf('  ...\n');
-disp(dataTable((height(dataTable) - edgeCount + 1):height(dataTable), :));
-end
 
 function localPlotReplay(plotData)
 %LOCALPLOTREPLAY Draw compact CDF and tail diagnostics for the replay.

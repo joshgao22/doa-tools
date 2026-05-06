@@ -8,7 +8,7 @@
 % Usage: edit the configuration block below, then run this script directly.
 % The script leaves replayData in the workspace; checkpointEnable=true resumes
 % interrupted scout/envelope repeats from per-repeat files under repo-root tmp.
-% saveSnapshot=true saves only replayData via saveExpSnapshot.
+% saveSnapshot=true saves only replayData via saveExpSnapshot. Telegram notice is best-effort only.
 
 clear; close all; clc;
 
@@ -27,6 +27,7 @@ maxEasyNegativeSeedCount = 2;       % Maximum easy negative controls kept for da
 maxFdNegativeSeedCount = 2;         % Maximum fd-not-healthy controls kept for damage checks.
 contextBaseSeed = baseSeed;         % Keep the source oracle context fixed while replaying tail seeds.
 saveSnapshot = true;                % true saves the lightweight replayData only.
+notifyTelegramEnable = true;        % true sends best-effort HTML Telegram notice on completion or failure.
 optVerbose = false;                 % true enables compact estimator / branch trace.
 checkpointEnable = true;             % true enables per-repeat checkpoint/resume under repo-root tmp/.
 checkpointCleanupOnSuccess = true;   % true removes checkpoint files after replayData is saved.
@@ -61,6 +62,13 @@ else
   seedList = searchSeedList;
 end
 numCase = numel(seedList);
+runTic = tic;
+replayData = struct();
+config = struct();
+checkpointStateList = repmat(struct('runName', "", 'runKey', "", 'runDir', "", ...
+  'numTask', 0, 'numDone', 0, 'isComplete', false, 'cleanedOnSuccess', false), 0, 1);
+
+try
 
 %% Build context and flow options
 config = struct();
@@ -79,6 +87,7 @@ config.seedList = seedList;
 config.numCase = numCase;
 config.contextBaseSeed = contextBaseSeed;
 config.saveSnapshot = saveSnapshot;
+config.notifyTelegramEnable = notifyTelegramEnable;
 config.optVerbose = optVerbose;
 config.checkpointEnable = checkpointEnable;
 config.checkpointResume = true;
@@ -106,34 +115,8 @@ config.angleHitThresholdDeg = angleHitThresholdDeg;
 config.gatedRescueCoherenceThreshold = gatedRescueCoherenceThreshold;
 config.gatedRescuePhaseResidThresholdRad = gatedRescuePhaseResidThresholdRad;
 
-fprintf('Running %s ...\n', char(replayName));
-fprintf('  seed mode                        : %s\n', char(config.seedMode));
-if config.seedMode == "base-seed-search"
-  fprintf('  scout seeds                      : %d:%d (%d seeds)\n', ...
-    config.searchSeedList(1), config.searchSeedList(end), numel(config.searchSeedList));
-else
-  fprintf('  envelope seeds                   : %s\n', mat2str(config.seedList(:).'));
-end
-fprintf('  seed count                       : %d\n', config.numCase);
-fprintf('  context base seed                : %d\n', config.contextBaseSeed);
-fprintf('  snr (dB)                         : %.2f\n', config.snrDb);
-fprintf('  repeat mode                      : %s\n', 'parfor-auto');
-fprintf('  save snapshot                    : %d\n', config.saveSnapshot);
-fprintf('  checkpoint                       : %d\n', config.checkpointEnable);
-fprintf('  fd oracle half-tooth fraction    : %.3f\n', config.oracleFdHalfToothFraction);
-fprintf('  fdRate oracle half-width         : %.2f Hz/s\n', config.oracleFdRateHalfWidthHzPerSec);
-fprintf('  in-tooth DoA initialization      : static/truth only, no curated subset seed\n');
-fprintf('  candidate probe DoA steps        : %s deg\n', mat2str(config.probeDoaStepDegList(:).'));
-fprintf('  local joint fdRef steps          : %s Hz\n', mat2str(config.probeFdRefStepHzList(:).'));
-fprintf('  line probe alpha values          : %s\n', mat2str(config.probeLineAlphaList(:).'));
-fprintf('  implementable center DoA steps   : %s deg\n', mat2str(config.probeCoarseDoaStepDegList(:).'));
-fprintf('  envelope DoA offsets            : %s deg\n', mat2str(config.ridgeDoaOffsetDegList(:).'));
-fprintf('  envelope fdRef offsets          : %s Hz\n', mat2str(config.ridgeFdRefOffsetHzList(:).'));
-fprintf('  envelope fdRate offsets         : %s Hz/s\n', mat2str(config.ridgeFdRateOffsetHzPerSecList(:).'));
-fprintf('  center-line alpha values        : %s\n', mat2str(config.ridgeLineAlphaList(:).'));
-fprintf('  gated rescue coherence threshold : %.3f\n', config.gatedRescueCoherenceThreshold);
-fprintf('  angle hit threshold              : %.4f deg\n', config.angleHitThresholdDeg);
-fprintf('  gated rescue phase threshold     : %.3f rad\n', config.gatedRescuePhaseResidThresholdRad);
+printMfReplayHeader(char(replayName), config, "");
+localPrintEnvelopeReplayConfig(config);
 parallelOpt = struct( ...
   'enableSubsetEvalParfor', false, ...
   'minSubsetEvalParfor', 4, ...
@@ -162,7 +145,6 @@ scoutRepeatCell = {};
 scoutMethodTable = table();
 scoutTailDiagnosisTable = table();
 selectedEnvelopeSeedTable = table();
-checkpointStateList = repmat(localEmptyCheckpointState(), 0, 1);
 try
   if config.seedMode == "base-seed-search"
     scoutConfig = config;
@@ -266,7 +248,7 @@ replayData.timingTable = timingTable;
 replayData.timingAggregateTable = timingAggregateTable;
 replayData.plotData = plotData;
 if config.checkpointEnable
-  replayData.checkpointSummary = localBuildCheckpointSummary(checkpointStateList);
+  replayData.checkpointSummary = buildMfReplayCheckpointSummary(checkpointStateList);
 end
 replayData.methodList = localStripMethodList(methodList);
 
@@ -283,6 +265,33 @@ if config.checkpointEnable && config.checkpointCleanupOnSuccess
   replayData.checkpointSummary.cleanedOnSuccess = true;
 elseif config.checkpointEnable
   replayData.checkpointSummary.cleanedOnSuccess = false;
+end
+replayData.elapsedSec = toc(runTic);
+
+notifyMfReplayStatus(struct( ...
+  'replayName', replayName, ...
+  'statusText', "DONE", ...
+  'config', config, ...
+  'snapshotFile', replayData.snapshotFile, ...
+  'checkpointDir', localCheckpointSummaryDirText(localGetFieldOrDefault(replayData, 'checkpointSummary', struct())), ...
+  'elapsedSec', replayData.elapsedSec, ...
+  'metricLineList', localBuildTelegramMetricLines(replayData), ...
+  'commentLineList', "In-tooth DoA-fd range envelope replay completed."));
+catch ME
+  if exist('checkpointStateList', 'var') && ~isempty(checkpointStateList)
+    localPrintCheckpointFailure(checkpointStateList, replayName, config);
+  elseif exist('config', 'var') && isstruct(config) && isfield(config, 'checkpointEnable') && config.checkpointEnable
+    localPrintCheckpointFailure(repmat(localEmptyCheckpointState(), 0, 1), replayName, config);
+  end
+  notifyMfReplayStatus(struct( ...
+    'replayName', replayName, ...
+    'statusText', "FAILED", ...
+    'config', config, ...
+    'checkpointDir', localCheckpointStateDirText(checkpointStateList), ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME, ...
+    'commentLineList', "In-tooth DoA-fd range envelope replay failed."));
+  rethrow(ME);
 end
 
 %% Summary output and plotting
@@ -364,61 +373,23 @@ else
   timingAggregateTable = localBuildTimingAggregateTable(replayData.timingTable);
 end
 
-fprintf('Running replayMfInToothDoaFdRangeEnvelope ...\n');
-fprintf('  seed count                       : %d\n', numel(unique(methodTable.taskSeed)));
-if isfield(replayData.config, 'contextBaseSeed')
-  fprintf('  context base seed                : %d\n', replayData.config.contextBaseSeed);
-end
-fprintf('  methods                          : %d\n', numel(unique(methodTable.methodLabel)));
-fprintf('  snr (dB)                         : %.2f\n', replayData.config.snrDb);
-if isfield(replayData.config, 'checkpointEnable')
-  fprintf('  checkpoint                       : %d\n', replayData.config.checkpointEnable);
-end
+printMfReplayHeader(char(replayData.replayName), replayData.config, "");
 if isfield(replayData, 'checkpointSummary') && ~isempty(replayData.checkpointSummary)
   localPrintCheckpointSummary(replayData.checkpointSummary);
 end
-fprintf('  in-tooth DoA initialization      : static/truth only, no curated subset seed\n');
-if isfield(replayData.config, 'probeDoaStepDegList')
-  fprintf('  candidate probe DoA steps        : %s deg\n', mat2str(replayData.config.probeDoaStepDegList(:).'));
-end
-if isfield(replayData.config, 'probeFdRefStepHzList')
-  fprintf('  local joint fdRef steps          : %s Hz\n', mat2str(replayData.config.probeFdRefStepHzList(:).'));
-end
-if isfield(replayData.config, 'probeLineAlphaList')
-  fprintf('  line probe alpha values          : %s\n', mat2str(replayData.config.probeLineAlphaList(:).'));
-end
-if isfield(replayData.config, 'probeCoarseDoaStepDegList')
-  fprintf('  implementable center DoA steps   : %s deg\n', mat2str(replayData.config.probeCoarseDoaStepDegList(:).'));
-end
-if isfield(replayData.config, 'ridgeDoaOffsetDegList')
-  fprintf('  envelope DoA offsets            : %s deg\n', mat2str(replayData.config.ridgeDoaOffsetDegList(:).'));
-end
-if isfield(replayData.config, 'ridgeFdRefOffsetHzList')
-  fprintf('  envelope fdRef offsets          : %s Hz\n', mat2str(replayData.config.ridgeFdRefOffsetHzList(:).'));
-end
-if isfield(replayData.config, 'ridgeFdRateOffsetHzPerSecList')
-  fprintf('  envelope fdRate offsets         : %s Hz/s\n', mat2str(replayData.config.ridgeFdRateOffsetHzPerSecList(:).'));
-end
-if isfield(replayData.config, 'ridgeLineAlphaList')
-  fprintf('  center-line alpha values        : %s\n', mat2str(replayData.config.ridgeLineAlphaList(:).'));
-end
-if isfield(replayData.config, 'gatedRescueCoherenceThreshold')
-  fprintf('  gated rescue coherence threshold : %.3f\n', replayData.config.gatedRescueCoherenceThreshold);
-end
-if isfield(replayData.config, 'gatedRescuePhaseResidThresholdRad')
-  fprintf('  gated rescue phase threshold     : %.3f rad\n', replayData.config.gatedRescuePhaseResidThresholdRad);
-end
+localPrintEnvelopeReplayConfig(replayData.config);
+fprintf('  %-32s : %d\n', 'methods', numel(unique(methodTable.methodLabel)));
 if isfield(replayData, 'selectedEnvelopeSeedTable') && ~isempty(replayData.selectedEnvelopeSeedTable)
   fprintf('\n========== Selected envelope seeds ==========\n');
-  localDispTablePreview(replayData.selectedEnvelopeSeedTable, 8);
+  dispMfReplayTablePreview(replayData.selectedEnvelopeSeedTable, 8);
 end
 if isfield(replayData, 'scoutTailDiagnosisTable') && ~isempty(replayData.scoutTailDiagnosisTable)
   fprintf('\n========== Scout tail classification preview ==========\n');
-  localDispTablePreview(replayData.scoutTailDiagnosisTable, 8);
+  dispMfReplayTablePreview(replayData.scoutTailDiagnosisTable, 8);
 end
 if ~isempty(identityTable)
   fprintf('\n========== Replay identity check ==========\n');
-  localDispTablePreview(identityTable, 4);
+  dispMfReplayTablePreview(identityTable, 4);
 end
 fprintf('\n========== Tail method aggregate ==========\n');
 disp(aggregateTable);
@@ -462,14 +433,14 @@ if ~isempty(rescueBankSummaryTable)
 end
 if ~isempty(candidateProbeTable)
   fprintf('\n========== Tail candidate objective probe preview ==========\n');
-  localDispTablePreview(candidateProbeTable, 8);
+  dispMfReplayTablePreview(candidateProbeTable, 8);
 end
 if ~isempty(timingAggregateTable)
   fprintf('\n========== Runtime timing summary ==========\n');
   disp(timingAggregateTable);
 end
 fprintf('\n========== Oracle range summary ==========\n');
-localDispTablePreview(rangeTable, 4);
+dispMfReplayTablePreview(rangeTable, 4);
 localPlotReplay(replayData.plotData);
 
 %% Local helpers
@@ -537,17 +508,91 @@ function tf = localCheckpointEnabled(config)
 tf = logical(localGetFieldOrDefault(config, 'checkpointEnable', false));
 end
 
+function localPrintEnvelopeReplayConfig(config)
+%LOCALPRINTENVELOPEREPLAYCONFIG Print replay-specific envelope settings.
+
+fprintf('  %-32s : %s\n', 'seed mode', char(config.seedMode));
+if config.seedMode == "base-seed-search"
+  fprintf('  %-32s : %d:%d (%d seeds)\n', 'scout seeds', ...
+    config.searchSeedList(1), config.searchSeedList(end), numel(config.searchSeedList));
+else
+  fprintf('  %-32s : %s\n', 'envelope seeds', mat2str(config.seedList(:).'));
+end
+fprintf('  %-32s : %.3f\n', 'fd oracle half-tooth fraction', config.oracleFdHalfToothFraction);
+fprintf('  %-32s : %.2f Hz/s\n', 'fdRate oracle half-width', config.oracleFdRateHalfWidthHzPerSec);
+fprintf('  %-32s : static/truth only, no curated subset seed\n', 'in-tooth DoA initialization');
+fprintf('  %-32s : %s deg\n', 'candidate probe DoA steps', mat2str(config.probeDoaStepDegList(:).'));
+fprintf('  %-32s : %s Hz\n', 'local joint fdRef steps', mat2str(config.probeFdRefStepHzList(:).'));
+fprintf('  %-32s : %s\n', 'line probe alpha values', mat2str(config.probeLineAlphaList(:).'));
+fprintf('  %-32s : %s deg\n', 'implementable center DoA steps', mat2str(config.probeCoarseDoaStepDegList(:).'));
+fprintf('  %-32s : %s deg\n', 'envelope DoA offsets', mat2str(config.ridgeDoaOffsetDegList(:).'));
+fprintf('  %-32s : %s Hz\n', 'envelope fdRef offsets', mat2str(config.ridgeFdRefOffsetHzList(:).'));
+fprintf('  %-32s : %s Hz/s\n', 'envelope fdRate offsets', mat2str(config.ridgeFdRateOffsetHzPerSecList(:).'));
+fprintf('  %-32s : %s\n', 'center-line alpha values', mat2str(config.ridgeLineAlphaList(:).'));
+fprintf('  %-32s : %.3f\n', 'gated rescue coherence threshold', config.gatedRescueCoherenceThreshold);
+fprintf('  %-32s : %.4f deg\n', 'angle hit threshold', config.angleHitThresholdDeg);
+fprintf('  %-32s : %.3f rad\n', 'gated rescue phase threshold', config.gatedRescuePhaseResidThresholdRad);
+end
+
+function dirText = localCheckpointSummaryDirText(checkpointSummary)
+%LOCALCHECKPOINTSUMMARYDIRTEXT Join multi-stage checkpoint directories for notification.
+
+dirText = "";
+if ~isstruct(checkpointSummary) || ~isfield(checkpointSummary, 'runDir')
+  return;
+end
+runDir = string(checkpointSummary.runDir(:));
+runDir = runDir(strlength(runDir) > 0);
+if ~isempty(runDir)
+  dirText = strjoin(runDir, newline);
+end
+end
+
+function dirText = localCheckpointStateDirText(stateList)
+%LOCALCHECKPOINTSTATEDIRTEXT Join checkpoint directories from run states.
+
+dirText = "";
+if ~isstruct(stateList) || isempty(stateList)
+  return;
+end
+runDir = strings(0, 1);
+for iState = 1:numel(stateList)
+  if isfield(stateList(iState), 'runDir') && strlength(string(stateList(iState).runDir)) > 0
+    runDir(end + 1, 1) = string(stateList(iState).runDir); %#ok<AGROW>
+  end
+end
+if ~isempty(runDir)
+  dirText = strjoin(runDir, newline);
+end
+end
+
+function metricLineList = localBuildTelegramMetricLines(replayData)
+%LOCALBUILDTELEGRAMMETRICLINES Build compact HTML metric lines for notification.
+
+metricLineList = strings(0, 1);
+if isfield(replayData, 'selectedEnvelopeSeedTable') && ~isempty(replayData.selectedEnvelopeSeedTable)
+  metricLineList(end + 1, 1) = sprintf('• selected envelope seeds: <code>%d</code>', height(replayData.selectedEnvelopeSeedTable));
+end
+if isfield(replayData, 'candidateCoverageTable') && ~isempty(replayData.candidateCoverageTable)
+  metricLineList(end + 1, 1) = sprintf('• candidate coverage rows: <code>%d</code>', height(replayData.candidateCoverageTable));
+end
+if isfield(replayData, 'policyRecommendationTable') && ~isempty(replayData.policyRecommendationTable)
+  metricLineList(end + 1, 1) = sprintf('• policy recommendation rows: <code>%d</code>', height(replayData.policyRecommendationTable));
+end
+if isfield(replayData, 'rescueBankAggregateTable') && ~isempty(replayData.rescueBankAggregateTable)
+  metricLineList(end + 1, 1) = sprintf('• rescue aggregate rows: <code>%d</code>', height(replayData.rescueBankAggregateTable));
+end
+end
+
 function checkpointOpt = localBuildCheckpointOpt(replayName, stageLabel, seedList, config, useParfor)
 %LOCALBUILDCHECKPOINTOPT Build checkpoint options for one scout/envelope stage.
 
-checkpointOpt = struct();
-checkpointOpt.runName = string(replayName) + "-" + string(stageLabel);
-checkpointOpt.runKey = localBuildCheckpointRunKey(stageLabel, seedList, config);
-checkpointOpt.outputRoot = fullfile(localGetRepoRoot(), 'tmp');
-checkpointOpt.resume = logical(localGetFieldOrDefault(config, 'checkpointResume', true));
-checkpointOpt.useParfor = useParfor;
-checkpointOpt.meta = localBuildCheckpointMeta(stageLabel, seedList, config);
-checkpointOpt.runDir = fullfile(checkpointOpt.outputRoot, char(checkpointOpt.runName), char(checkpointOpt.runKey));
+runName = string(replayName) + "-" + string(stageLabel);
+checkpointOpt = buildMfReplayCheckpointOpt(replayName, config, struct( ...
+  'runName', runName, ...
+  'runKey', localBuildCheckpointRunKey(stageLabel, seedList, config), ...
+  'meta', localBuildCheckpointMeta(stageLabel, seedList, config), ...
+  'useParfor', useParfor));
 fprintf('  checkpoint %s dir              : %s\n', char(stageLabel), checkpointOpt.runDir);
 end
 
@@ -683,32 +728,6 @@ if isempty(stateList)
   stateList = runState;
 else
   stateList(end + 1, 1) = runState;
-end
-end
-
-function checkpointSummary = localBuildCheckpointSummary(stateList)
-%LOCALBUILDCHECKPOINTSUMMARY Store lightweight checkpoint state for replayData.
-
-checkpointSummary = struct('runName', strings(0, 1), 'runKey', strings(0, 1), ...
-  'runDir', strings(0, 1), 'numTask', zeros(0, 1), 'numDone', zeros(0, 1), ...
-  'isComplete', false(0, 1), 'cleanedOnSuccess', false, 'cleanupReport', struct([]));
-if isempty(stateList)
-  return;
-end
-numState = numel(stateList);
-checkpointSummary.runName = strings(numState, 1);
-checkpointSummary.runKey = strings(numState, 1);
-checkpointSummary.runDir = strings(numState, 1);
-checkpointSummary.numTask = zeros(numState, 1);
-checkpointSummary.numDone = zeros(numState, 1);
-checkpointSummary.isComplete = false(numState, 1);
-for iState = 1:numState
-  checkpointSummary.runName(iState) = string(localGetFieldOrDefault(stateList(iState), 'runName', ""));
-  checkpointSummary.runKey(iState) = string(localGetFieldOrDefault(stateList(iState), 'runKey', ""));
-  checkpointSummary.runDir(iState) = string(localGetFieldOrDefault(stateList(iState), 'runDir', ""));
-  checkpointSummary.numTask(iState) = localGetFieldOrDefault(stateList(iState), 'numTask', 0);
-  checkpointSummary.numDone(iState) = localGetFieldOrDefault(stateList(iState), 'numDone', 0);
-  checkpointSummary.isComplete(iState) = logical(localGetFieldOrDefault(stateList(iState), 'isComplete', false));
 end
 end
 
@@ -3025,22 +3044,6 @@ plotData = struct();
 plotData.methodTable = methodTable(:, {'taskSeed', 'methodLabel', 'angleErrDeg', 'fdRefErrHz', ...
   'fdRateErrHzPerSec', 'toothIdx', 'nonRefCoherenceFloor'});
 plotData.tailDiagnosisTable = tailDiagnosisTable;
-end
-
-function localDispTablePreview(dataTable, edgeCount)
-%LOCALDISPTABLEPREVIEW Display short first/last preview for long tables.
-
-if nargin < 2 || isempty(edgeCount)
-  edgeCount = 4;
-end
-if isempty(dataTable) || height(dataTable) <= 2 * edgeCount
-  disp(dataTable);
-  return;
-end
-fprintf('  showing first %d and last %d of %d rows\n', edgeCount, edgeCount, height(dataTable));
-disp(dataTable(1:edgeCount, :));
-fprintf('  ...\n');
-disp(dataTable((height(dataTable) - edgeCount + 1):height(dataTable), :));
 end
 
 function localPlotReplay(plotData)

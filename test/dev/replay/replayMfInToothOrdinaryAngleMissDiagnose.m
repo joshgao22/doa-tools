@@ -53,6 +53,9 @@ safeAdoptMinObjGain = 0; % Replay-only candidate objective gain requirement.
 safeAdoptMaxAbsFdRefStepHz = 300; % Replay-only fdRef step guard for joint candidates.
 
 runTic = tic;
+replayData = struct();
+config = struct();
+runDir = '';
 
 seedList = baseSeed + (0:(numRepeat - 1));
 seedList = reshape(double(seedList), [], 1);
@@ -103,38 +106,15 @@ config.safeAdoptCoherenceThreshold = safeAdoptCoherenceThreshold;
 config.safeAdoptMinObjGain = safeAdoptMinObjGain;
 config.safeAdoptMaxAbsFdRefStepHz = safeAdoptMaxAbsFdRefStepHz;
 
-fprintf('Running %s ...\n', char(replayName));
-fprintf('  repeats                         : %d\n', config.numRepeat);
-fprintf('  snr (dB)                        : %.2f\n', config.snrDb);
-fprintf('  base seed                       : %d\n', config.baseSeed);
-fprintf('  repeat mode                     : %s\n', 'parfor-auto');
-fprintf('  save snapshot                   : %d\n', config.saveSnapshot);
-fprintf('  telegram notify                 : %d\n', config.notifyTelegramEnable);
-fprintf('  checkpoint                      : %d\n', config.checkpointEnable);
-fprintf('  fd oracle half-tooth fraction   : %.3f\n', config.oracleFdHalfToothFraction);
-fprintf('  fdRate oracle half-width        : %.2f Hz/s\n', config.oracleFdRateHalfWidthHzPerSec);
-fprintf('  basin-entry DoA steps           : %s deg\n', mat2str(config.coarseDoaStepDegList(:).'));
-fprintf('  final polish DoA steps          : %s deg\n', mat2str(config.finalPolishDoaStepDegList(:).'));
-fprintf('  include joint safe-adopt bank   : %d\n', config.includeJointSafeAdoptBank);
-fprintf('  include family safe-adopt bank  : %d\n', config.includeFamilySafeAdoptBank);
-if config.includeJointSafeAdoptBank
-  fprintf('  joint rescue DoA steps          : %s deg\n', mat2str(config.jointDoaStepDegList(:).'));
-  fprintf('  joint rescue fdRef offsets      : %s Hz\n', mat2str(config.jointFdRefOffsetHzList(:).'));
+checkpointOpt = localBuildCheckpointOpt(replayName, config);
+checkpointRunDir = "";
+if config.checkpointEnable
+  checkpointRunDir = checkpointOpt.runDir;
+  config.checkpointRunDir = string(checkpointRunDir);
 end
-fprintf('  include legacy failed banks     : %d\n', config.includeLegacyFailedBanks);
-fprintf('  ordinary coherence threshold    : %.3f\n', config.ordinaryCoherenceMinThreshold);
-fprintf('  gated rescue coherence threshold: %.3f\n', config.gatedRescueCoherenceThreshold);
-if config.gatedRescueGateVersion == "coherence-v1"
-  fprintf('  gated rescue phase gate         : inactive\n');
-else
-  fprintf('  gated rescue phase threshold    : %.3f rad\n', config.gatedRescuePhaseResidThresholdRad);
-end
-fprintf('  gated rescue gate version       : %s\n', char(config.gatedRescueGateVersion));
-fprintf('  safe adopt max DoA step         : %.4f deg\n', config.safeAdoptMaxAbsDoaStepDeg);
-fprintf('  family safe max DoA step        : %.4f deg\n', config.familySafeAdoptMaxAbsDoaStepDeg);
-fprintf('  safe adopt coherence threshold  : %.3f\n', config.safeAdoptCoherenceThreshold);
-fprintf('  safe adopt max fdRef step       : %.2f Hz\n', config.safeAdoptMaxAbsFdRefStepHz);
-fprintf('  angle hit threshold             : %.4f deg\n', config.angleHitThresholdDeg);
+runDir = char(checkpointRunDir);
+printMfReplayHeader(char(replayName), config, runDir);
+localPrintOrdinaryAngleReplayConfig(config);
 
 parallelOpt = struct( ...
   'enableSubsetEvalParfor', false, ...
@@ -154,14 +134,6 @@ flowOpt = buildSimpleDynamicFlowOpt(struct( ...
   'periodicPolishEnableWhenMulti', false));
 methodList = localBuildMethodList(config);
 
-checkpointOpt = localBuildCheckpointOpt(replayName, config);
-checkpointRunDir = "";
-if config.checkpointEnable
-  checkpointRunDir = checkpointOpt.runDir;
-  config.checkpointRunDir = string(checkpointRunDir);
-  fprintf('  checkpoint resume               : %d\n', config.checkpointResume);
-  fprintf('  checkpoint dir                  : %s\n', checkpointRunDir);
-end
 
 fprintf('[%s] Build shared dynamic context.\n', char(datetime('now', 'Format', 'HH:mm:ss')));
 context = buildDynamicDualSatEciContext(contextOpt);
@@ -260,7 +232,7 @@ replayData.timingAggregateTable = timingAggregateTable;
 replayData.plotData = plotData;
 replayData.methodList = localStripMethodList(methodList);
 if config.checkpointEnable
-  replayData.checkpointSummary = localBuildCheckpointSummary(runState);
+  replayData.checkpointSummary = buildMfReplayCheckpointSummary(runState);
 end
 
 if config.saveSnapshot
@@ -280,12 +252,26 @@ if config.checkpointEnable
   end
 end
 
-localNotifyReplayStatus(replayName, "DONE", config, replayData, toc(runTic), []);
+replayData.elapsedSec = toc(runTic);
+notifyMfReplayStatus(struct( ...
+  'replayName', replayName, ...
+  'statusText', "DONE", ...
+  'config', config, ...
+  'snapshotFile', replayData.snapshotFile, ...
+  'elapsedSec', replayData.elapsedSec, ...
+  'metricLineList', localBuildTelegramMetricLines(replayData), ...
+  'commentLineList', "Ordinary angle-miss diagnose completed."));
 catch ME
   if exist('checkpointRunDir', 'var') && strlength(string(checkpointRunDir)) > 0
     fprintf('Replay failed. Checkpoint artifacts kept at: %s\n', checkpointRunDir);
   end
-  localNotifyReplayStatus(replayName, "FAILED", config, struct(), toc(runTic), ME);
+  notifyMfReplayStatus(struct( ...
+    'replayName', replayName, ...
+    'statusText', "FAILED", ...
+    'config', config, ...
+    'checkpointDir', localGetFieldOrDefault(config, 'checkpointRunDir', runDir), ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
   rethrow(ME);
 end
 
@@ -320,11 +306,11 @@ if isfield(replayData, 'ordinaryFamilyAggregateTable') && ~isempty(replayData.or
 end
 if isfield(replayData, 'ordinarySeedTable')
   fprintf('\n========== Ordinary seed classification ==========\n');
-  localDispTablePreview(replayData.ordinarySeedTable, 12);
+  dispMfReplayTablePreview(replayData.ordinarySeedTable, 12);
 end
 if isfield(replayData, 'ordinaryCandidateTable')
   fprintf('\n========== Ordinary candidate table ==========\n');
-  localDispTablePreview(replayData.ordinaryCandidateTable, 16);
+  dispMfReplayTablePreview(replayData.ordinaryCandidateTable, 16);
 end
 fprintf('\n========== In-tooth method aggregate ==========\n');
 disp(replayData.methodAggregateTable);
@@ -343,13 +329,13 @@ if isfield(replayData, 'hardMissSummaryTable') && ~isempty(replayData.hardMissSu
   disp(replayData.hardMissSummaryTable);
 end
 fprintf('\n========== Trigger reason table ==========\n');
-localDispTablePreview(replayData.triggerReasonTable, 8);
+dispMfReplayTablePreview(replayData.triggerReasonTable, 8);
 if isfield(replayData, 'rescueBankDecisionTable')
   fprintf('\n========== Rescue bank decision table ==========\n');
-  localDispTablePreview(replayData.rescueBankDecisionTable, 8);
+  dispMfReplayTablePreview(replayData.rescueBankDecisionTable, 8);
 end
 fprintf('\n========== Gated rescue case table ==========\n');
-localDispTablePreview(replayData.rescueEffectCaseTable, 8);
+dispMfReplayTablePreview(replayData.rescueEffectCaseTable, 8);
 if ~isempty(replayData.timingAggregateTable)
   fprintf('\n========== Runtime timing summary ==========\n');
   disp(replayData.timingAggregateTable);
@@ -358,22 +344,39 @@ localPlotOrdinaryReplay(replayData.plotData);
 
 %% Local helpers
 
+function localPrintOrdinaryAngleReplayConfig(config)
+%LOCALPRINTORDINARYANGLEREPLAYCONFIG Print replay-specific settings.
+
+fprintf('  %-32s : %.3f\n', 'fd oracle half-tooth fraction', config.oracleFdHalfToothFraction);
+fprintf('  %-32s : %.2f Hz/s\n', 'fdRate oracle half-width', config.oracleFdRateHalfWidthHzPerSec);
+fprintf('  %-32s : %s deg\n', 'basin-entry DoA steps', mat2str(config.coarseDoaStepDegList(:).'));
+fprintf('  %-32s : %s deg\n', 'final polish DoA steps', mat2str(config.finalPolishDoaStepDegList(:).'));
+fprintf('  %-32s : %d\n', 'include joint safe-adopt bank', config.includeJointSafeAdoptBank);
+fprintf('  %-32s : %d\n', 'include family safe-adopt bank', config.includeFamilySafeAdoptBank);
+if config.includeJointSafeAdoptBank
+  fprintf('  %-32s : %s deg\n', 'joint rescue DoA steps', mat2str(config.jointDoaStepDegList(:).'));
+  fprintf('  %-32s : %s Hz\n', 'joint rescue fdRef offsets', mat2str(config.jointFdRefOffsetHzList(:).'));
+end
+fprintf('  %-32s : %d\n', 'include legacy failed banks', config.includeLegacyFailedBanks);
+fprintf('  %-32s : %.3f\n', 'ordinary coherence threshold', config.ordinaryCoherenceMinThreshold);
+fprintf('  %-32s : %.3f\n', 'gated rescue coherence threshold', config.gatedRescueCoherenceThreshold);
+if config.gatedRescueGateVersion == "coherence-v1"
+  fprintf('  %-32s : inactive\n', 'gated rescue phase gate');
+else
+  fprintf('  %-32s : %.3f rad\n', 'gated rescue phase threshold', config.gatedRescuePhaseResidThresholdRad);
+end
+fprintf('  %-32s : %s\n', 'gated rescue gate version', char(config.gatedRescueGateVersion));
+fprintf('  %-32s : %.4f deg\n', 'safe adopt max DoA step', config.safeAdoptMaxAbsDoaStepDeg);
+fprintf('  %-32s : %.4f deg\n', 'family safe max DoA step', config.familySafeAdoptMaxAbsDoaStepDeg);
+fprintf('  %-32s : %.3f\n', 'safe adopt coherence threshold', config.safeAdoptCoherenceThreshold);
+fprintf('  %-32s : %.2f Hz\n', 'safe adopt max fdRef step', config.safeAdoptMaxAbsFdRefStepHz);
+fprintf('  %-32s : %.4f deg\n', 'angle hit threshold', config.angleHitThresholdDeg);
+end
+
 function checkpointOpt = localBuildCheckpointOpt(replayName, config)
 %LOCALBUILDCHECKPOINTOPT Build stable per-repeat checkpoint options for this replay.
 
-checkpointOpt = struct('enable', config.checkpointEnable);
-if ~config.checkpointEnable
-  checkpointOpt.runDir = "";
-  return;
-end
-checkpointRunKey = localBuildCheckpointRunKey(config);
-checkpointOutputRoot = fullfile(localGetRepoRoot(), 'tmp');
-checkpointOpt.resume = config.checkpointResume;
-checkpointOpt.runName = string(replayName);
-checkpointOpt.runKey = checkpointRunKey;
-checkpointOpt.outputRoot = checkpointOutputRoot;
-checkpointOpt.runDir = fullfile(checkpointOutputRoot, char(replayName), char(checkpointRunKey));
-checkpointOpt.meta = struct( ...
+checkpointMeta = struct( ...
   'snrDb', config.snrDb, ...
   'seedList', reshape(config.seedList, 1, []), ...
   'gateVersion', char(config.gatedRescueGateVersion), ...
@@ -395,6 +398,9 @@ checkpointOpt.meta = struct( ...
   'includeLegacyFailedBanks', config.includeLegacyFailedBanks, ...
   'oracleFdHalfToothFraction', config.oracleFdHalfToothFraction, ...
   'oracleFdRateHalfWidthHzPerSec', config.oracleFdRateHalfWidthHzPerSec);
+checkpointOpt = buildMfReplayCheckpointOpt(replayName, config, struct( ...
+  'runKey', localBuildCheckpointRunKey(config), ...
+  'meta', checkpointMeta));
 end
 
 function runKey = localBuildCheckpointRunKey(config)
@@ -419,12 +425,6 @@ runKey = replace(runKey, '.', 'p');
 runKey = replace(runKey, '-', 'm');
 end
 
-function repoRoot = localGetRepoRoot()
-%LOCALGETREPOROOT Resolve the repository root from the replay script location.
-
-scriptDir = fileparts(mfilename('fullpath'));
-repoRoot = fileparts(fileparts(fileparts(scriptDir)));
-end
 
 function taskGrid = localBuildRepeatTaskGrid(seedList)
 %LOCALBUILDREPEATTASKGRID Build one checkpoint task per repeat seed.
@@ -472,17 +472,6 @@ for iTask = 1:numTask
     numDone = numDone + 1;
   end
 end
-end
-
-function checkpointSummary = localBuildCheckpointSummary(runState)
-%LOCALBUILDCHECKPOINTSUMMARY Store lightweight checkpoint status only.
-
-checkpointSummary = struct();
-checkpointSummary.runDir = string(localGetFieldOrDefault(runState, 'runDir', ""));
-checkpointSummary.numTask = localGetFieldOrDefault(runState, 'numTask', 0);
-checkpointSummary.numDone = localGetFieldOrDefault(runState, 'numDone', 0);
-checkpointSummary.isComplete = logical(localGetFieldOrDefault(runState, 'isComplete', false));
-checkpointSummary.cleanedOnSuccess = false;
 end
 
 
@@ -2393,21 +2382,6 @@ else
 end
 end
 
-function localDispTablePreview(dataTable, edgeCount)
-%LOCALDISPTABLEPREVIEW Display short first/last preview for long tables.
-
-if nargin < 2 || isempty(edgeCount)
-  edgeCount = 4;
-end
-if isempty(dataTable) || height(dataTable) <= 2 * edgeCount
-  disp(dataTable);
-  return;
-end
-fprintf('  showing first %d and last %d of %d rows\n', edgeCount, edgeCount, height(dataTable));
-disp(dataTable(1:edgeCount, :));
-fprintf('  ...\n');
-disp(dataTable((height(dataTable) - edgeCount + 1):height(dataTable), :));
-end
 
 function tracker = localCreateProgressTracker(titleText, totalCount, useParfor)
 %LOCALCREATEPROGRESSTRACKER Create a client-side progressbar tracker.
@@ -2489,54 +2463,17 @@ end
 end
 
 
-function localNotifyReplayStatus(replayName, statusText, config, replayData, elapsedSec, errorObj)
-%LOCALNOTIFYREPLAYSTATUS Send a compact best-effort Telegram status notice.
+function metricLineList = localBuildTelegramMetricLines(replayData)
+%LOCALBUILDTELEGRAMMETRICLINES Build HTML-ready compact replay metrics.
 
-if ~isfield(config, 'notifyTelegramEnable') || ~logical(config.notifyTelegramEnable)
-  return;
+metricLineList = strings(0, 1);
+metricLineList = [metricLineList; localBuildTelegramOrdinaryLines(replayData)];
+if isfield(replayData, 'config') && isfield(replayData.config, 'seedList')
+  metricLineList(end + 1, 1) = "• seeds: <code>" + string(localHtmlEscape(localFormatSeedList(replayData.config.seedList))) + "</code>";
 end
-try
-  titleText = sprintf('%s %s', char(statusText), char(replayName));
-  messageText = localBuildTelegramHtmlMessage(replayName, statusText, config, replayData, elapsedSec, errorObj);
-  notifyTelegram(titleText, messageText, "HTML");
-catch notifyME
-  warning('Telegram notification wrapper failed: %s', notifyME.message);
+if isfield(replayData, 'checkpointSummary')
+  metricLineList(end + 1, 1) = "• checkpoint: <code>saved/cleaned according to config</code>";
 end
-end
-
-function messageText = localBuildTelegramHtmlMessage(replayName, statusText, config, replayData, elapsedSec, errorObj)
-%LOCALBUILDTELEGRAMHTMLMESSAGE Build a readable HTML Telegram summary.
-
-lineList = strings(0, 1);
-lineList(end + 1, 1) = sprintf('<b>%s</b> <code>%s</code>', ...
-  localHtmlEscape(statusText), localHtmlEscape(replayName));
-lineList(end + 1, 1) = sprintf('Elapsed: <code>%s</code>', localHtmlEscape(localFormatDuration(elapsedSec)));
-lineList(end + 1, 1) = sprintf('Repeats/SNR: <code>%d</code> / <code>%.2f dB</code>', ...
-  localGetFieldOrDefault(config, 'numRepeat', 0), localGetFieldOrDefault(config, 'snrDb', NaN));
-if isfield(config, 'seedList')
-  lineList(end + 1, 1) = sprintf('Seeds: <code>%s</code>', localHtmlEscape(localFormatSeedList(config.seedList)));
-end
-
-if strcmpi(string(statusText), "DONE") && isstruct(replayData)
-  if isfield(replayData, 'snapshotFile') && strlength(string(replayData.snapshotFile)) > 0
-    lineList(end + 1, 1) = sprintf('Snapshot: <code>%s</code>', localHtmlEscape(replayData.snapshotFile));
-  elseif isfield(config, 'saveSnapshot') && ~logical(config.saveSnapshot)
-    lineList(end + 1, 1) = 'Snapshot: <code>disabled</code>';
-  end
-  lineList = [lineList; localBuildTelegramOrdinaryLines(replayData)]; %#ok<AGROW>
-elseif ~isempty(errorObj)
-  if isfield(config, 'checkpointEnable') && logical(config.checkpointEnable)
-    lineList(end + 1, 1) = sprintf('Checkpoint: <code>%s</code>', ...
-      localHtmlEscape(localGetFieldOrDefault(config, 'checkpointRunDir', "")));
-  end
-  errorId = string(errorObj.identifier);
-  if strlength(errorId) == 0
-    errorId = "error";
-  end
-  lineList(end + 1, 1) = sprintf('Error: <code>%s</code>', localHtmlEscape(errorId));
-  lineList(end + 1, 1) = sprintf('<pre>%s</pre>', localHtmlEscape(localShortenText(errorObj.message, 900)));
-end
-messageText = strjoin(lineList, newline);
 end
 
 function lineList = localBuildTelegramOrdinaryLines(replayData)
@@ -2587,27 +2524,7 @@ else
 end
 end
 
-function durationText = localFormatDuration(elapsedSec)
-%LOCALFORMATDURATION Format elapsed seconds in a compact human-readable form.
 
-elapsedSec = max(0, double(elapsedSec));
-if elapsedSec < 60
-  durationText = sprintf('%.1f s', elapsedSec);
-elseif elapsedSec < 3600
-  durationText = sprintf('%.1f min', elapsedSec / 60);
-else
-  durationText = sprintf('%.2f h', elapsedSec / 3600);
-end
-end
-
-function shortText = localShortenText(textValue, maxLen)
-%LOCALSHORTENTEXT Keep notification error text within a readable length.
-
-shortText = string(textValue);
-if strlength(shortText) > maxLen
-  shortText = extractBefore(shortText, maxLen + 1) + " ...";
-end
-end
 
 function safeText = localHtmlEscape(textValue)
 %LOCALHTMLESCAPE Escape text for Telegram HTML parse mode.
