@@ -5,7 +5,7 @@
 %
 % Usage: edit the configuration block below, then run this script directly.
 % The script leaves replayData in the workspace; saveSnapshot=true saves only
-% replayData via saveExpSnapshot.
+% replayData via saveExpSnapshot. Telegram notice is best-effort only.
 
 clear; close all; clc;
 
@@ -20,6 +20,8 @@ replayName = "replayMfCombToothSurface";
 snrDb = 10;                         % Snapshot SNR used to generate rx signals.
 baseSeed = 253;                     % Fixed seed for the representative case.
 saveSnapshot = true;                % true saves the lightweight replayData only.
+notifyTelegramEnable = true;        % true sends best-effort HTML Telegram notice on completion or failure.
+checkpointEnable = false;           % fixed-seed surface replay does not create per-repeat checkpoint files.
 optVerbose = false;                 % true enables compact estimator/flow trace.
 modeTag = "unknown";                % "unknown" scans CP-U; use "known" for CP-K.
 
@@ -46,16 +48,22 @@ couplingDoaGridCount = 101;         % Number of DoA-line samples in the coupling
 couplingFdHalfWidthHz = 300;        % Local fdRef half-width for coupling in Hz.
 couplingDoaHalfWidthDeg = 0.006;    % Local DoA-line half-width for coupling in deg.
 
+runTic = tic;
+notifyConfig = struct( ...
+  'snrDb', snrDb, ...
+  'baseSeed', baseSeed, ...
+  'saveSnapshot', saveSnapshot, ...
+  'notifyTelegramEnable', notifyTelegramEnable, ...
+  'checkpointEnable', checkpointEnable);
+
 %% Build context and flow options
 
-fprintf('Running %s ...\n', char(replayName));
-fprintf('  seed                             : %d\n', baseSeed);
-fprintf('  snr (dB)                         : %.2f\n', snrDb);
-fprintf('  mode                             : %s\n', char(modeTag));
-fprintf('  save snapshot                    : %d\n', saveSnapshot);
+printMfReplayHeader(char(replayName), notifyConfig, '');
+fprintf('  %-32s : %s\n', 'mode', char(modeTag));
 
 %% Run replay batch
 
+try
 fprintf('[%s] Build one fixed-seed replay case.\n', char(datetime('now', 'Format', 'HH:mm:ss')));
 [caseData, context, flowOpt] = localBuildReplayCase(baseSeed, snrDb, optVerbose);
 
@@ -123,6 +131,8 @@ config = struct();
 config.snrDb = snrDb;
 config.baseSeed = baseSeed;
 config.saveSnapshot = saveSnapshot;
+config.notifyTelegramEnable = notifyTelegramEnable;
+config.checkpointEnable = checkpointEnable;
 config.optVerbose = optVerbose;
 config.modeTag = modeTag;
 config.centerNameList = centerNameList;
@@ -167,6 +177,23 @@ if saveSnapshot
   replayData.snapshotFile = saveExpSnapshot(char(replayName), saveOpt);
 else
   replayData.snapshotFile = "";
+end
+replayData.elapsedSec = toc(runTic);
+notifyMfReplayStatus(struct( ...
+  'replayName', replayName, ...
+  'statusText', "DONE", ...
+  'config', config, ...
+  'snapshotFile', replayData.snapshotFile, ...
+  'elapsedSec', replayData.elapsedSec, ...
+  'commentLineList', "Fixed-seed comb/surface diagnostic completed."));
+catch ME
+  notifyMfReplayStatus(struct( ...
+    'replayName', replayName, ...
+    'statusText', "FAILED", ...
+    'config', notifyConfig, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
+  rethrow(ME);
 end
 
 %% Summary output and plotting

@@ -6,7 +6,7 @@
 % Usage: edit the configuration block below, then run this script directly.
 % The script leaves replayData in the workspace; checkpointEnable=true resumes
 % interrupted repeat runs from per-repeat files under the repo-root tmp/.
-% saveSnapshot=true saves only replayData via saveExpSnapshot.
+% saveSnapshot=true saves only replayData via saveExpSnapshot. Telegram notice is best-effort only.
 
 clear; close all; clc;
 
@@ -64,16 +64,9 @@ config.damageThresholdDeg = damageThresholdDeg;
 config.gatedRescueCoherenceThreshold = gatedRescueCoherenceThreshold;
 config.gatedRescuePhaseResidThresholdRad = gatedRescuePhaseResidThresholdRad;
 
-fprintf('Running %s ...\n', char(replayName));
-fprintf('  repeats                         : %d\n', config.numRepeat);
-fprintf('  snr (dB)                        : %.2f\n', config.snrDb);
-fprintf('  base seed                       : %d\n', config.baseSeed);
+printMfReplayHeader(char(replayName), config, '');
 fprintf('  seed list                       : %s\n', mat2str(reshape(config.seedList, 1, [])));
-fprintf('  repeat mode                     : %s\n', 'parfor-auto');
-fprintf('  save snapshot                   : %d\n', config.saveSnapshot);
-fprintf('  telegram notify                 : %d\n', config.notifyTelegramEnable);
 fprintf('  save repeat detail              : %d\n', config.saveRepeatDetail);
-fprintf('  checkpoint                      : %d\n', config.checkpointEnable);
 fprintf('  gated rescue coherence threshold: %.3f\n', config.gatedRescueCoherenceThreshold);
 fprintf('  gated rescue phase threshold    : %.3f rad\n', config.gatedRescuePhaseResidThresholdRad);
 
@@ -146,14 +139,29 @@ else
   replayData.snapshotFile = "";
 end
 
-localNotifyReplayStatus(replayName, "DONE", config, replayData, toc(runTic), []);
+replayData.elapsedSec = toc(runTic);
+notifyMfReplayStatus(struct( ...
+  'replayName', replayName, ...
+  'statusText', "DONE", ...
+  'config', config, ...
+  'snapshotFile', replayData.snapshotFile, ...
+  'checkpointDir', localBuildCheckpointDirText(config), ...
+  'elapsedSec', replayData.elapsedSec, ...
+  'metricLineList', localBuildTelegramMetricLines(replayData), ...
+  'commentLineList', "Flow-like gated basin-entry stress replay completed."));
 catch ME
   if config.checkpointEnable
     fprintf('Replay failed. Checkpoint artifacts were kept for resume.\n');
     fprintf('  disabled checkpoint dir: %s\n', char(config.checkpointDisabledRunDir));
     fprintf('  gated checkpoint dir   : %s\n', char(config.checkpointGatedRunDir));
   end
-  localNotifyReplayStatus(replayName, "FAILED", config, struct(), toc(runTic), ME);
+  notifyMfReplayStatus(struct( ...
+    'replayName', replayName, ...
+    'statusText', "FAILED", ...
+    'config', config, ...
+    'checkpointDir', localBuildCheckpointDirText(config), ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
   rethrow(ME);
 end
 
@@ -628,62 +636,23 @@ end
 end
 
 
-function localNotifyReplayStatus(replayName, statusText, config, replayData, elapsedSec, errorObj)
-%LOCALNOTIFYREPLAYSTATUS Send a compact best-effort Telegram status notice.
-if ~isfield(config, 'notifyTelegramEnable') || ~logical(config.notifyTelegramEnable)
-  return;
+function checkpointDirText = localBuildCheckpointDirText(config)
+%LOCALBUILDCHECKPOINTDIRTEXT Build a compact checkpoint directory summary.
+checkpointDirText = "";
+if isfield(config, 'checkpointDisabledRunDir') && strlength(string(config.checkpointDisabledRunDir)) > 0
+  checkpointDirText = string(config.checkpointDisabledRunDir);
 end
-try
-  titleText = sprintf('%s %s', char(statusText), char(replayName));
-  messageText = localBuildTelegramHtmlMessage(replayName, statusText, config, replayData, elapsedSec, errorObj);
-  notifyTelegram(titleText, messageText, "HTML");
-catch notifyME
-  warning('Telegram notification wrapper failed: %s', notifyME.message);
-end
-end
-
-function messageText = localBuildTelegramHtmlMessage(replayName, statusText, config, replayData, elapsedSec, errorObj)
-%LOCALBUILDTELEGRAMHTMLMESSAGE Build a readable HTML Telegram summary.
-lineList = strings(0, 1);
-lineList(end + 1, 1) = sprintf('<b>%s</b> <code>%s</code>', ...
-  localHtmlEscape(statusText), localHtmlEscape(replayName));
-lineList(end + 1, 1) = sprintf('Elapsed: <code>%s</code>', localHtmlEscape(localFormatDuration(elapsedSec)));
-lineList(end + 1, 1) = sprintf('Repeats/SNR: <code>%d</code> / <code>%.2f dB</code>', ...
-  localGetFieldOrDefault(config, 'numRepeat', 0), localGetFieldOrDefault(config, 'snrDb', NaN));
-if isfield(config, 'seedList')
-  lineList(end + 1, 1) = sprintf('Seeds: <code>%s</code>', localHtmlEscape(localFormatSeedList(config.seedList)));
-end
-if isfield(config, 'saveRepeatDetail')
-  lineList(end + 1, 1) = sprintf('Repeat detail: <code>%d</code>', logical(config.saveRepeatDetail));
-end
-
-if strcmpi(string(statusText), "DONE") && isstruct(replayData)
-  if isfield(replayData, 'snapshotFile') && strlength(string(replayData.snapshotFile)) > 0
-    lineList(end + 1, 1) = sprintf('Snapshot: <code>%s</code>', localHtmlEscape(replayData.snapshotFile));
-  elseif isfield(config, 'saveSnapshot') && ~logical(config.saveSnapshot)
-    lineList(end + 1, 1) = 'Snapshot: <code>disabled</code>';
+if isfield(config, 'checkpointGatedRunDir') && strlength(string(config.checkpointGatedRunDir)) > 0
+  if strlength(checkpointDirText) > 0
+    checkpointDirText = checkpointDirText + newline + string(config.checkpointGatedRunDir);
+  else
+    checkpointDirText = string(config.checkpointGatedRunDir);
   end
-  lineList = [lineList; localBuildTelegramTableLines(replayData)]; %#ok<AGROW>
-elseif ~isempty(errorObj)
-  if isfield(config, 'checkpointEnable') && logical(config.checkpointEnable)
-    lineList(end + 1, 1) = sprintf('Disabled checkpoint: <code>%s</code>', ...
-      localHtmlEscape(localGetFieldOrDefault(config, 'checkpointDisabledRunDir', "")));
-    lineList(end + 1, 1) = sprintf('Gated checkpoint: <code>%s</code>', ...
-      localHtmlEscape(localGetFieldOrDefault(config, 'checkpointGatedRunDir', "")));
-  end
-  errorId = string(errorObj.identifier);
-  if strlength(errorId) == 0
-    errorId = "error";
-  end
-  lineList(end + 1, 1) = sprintf('Error: <code>%s</code>', localHtmlEscape(errorId));
-  lineList(end + 1, 1) = sprintf('<pre>%s</pre>', localHtmlEscape(localShortenText(errorObj.message, 900)));
+end
 end
 
-messageText = strjoin(lineList, newline);
-end
-
-function lineList = localBuildTelegramTableLines(replayData)
-%LOCALBUILDTELEGRAMTABLELINES Extract compact key metrics from replayData.
+function lineList = localBuildTelegramMetricLines(replayData)
+%LOCALBUILDTELEGRAMMETRICLINES Extract compact key metrics from replayData.
 lineList = strings(0, 1);
 if isfield(replayData, 'aggregateTable') && height(replayData.aggregateTable) > 0
   t = replayData.aggregateTable;
@@ -746,37 +715,8 @@ else
 end
 end
 
-function seedText = localFormatSeedList(seedList)
-%LOCALFORMATSEEDLIST Format seed list compactly for notification.
-seedList = reshape(double(seedList), 1, []);
-if isempty(seedList)
-  seedText = "[]";
-elseif numel(seedList) <= 12
-  seedText = string(mat2str(seedList));
-else
-  seedText = sprintf('[%d ... %d] (%d seeds)', seedList(1), seedList(end), numel(seedList));
-end
-end
 
-function durationText = localFormatDuration(elapsedSec)
-%LOCALFORMATDURATION Format elapsed seconds in a compact human-readable form.
-elapsedSec = max(0, double(elapsedSec));
-if elapsedSec < 60
-  durationText = sprintf('%.1f s', elapsedSec);
-elseif elapsedSec < 3600
-  durationText = sprintf('%.1f min', elapsedSec / 60);
-else
-  durationText = sprintf('%.2f h', elapsedSec / 3600);
-end
-end
 
-function shortText = localShortenText(textValue, maxLen)
-%LOCALSHORTENTEXT Keep notification error text within a readable length.
-shortText = string(textValue);
-if strlength(shortText) > maxLen
-  shortText = extractBefore(shortText, maxLen + 1) + " ...";
-end
-end
 
 function safeText = localHtmlEscape(textValue)
 %LOCALHTMLESCAPE Escape text for Telegram HTML parse mode.

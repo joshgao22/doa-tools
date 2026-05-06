@@ -40,6 +40,8 @@ clear; close all; clc;
 
 通知内容只保留脚本名、状态、耗时、snapshot 文件/目录和少量关键 summary。具体 metric line 由各 replay 本地构造并传入 common helper；common helper 不解析 `replayData` 中的具体结果表，不维护第二套 replay results parser。详细结果仍写入 `test/dev/replay/results/`。
 
+当前已验证但降频使用的第三批 diagnostic replay（`replayMfCombToothSurface`、`replayMfInToothDoaDopplerRidgeTrace`、`replayMfInToothPolishGate`、`replayMfSameToothHardCase`、`replayMfSubsetRankingTrace`、`replayMfRandomRescueEffectiveness`、`replayMfUnknownReleaseRoute`、`replayMfWarmAnchorParforSensitivity`、`replayMfFastStatsRepresentativeDivergence`，以及 flow-like stress replay）已统一接入 common header 与 `notifyMfReplayStatus`。其中固定单样本或轻量诊断默认 `checkpointEnable=false`，不为了格式统一额外创建 per-repeat checkpoint task；若脚本原本已有短期 runDir 用于绘图数据或 cleanup，则保持原样并在完成后清理。已有 per-repeat checkpoint 价值的 flow-like / 大 MC replay 继续保留 checkpoint / resume。
+
 Telegram HTML 格式遵循 `template/replayTemplate.m` 的示例：固定外壳统一，正文指标弹性；`<code>` 只用于短数字、短 tag 或短状态，不包裹完整路径、长 candidate family 名或长错误文本；`commentLineList` 应写 replay-level 结论、recommendation 或下一步判断，而不只是 `completed`。
 
 ## 推荐推进顺序

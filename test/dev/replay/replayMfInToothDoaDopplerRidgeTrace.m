@@ -9,7 +9,7 @@
 %
 % Usage: edit the configuration block below, then run this script directly.
 % The script leaves replayData in the workspace; saveSnapshot=true saves only
-% replayData via saveExpSnapshot.
+% replayData via saveExpSnapshot. Telegram notice is best-effort only.
 
 clear; close all; clc;
 
@@ -46,13 +46,21 @@ gatedRescuePhaseResidThresholdRad = 1.0; % Additional phase-residual gate for co
 seedList = reshape(double(seedList), [], 1);
 numCase = numel(seedList);
 
+
+runTic = tic;
+
+try
+
 %% Build context and flow options
 config = struct();
 config.snrDb = snrDb;
 config.seedList = seedList;
 config.numCase = numCase;
+config.numRepeat = numCase;
 config.contextBaseSeed = contextBaseSeed;
 config.saveSnapshot = saveSnapshot;
+config.notifyTelegramEnable = true;
+config.checkpointEnable = false;
 config.optVerbose = optVerbose;
 config.oracleFdHalfToothFraction = oracleFdHalfToothFraction;
 config.oracleFdRateHalfWidthHzPerSec = oracleFdRateHalfWidthHzPerSec;
@@ -76,13 +84,9 @@ config.probeDamageThresholdDeg = probeDamageThresholdDeg;
 config.gatedRescueCoherenceThreshold = gatedRescueCoherenceThreshold;
 config.gatedRescuePhaseResidThresholdRad = gatedRescuePhaseResidThresholdRad;
 
-fprintf('Running %s ...\n', char(replayName));
+printMfReplayHeader(char(replayName), config, '');
 fprintf('  tail seeds                       : %s\n', mat2str(config.seedList(:).'));
 fprintf('  seed count                       : %d\n', config.numCase);
-fprintf('  context base seed                : %d\n', config.contextBaseSeed);
-fprintf('  snr (dB)                         : %.2f\n', config.snrDb);
-fprintf('  repeat mode                      : %s\n', 'parfor-auto');
-fprintf('  save snapshot                    : %d\n', config.saveSnapshot);
 fprintf('  fd oracle half-tooth fraction    : %.3f\n', config.oracleFdHalfToothFraction);
 fprintf('  fdRate oracle half-width         : %.2f Hz/s\n', config.oracleFdRateHalfWidthHzPerSec);
 fprintf('  in-tooth DoA initialization      : static/truth only, no curated subset seed\n');
@@ -197,6 +201,23 @@ if config.saveSnapshot
   replayData.snapshotFile = saveExpSnapshot(char(replayName), saveOpt);
 else
   replayData.snapshotFile = "";
+end
+replayData.elapsedSec = toc(runTic);
+notifyMfReplayStatus(struct( ...
+  'replayName', replayName, ...
+  'statusText', "DONE", ...
+  'config', config, ...
+  'snapshotFile', replayData.snapshotFile, ...
+  'elapsedSec', replayData.elapsedSec, ...
+  'commentLineList', "In-tooth ridge diagnostic completed."));
+catch ME
+  notifyMfReplayStatus(struct( ...
+    'replayName', replayName, ...
+    'statusText', "FAILED", ...
+    'config', config, ...
+    'elapsedSec', toc(runTic), ...
+    'errorObj', ME));
+  rethrow(ME);
 end
 
 %% Summary output and plotting
