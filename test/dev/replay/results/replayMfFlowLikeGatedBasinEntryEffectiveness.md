@@ -1,240 +1,203 @@
-# replayMfFlowLikeGatedBasinEntryEffectiveness
+# replayMfFlowLikeGatedBasinEntryEffectiveness 结果记录
 
-## 对应 replay
+## 0. 状态摘要
 
-- `test/dev/replay/replayMfFlowLikeGatedBasinEntryEffectiveness.m`
+| 项目 | 内容 |
+|---|---|
+| 当前状态 | `diagnostic-only / negative` |
+| 最新代表性 snapshot | `test/data/cache/replay/replayMfFlowLikeGatedBasinEntryEffectiveness_20260505-160714.mat` |
+| 当前一句话结论 | flow-like 真实 subset-periodic 结构中，`wide + single-MF` basin-entry family 仍有救力并改善 median，但当前 gate / adoption 会产生 easy damage，并使 P95 / max 变差，因此不能推进默认 flow。 |
+| 决策影响 | 保留为 flow-like stress replay 和 negative diagnostic；不接入默认 `runSimpleDynamicSubsetPeriodicFlow`，不下沉 estimator / objective / residual。 |
+| 下一步动作 | 拆分 easy damage、`subset-not-trusted` hard miss 与 `coherence-not-collapsed` ordinary miss；在这些子问题未分清前，不扩大 repeat，也不推进默认 gate。 |
+| 禁止误用 | 不能把 controlled in-tooth positive result 直接外推到 full-flow；不能把当前 gate 写成 regression；不能因为 median 改善就忽略 P95 / max / easy damage。 |
 
-## 观察目标
+## 1. Replay 身份
 
-在真实 `subset-periodic flow` 结构内，比较 disabled baseline 与 no-truth gated `wide + single-MF` same-tooth basin-entry rescue。该入口不使用 truth-centered half-tooth oracle，也不跳过 subset selection，因此会同时暴露：
+- 脚本：`test/dev/replay/replayMfFlowLikeGatedBasinEntryEffectiveness.m`
+- 结果文档：`test/dev/replay/results/replayMfFlowLikeGatedBasinEntryEffectiveness.md`
+- replay 类型：小 MC / flow-like stress replay。
+- 主要问题：在真实 `subset-periodic flow` 结构内，no-truth gated `wide + single-MF` same-tooth basin-entry rescue 是否仍能救 hard tail，并且不误伤 easy case。
+- 观察范围：100-repeat 小 MC；disabled baseline 与 gated flow-like 分支使用相同 seed list；gated 分支通过 `buildSimpleDynamicFlowOpt.sameToothRescue` 打开 basin-entry candidate。
+- 不覆盖范围：不提供 oracle 上限；不跳过 subset selection；不证明 full-flow 已通过；不改变 estimator 默认路径；不证明论文主图可直接使用 full-flow 统计。
+- truth 使用口径：truth 只用于结果表中的 angle / tooth / fd 评价、case role 标注和 damage/rescue 离线统计；不进入 runtime selector、gate、candidate adoption 或 final winner。
 
-1. basin-entry candidate family 在真实 flow 中是否仍有救力；
-2. same-tooth in-tooth DoA hard case 是否能被 no-truth gate 捕捉；
-3. gate / adoption 是否会误伤 easy case 或放大 tail；
-4. wrong-tooth / subset selection 因素是否会污染该 rescue 的整体统计。
+## 2. 机制词典与方法地图
 
-该 replay 只作为 flow-like stress check 和机制分流入口；不改变 estimator、objective、residual、reference-sat 语义，也不作为默认 flow 通过依据。
+| 名称 | 含义 | 是否使用 truth | 改变了什么 | 如何解读 |
+|---|---|---:|---|---|
+| `flow-like` | 保留 subset selection、periodic refine、same-tooth rescue gate 等真实 flow 结构的 replay。 | No | 改变 replay 运行环境，不跳过真实 flow 决策。 | 比 controlled in-tooth 更接近默认 flow，但也会混入 wrong-tooth、subset trust 和 adoption 风险。 |
+| `disabled` | 不打开 same-tooth basin-entry rescue 的 baseline flow。 | No | 作为对照基线。 | 用于判断 gated 分支带来的 rescue、damage 和 tail 变化。 |
+| `gated` | 打开 no-truth same-tooth rescue gate 的 flow-like 分支。 | No | 允许 flow 在同一 tooth 内选择 `wide / single-MF` basin-entry candidate。 | 当前能改善 median，但 gate/adoption 不安全。 |
+| `wide + single-MF basin-entry` | 以较宽 DoA 或单星多帧 candidate 改变 DoA basin center 的 candidate family。 | No | 改变最终 DoA basin entry，而不是修改 objective。 | family 本身有救力；是否可进入默认 flow 取决于 gate 与 damage 控制。 |
+| `non-ref-coherence-collapse` | 非参考星 coherence 明显塌陷的 no-truth 触发原因。 | No | 触发 same-tooth rescue。 | 可解释部分 hard-collapse case，但不是所有 ordinary miss。 |
+| `non-ref-phase-residual-large` | 非参考星 phase residual 较大的 no-truth 触发原因。 | No | 触发 same-tooth rescue。 | 当前需要重点复核，因为 easy damage 可能来自过宽触发。 |
+| `subset-not-trusted` | subset trust 诊断认为当前 selected subset 不可靠。 | No | 阻止或限制 rescue。 | 部分 hard-collapse case 可能被该 gate 过严拦截。 |
+| `coherence-not-collapsed` | coherence 未塌陷，因此 collapse gate 不触发。 | No | 阻止 collapse 型 rescue。 | 这类 hard miss 更像 ordinary / non-collapse angle miss，应由 ordinary angle replay 继续拆分。 |
+| `hard-angle-tail` | disabled baseline angle 已进入 tail 的离线 case role。 | Evaluation only | 只改结果分类。 | 用于观察 rescue 是否救 hard case；不能进入 runtime gate。 |
+| `easy-angle` | disabled baseline 已较好的离线 easy case。 | Evaluation only | 只改 damage 评价。 | easy damage 是当前 gate 不能默认推广的核心风险。 |
+| `toothIdx` | `fdRef` 相对 truth tooth 的 `1/T_f` 周期编号。 | Evaluation only | 只用于评价和结果标注。 | 本 replay 中 gated 基本不改变 tooth，主要观察 same-tooth adoption。 |
+| `damage` | gated 分支使原本 easy / baseline-hit 样本变差。 | Evaluation only | 只改结果评价。 | damage 优先级高于单纯 median gain 或 rescue rate。 |
 
-## 最新代码口径
+## 3. Snapshot index
 
-- disabled 与 gated 两个 batch 使用同一组 `seedList`。
-- `focusedSeedList=[]` 时使用 `baseSeed + (0:(numRepeat-1))` 的连续 seed 小 MC；`focusedSeedList` 非空时只跑指定 seed 做 triage。
-- gated 分支通过 `buildSimpleDynamicFlowOpt.sameToothRescue` 打开 `wide + single-MF` same-tooth basin-entry candidate。
-- gate 只读取 selected periodic decision summary 与 subset trust 诊断中的 non-ref coherence、phase residual 和 trust 状态；truth 只用于结果表里的 angle / tooth / fd 评价。
-- snapshot 只保存轻量 `replayData`，默认 `saveRepeatDetail=false`，不保存完整 `disabledRepeatCell / gatedRepeatCell`。
-- `replayData` 保留轻量表：`compareTable`、`inToothCompareTable`、`gateMissTable`、`aggregateTable`、`inToothAggregateTable`、`caseRoleSummaryTable`、`gateReasonTable`、`inToothGateReasonTable`、`finalTagTransitionTable`、`toothTransitionTable`、`candidateTable`、`warningTable`、`disabledRepeatTable`、`gatedRepeatTable`、`checkpointSummary`、`storageSummaryTable`。
-- 可选 `notifyTelegramEnable=true`，仿真完成或失败后发送 best-effort HTML 通知；通知不影响 replay 结果或 snapshot 保存。
+| snapshot | 日期 | 状态 | 配置摘要 | 结论 | 覆盖 / 取代 |
+|---|---:|---|---|---|---|
+| `test/data/cache/replay/replayMfFlowLikeGatedBasinEntryEffectiveness_20260505-160714.mat` | 2026-05-05 | representative | `baseSeed=253`，`numRepeat=100`，`snrDb=10`，`seedList=253:352`，`gatedRescueCoherenceThreshold=0.200`，`gatedRescuePhaseResidThresholdRad=1.000`，`checkpointEnable=true`，`saveRepeatDetail=false` | basin-entry family 有救力，但 gate/adoption 不安全：median 改善，easy damage 非零，P95 / max 变差。 | none |
 
-## Snapshot index
+## 4. 最新代表性运行
 
-| snapshot | 配置 | 结论 |
-|---|---|---|
-| `test/data/cache/replay/replayMfFlowLikeGatedBasinEntryEffectiveness_20260505-160714.mat` | `baseSeed=253`，`numRepeat=100`，`seedList=253:352`，`snrDb=10`，`focusedSeedList=[]`，`gatedRescueCoherenceThreshold=0.200`，`gatedRescuePhaseResidThresholdRad=1.000`，`saveRepeatDetail=false`，`checkpointEnable=true`，`notifyTelegramEnable=true` | gated `wide + single-MF` 能改善 median 并救回部分 hard tail，但当前 gate / adoption 不安全：overall 与 same-tooth 子集均出现 easy damage，P95 / max 变差。因此该结果是 negative / diagnostic，不应推广到默认 flow。 |
+### 4.1 配置
 
-## 当前代表性结果
+- `snrDb = 10`
+- `baseSeed = 253`
+- `numRepeat = 100`
+- seed range：`253:352`
+- `focusedSeedList = []`
+- repeat mode：`parfor-auto`
+- gated rescue coherence threshold：`0.200`
+- gated rescue phase residual threshold：`1.000 rad`
+- checkpoint：disabled batch 命中已完成 checkpoint 并恢复 `100/100` task；gated batch 从空 checkpoint 完成 `100/100` task；成功后清理 checkpoint run 目录。
+- snapshot 保存变量：`replayData`
+- repeat detail：`saveRepeatDetail=false`，仅保存轻量 table。
+- Telegram：`notifyTelegramEnable=true`，best-effort completion / failure notification。
 
-2026-05-05 的 100-repeat run 是当前代表性 flow-like 结果。snapshot 保存为：
+运行中出现 1 个 seed 的 singular matrix warning，且 disabled 与 gated 分支同时出现，当前仅作为诊断元数据保留。
 
-```text
- test/data/cache/replay/replayMfFlowLikeGatedBasinEntryEffectiveness_20260505-160714.mat
-```
+### 4.2 主要统计
 
-运行配置摘要：
+| 指标 | 数值 | 解释 |
+|---|---:|---|
+| `numSeed` | 100 | 小 MC flow-like stress 样本数。 |
+| `triggerRate` / `selectedRate` | 0.51 / 0.51 | gated 分支约一半 seed 触发并选择 rescue candidate，说明 candidate family 参与度足够高。 |
+| `hardRescueRate` | 0.45946 | hard-angle-tail 中约 46% 被救回，说明 basin-entry family 有实际救力。 |
+| `easyDamageRate` | 0.11111 | easy case 出现非零误伤，是当前不能默认推广的主要原因。 |
+| `fdDamageRate` | 0 | 未观察到 fd damage，但不足以抵消 angle easy damage。 |
+| disabled / gated median angle | 0.0017468 / 0.00095966 deg | median 明显改善。 |
+| disabled / gated P95 angle | 0.0035023 / 0.0050759 deg | tail 变差，说明 gate/adoption 放大了部分坏样本。 |
+| gated max angle | 0.010284 deg | 仍有大 tail，不能作为 flow/default 通过证据。 |
 
-| 配置项 | 值 |
-|---|---:|
-| repeats | 100 |
-| SNR | 10 dB |
-| base seed | 253 |
-| seed list | 253:352 |
-| focused seed list | empty |
-| repeat mode | `parfor-auto` |
-| save snapshot | true |
-| save repeat detail | false |
-| checkpoint enable | true |
-| checkpoint resume | true |
-| Telegram notify | true |
-| gated rescue coherence threshold | 0.200 |
-| gated rescue phase threshold | 1.000 rad |
+### 4.3 关键对比表
 
-运行过程：disabled batch 命中已完成 checkpoint 并直接恢复 100/100 task；gated batch 从空 checkpoint 运行 100/100 task。完成后清理 disabled / gated checkpoint 目录并保存轻量 snapshot。运行中出现 1 个 seed 的 singular matrix warning，见“Warning”。
+#### Overall flow-like aggregate
 
-## Overall flow-like aggregate
+| 方法 | numSeed | trigger / selected | hard rescue | easy damage | fd damage | median angle (deg) | P95 angle (deg) | max angle (deg) | 备注 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| disabled | 100 | — | — | — | — | 0.0017468 | 0.0035023 | — | baseline flow |
+| gated | 100 | 0.51 / 0.51 | 0.45946 | 0.11111 | 0 | 0.00095966 | 0.0050759 | 0.010284 | median 改善，但 P95 / max / easy damage 变差 |
 
-| 指标 | disabled | gated | 变化 |
-|---|---:|---:|---:|
-| numSeed | 100 | 100 | — |
-| triggerRate | — | 0.51 | — |
-| selectedRate | — | 0.51 | — |
-| hardRescueRate | — | 0.45946 | — |
-| easyDamageRate | — | 0.11111 | 非零，不能默认推广 |
-| fdDamageRate | — | 0 | 未观察到 fd damage |
-| median angle (deg) | 0.0017468 | 0.00095966 | 改善 |
-| P95 angle (deg) | 0.0035023 | 0.0050759 | 变差 |
-| max angle (deg) | — | 0.010284 | 仍有大 tail |
-| medianAngleGainDeg | — | 0 | 中位 gain 统计为 0 |
-
-整体结果说明：`wide + single-MF` basin-entry family 仍有救力，能显著改善 median；但当前 gate / adoption 会放大 tail，且 easy damage 非零。因此这不是通过结果，而是一个高价值 negative / diagnostic 结果。
-
-## Same-tooth in-tooth aggregate
+#### Same-tooth in-tooth aggregate
 
 same-tooth 子集定义为 `disabledToothIdx == 0 && gatedToothIdx == 0`，共 58 个 seed。该子集更接近当前 in-tooth DoA 主问题。
 
-| 指标 | disabled | gated | 变化 |
-|---|---:|---:|---:|
-| numSeed | 58 | 58 | — |
-| triggerRate | — | 0.5 | — |
-| selectedRate | — | 0.5 | — |
-| hardRescueRate | — | 0.38095 | — |
-| easyDamageRate | — | 0.076923 | 非零，不能默认推广 |
-| fdDamageRate | — | 0 | 未观察到 fd damage |
-| median angle (deg) | 0.0015356 | 0.00091144 | 改善 |
-| P95 angle (deg) | 0.0037733 | 0.0052297 | 变差 |
-| max angle (deg) | — | 0.010284 | 仍有大 tail |
+| 方法 | numSeed | trigger / selected | hard rescue | easy damage | fd damage | median angle (deg) | P95 angle (deg) | max angle (deg) | 备注 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| disabled | 58 | — | — | — | — | 0.0015356 | 0.0037733 | — | same-tooth baseline |
+| gated | 58 | 0.50 / 0.50 | 0.38095 | 0.076923 | 0 | 0.00091144 | 0.0052297 | 0.010284 | 剥离 wrong-tooth 后仍有 easy damage 与 tail 变差 |
 
-Same-tooth 子集也呈现同样模式：median 改善，但 P95 / max 变差，且 easy damage 非零。这说明当前问题不是单纯 wrong-tooth 污染；即使剥离到 same-tooth，当前 gate / adoption 仍不安全。
+#### Case-role summary
 
-## Case-role summary
+| caseRole | numSeed | sameToothRate | triggerRate | selectedRate | rescueRate | damageRate | disabled median (deg) | gated median (deg) | 解释 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| `hard-angle-tail` | 37 | 0.56757 | 0.56757 | 0.56757 | 0.45946 | 0 | 0.0028606 | 0.002058 | hard tail 确有 rescue 价值 |
+| `middle-angle` | 45 | 0.53333 | 0.57778 | 0.57778 | 0 | 0 | 0.0014915 | 0.0011507 | 有 median 改善，但不属于 hard rescue |
+| `easy-angle` | 18 | 0.72222 | 0.22222 | 0.22222 | 0 | 0.11111 | 0.00077983 | 0.00074891 | easy trigger 与 damage 非零，是当前 blocker |
 
-| caseRole | numSeed | sameToothRate | triggerRate | selectedRate | rescueRate | damageRate | disabledMedianAngleDeg | gatedMedianAngleDeg | medianAngleGainDeg |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `hard-angle-tail` | 37 | 0.56757 | 0.56757 | 0.56757 | 0.45946 | 0 | 0.0028606 | 0.002058 | 0 |
-| `middle-angle` | 45 | 0.53333 | 0.57778 | 0.57778 | 0 | 0 | 0.0014915 | 0.0011507 | 0 |
-| `easy-angle` | 18 | 0.72222 | 0.22222 | 0.22222 | 0 | 0.11111 | 0.00077983 | 0.00074891 | 0 |
+## 5. 可观察现象
 
-关键观察：
+### 5.1 支持当前结论的现象
 
-- hard tail 确实有 45.946% rescue rate，说明 candidate family 有救力。
-- middle angle 没有 damage，但也不算 hard rescue。
-- easy angle 触发率为 22.222%，damage rate 为 11.111%，这是当前 gate 不能默认推广的核心原因。
+- Overall 与 same-tooth 子集都显示 median 改善，说明 `wide + single-MF` basin-entry family 不是无效候选。
+- hard-angle-tail 的 rescue rate 为 `0.45946`，说明真实 flow-like 结构内仍能救回部分 hard tail。
+- final tag transition 中，gated 分支大量选择 same-tooth rescue candidate：`same-tooth-rescue-single-mf` 35 次，`same-tooth-rescue-wide` 16 次；当前主要问题不是 candidate 完全没被评估。
+- tooth transition 的 top row 是 `0 -> 0` 共 58 个 seed，且未观察到 gated rescue 改变 tooth index；本 replay 主要反映 same-tooth adoption / basin-entry 行为，而不是直接修 wrong-tooth。
 
-## Gate reason counts
+### 5.2 仍未解决或反向的现象
 
-### 全部 100 seed
+- Overall easy damage rate 为 `0.11111`，same-tooth 子集 easy damage rate 为 `0.076923`，说明 gate / adoption 不安全。
+- Overall P95 从 `0.0035023 deg` 变差到 `0.0050759 deg`，same-tooth P95 从 `0.0037733 deg` 变差到 `0.0052297 deg`，说明 median gain 掩盖了 tail 放大。
+- `coherence-not-collapsed` 占全部 39 个 seed、same-tooth 22 个 seed，说明剩余 miss 不全是 non-ref coherence collapse hard case。
+- `subset-not-trusted` 有全部 10 个 seed、same-tooth 7 个 seed；其中部分 hard-collapse-like case 可能被 trust gate 过严拦截。
+- `non-ref-phase-residual-large` 触发了 18 个 seed，且 easy damage 非零，说明 phase-residual 触发条件需要单独复核。
 
-| rescueGateReason | numSeed |
-|---|---:|
-| `coherence-not-collapsed` | 39 |
-| `non-ref-coherence-collapse` | 33 |
-| `non-ref-phase-residual-large` | 18 |
-| `subset-not-trusted` | 10 |
+### 5.3 代表性 seed / case
 
-### Same-tooth 58 seed
+`gateMissTable` 列出 same-tooth hard-angle-tail 且 rescue 未触发的 11 个 seed。它们把后续问题拆成两类。
 
-| rescueGateReason | numSeed |
-|---|---:|
-| `coherence-not-collapsed` | 22 |
-| `non-ref-coherence-collapse` | 17 |
-| `non-ref-phase-residual-large` | 12 |
-| `subset-not-trusted` | 7 |
-
-同齿内仍有较多 `coherence-not-collapsed` 样本，说明剩余 miss 不全是 non-ref coherence collapse hard case；后续必须单独诊断 ordinary / non-collapse angle miss。`subset-not-trusted` 则说明部分 collapse-like hard case 可能被 trust gate 拦截。
-
-## Hard gate-miss cases
-
-`gateMissTable` 只列出 same-tooth hard-angle-tail 且 rescue 未触发的 case，共 11 个 seed。
-
-| seed | angle err (deg) | fdRef err (Hz) | coherence floor | gate reason | final tag |
-|---:|---:|---:|---:|---|---|
-| 256 | 0.004673 | 0.079397 | 0.07501 | `subset-not-trusted` | `periodic-static-seed` |
-| 261 | 0.002058 | 7.7889 | 0.97856 | `coherence-not-collapsed` | `periodic-static-seed` |
-| 285 | 0.0034602 | 0.14463 | 0.03552 | `subset-not-trusted` | `periodic-static-seed` |
-| 298 | 0.0034128 | 0.38534 | 0.038124 | `subset-not-trusted` | `periodic-static-seed` |
-| 305 | 0.0021977 | -0.011465 | 1 | `coherence-not-collapsed` | `periodic-subset-seed` |
-| 315 | 0.0020672 | 0.13836 | 0.12249 | `subset-not-trusted` | `periodic-static-seed` |
-| 317 | 0.0027852 | 1.0517 | 0.63926 | `coherence-not-collapsed` | `periodic-static-seed` |
-| 322 | 0.0035444 | 5.2386 | 0.99221 | `coherence-not-collapsed` | `periodic-static-seed` |
-| 323 | 0.0028606 | -52.94 | 0.93694 | `coherence-not-collapsed` | `periodic-static-seed` |
-| 335 | 0.0020391 | -0.012703 | 1 | `coherence-not-collapsed` | `periodic-subset-seed` |
-| 346 | 0.0032445 | 188.95 | 0.99999 | `coherence-not-collapsed` | `periodic-static-seed` |
-
-这些 case 将后续问题拆成两类：
-
-1. `subset-not-trusted`：例如 256 / 285 / 298 / 315。它们的 coherence floor 很低，更像 collapse-like hard case，但 trust gate 拦截了 rescue。下一步应检查 trust gate，而不是直接扩 candidate。
-2. `coherence-not-collapsed`：例如 261 / 305 / 317 / 322 / 323 / 335 / 346。它们不是 coherence-collapse 型 hard case，应进入 ordinary angle miss replay，而不是继续调 collapse gate。
-
-## Final tag transition
-
-| disabledFinalTag | gatedFinalTag | numSeed |
-|---|---|---:|
-| `periodic-static-seed` | `periodic-static-seed` | 36 |
-| `periodic-static-seed` | `same-tooth-rescue-single-mf` | 35 |
-| `periodic-static-seed` | `same-tooth-rescue-wide` | 16 |
-| `periodic-subset-seed` | `periodic-subset-seed` | 13 |
-
-Gated 分支实际大量选择了 same-tooth rescue candidate：`single-MF` 35 次、`wide` 16 次。这说明 candidate family 的参与度足够高；当前主要问题不再是“candidate 完全没有被评估”，而是 gate / adoption 的安全性和 tail 控制。
-
-## Tooth transition
-
-Top transition：
-
-| disabledToothIdx | gatedToothIdx | numSeed |
-|---:|---:|---:|
-| 0 | 0 | 58 |
-| 1 | 1 | 7 |
-| -2 | -2 | 3 |
-| -1 | -1 | 3 |
-| -19 | -19 | 2 |
-| -5 | -5 | 2 |
-| 4 | 4 | 2 |
-| 5 | 5 | 2 |
-| 75 | 75 | 2 |
-
-没有观察到 gated rescue 改变 tooth index；它主要是在原 tooth 上改 final candidate。这也说明：本 replay 的好坏主要反映 same-tooth adoption / basin-entry 行为，而不是 rescue 直接修正 wrong-tooth。
-
-## Warning
-
-| seed | disabledWarningId | gatedWarningId | warning |
+| seed | 类型 | 现象 | 对结论的作用 |
 |---:|---|---|---|
-| 273 | `MATLAB:singularMatrix` | `MATLAB:singularMatrix` | Matrix is singular to working precision. |
+| 256 | `subset-not-trusted` hard miss | angle `0.004673 deg`，coherence floor `0.07501`，final tag `periodic-static-seed` | coherence 很低但被 trust gate 拦截；后续应检查 trust gate 是否过严。 |
+| 285 | `subset-not-trusted` hard miss | angle `0.0034602 deg`，coherence floor `0.03552` | 与 seed 256 同类，支持单独做 trust gate 放行诊断。 |
+| 298 | `subset-not-trusted` hard miss | angle `0.0034128 deg`，coherence floor `0.038124` | collapse-like hard case 未触发 rescue。 |
+| 315 | `subset-not-trusted` hard miss | angle `0.0020672 deg`，coherence floor `0.12249` | 同类 trust-gate hard miss。 |
+| 261 | `coherence-not-collapsed` hard miss | angle `0.002058 deg`，fdRef err `7.7889 Hz`，coherence floor `0.97856` | 不是 coherence-collapse 型 hard case，应进入 ordinary angle miss 分类。 |
+| 305 | `coherence-not-collapsed` hard miss | angle `0.0021977 deg`，coherence floor `1`，final tag `periodic-subset-seed` | 高 coherence 仍有 angle miss，不能继续靠 collapse gate 硬修。 |
+| 323 | `coherence-not-collapsed` hard miss | angle `0.0028606 deg`，fdRef err `-52.94 Hz`，coherence floor `0.93694` | ordinary / non-collapse miss 的代表之一。 |
+| 346 | `coherence-not-collapsed` hard miss | angle `0.0032445 deg`，fdRef err `188.95 Hz`，coherence floor `0.99999` | 高 coherence + fd 偏差并存，需单独诊断。 |
+| 273 | warning seed | disabled 与 gated 均出现 `MATLAB:singularMatrix` | warning 不应单独归因于 gated rescue。 |
 
-warning 同时出现在 disabled 和 gated 分支。当前将其作为诊断元数据保留，不单独解释为 gated rescue 造成的错误。
+## 6. 机制解释
 
-## Storage summary
+### 6.1 当前解释
 
-当前 snapshot 仍只保存 `replayData` 一个 workspace 变量，但 `replayData` 内部包含足够重出 summary 的轻量表。
+这轮 replay 与 controlled in-tooth positive result 的差异非常关键。controlled in-tooth replay 已经剥离 wrong-tooth，并在固定 half-tooth / oracle 约束下观察到 `wide + single-MF` basin-entry family 可以救 hard-collapse tail；而本 replay 把同类 family 放回真实 subset-periodic flow 后，会同时面对 subset trust、same-tooth gate、ordinary non-collapse miss 和 final adoption 之间的耦合。
 
-| field | class | size | repeat detail |
-|---|---|---:|:---:|
-| `compareTable` | table | 100 x 19 | false |
-| `inToothCompareTable` | table | 58 x 19 | false |
-| `gateMissTable` | table | 11 x 19 | false |
-| `aggregateTable` | table | 1 x 14 | false |
-| `inToothAggregateTable` | table | 1 x 14 | false |
-| `caseRoleSummaryTable` | table | 3 x 10 | false |
-| `gateReasonTable` | table | 4 x 2 | false |
-| `inToothGateReasonTable` | table | 4 x 2 | false |
-| `finalTagTransitionTable` | table | 4 x 3 | false |
-| `toothTransitionTable` | table | 28 x 3 | false |
-| `candidateTable` | table | 302 x 10 | false |
-| `warningTable` | table | 1 x 5 | false |
-| `disabledRepeatTable` | table | 100 x 36 | false |
-| `gatedRepeatTable` | table | 100 x 36 | false |
+结果显示，candidate family 的方向没有错：它能改善 median，并救回约一半 hard-angle-tail。但是当前 no-truth gate 太粗，无法只捕捉真正需要 basin-entry 的 hard-collapse case。一部分 easy case 被触发后遭到 damage；另一部分 hard case 因 `subset-not-trusted` 或 `coherence-not-collapsed` 没有触发。也就是说，当前 blocker 不是“candidate 不存在”，而是 **gate / adoption 不能稳定区分 hard-collapse、ordinary miss 与 easy case**。
 
-该保存口径是合理的：文件不会因为 full repeat cell 变大，但 load 后仍能运行 `Summary output and plotting` 小节重打核心表。
+same-tooth 子集也出现同样模式，说明问题不只是 wrong-tooth 污染。即使 tooth 不变，当前 gated candidate 仍可能改善 median 但放大 tail。这支持把后续工作拆成：easy damage 溯源、trust gate hard miss、ordinary angle miss，而不是继续扩大 DoA step 或 blanket 打开 rescue。
 
-## 当前结论
+### 6.2 这个结果支持什么
 
-这次 100-repeat flow-like replay 是一个明确的 negative / diagnostic 结果：
+- 支持 `wide + single-MF` basin-entry family 在真实 flow-like 结构内仍有救力。
+- 支持把 flow-like replay 作为 controlled replay 与 default flow 之间的必要 stress check。
+- 支持将 hard-collapse 与 ordinary non-collapse angle miss 分开处理。
+- 支持暂缓扩大 repeat，先做 seed-level / role-level 拆分诊断。
 
-- `wide + single-MF` basin-entry 仍然是有价值的 candidate family；它改善 median，并能救回部分 hard-angle-tail。
-- 当前 gate / adoption 不够安全；overall 与 same-tooth 子集均有 easy damage，且 P95 / max 变差。
-- 当前策略不能推进到默认 flow，也不能作为 full-flow 通过证据。
-- 当前不应继续扩大 DoA step，也不应默认打开 joint fdRef / fdRate bank。
-- 下一步应拆分排查：easy damage、`subset-not-trusted` hard miss、`coherence-not-collapsed` ordinary angle miss。
+### 6.3 这个结果不证明什么
 
-## 对主流程的影响
+- 不证明 `family-safe-adopt` 可以进入默认 flow。
+- 不证明 same-tooth rescue gate 已经 no-truth 安全。
+- 不证明 full-flow CP/IP 或论文主图可以使用当前 flow-like 结果。
+- 不证明可以写 regression 契约；当前统计仍是 negative / diagnostic。
+- 不证明需要扩大 DoA step、提高 coherence threshold，或默认打开 joint `fdRef/fdRate` bank。
 
-- 不接入默认 `runSimpleDynamicSubsetPeriodicFlow`。
-- 不下沉到 `estimatorDoaDopplerMlePilotMfOpt`、objective 或 residual。
-- 保留 `wide / single-MF` basin-entry 作为候选 family，但需要更严格或分层 gate。
-- `non-ref-phase-residual-large` 相关触发需要重点复核，因为 easy-angle 中存在非零 damage。
-- `subset-not-trusted` hard miss 需要单独 replay 判断：这些 case 是不是 gate 过严，而不是 candidate 不足。
-- `coherence-not-collapsed` hard miss 应进入 `replayMfInToothOrdinaryAngleMissDiagnose`，不要继续用 collapse gate 硬修。
+## 7. 对主流程的影响
 
-## 建议下一步
+| 项目 | 影响 |
+|---|---|
+| estimator 默认路径 | 不改；不下沉到 `estimatorDoaDopplerMlePilotMfOpt`、objective 或 residual。 |
+| flow 默认路径 | 不接入默认 `runSimpleDynamicSubsetPeriodicFlow`；保留为 gated rescue 候选 family 的 flow-like stress 证据。 |
+| regression | 不写；当前 gate/adoption 尚未稳定，damage 非零。 |
+| replay / scan 下一步 | 从本 snapshot 抽 easy damage 样本、`subset-not-trusted` hard miss、`coherence-not-collapsed` ordinary miss 分别做 targeted replay。 |
+| 论文图 / 论文口径 | diagnostic-only / stress test；不能作为 paper-facing 精度图。论文主图仍应优先用 CRB consistency、resolved-regime RMSE、resolved/outlier rate、CP/IP controlled trade-off。 |
+| 排障记录 | 可在机制归并版中保留一句：flow-like gated basin-entry 当前为 negative diagnostic，说明 controlled in-tooth positive result 不能直接推广默认 flow。 |
 
-1. 先从本 snapshot 的 `compareTable` 中抽出 easy damage 样本，检查其 `rescueGateReason / disabledCoherenceFloor / gatedFinalTag / angleGainDeg`，判断误伤主要来自哪类 trigger。
-2. 针对 `subset-not-trusted` hard miss seeds `256, 285, 298, 315`，做 controlled replay：固定同齿与 fd healthy 条件，比较放行 trust gate 后 `wide / single-MF` candidate 是否能救且是否误伤。
-3. 针对 `coherence-not-collapsed` hard miss seeds `261, 305, 317, 322, 323, 335, 346`，新增或扩展 ordinary angle miss replay，比较 final-centered small polish、wide / single-MF basin-entry 与 truth-DoA oracle。
-4. 在上述两类问题未分清前，不再扩大 `replayMfFlowLikeGatedBasinEntryEffectiveness` 的 repeat，也不推进默认 flow。
+## 8. 限制与禁止解释
+
+- 不要把 controlled in-tooth `family-safe-adopt` 的正结果直接推广到真实 full-flow。
+- 不要因为 median angle 改善就忽略 P95 / max / easy damage；当前 negative 结论主要来自 tail 与 damage。
+- 不要把 truth label、truth tooth、truth DoA、truth `fdRef/fdRate` 放入 runtime selector、gate、candidate adoption 或 final winner。
+- 不要把当前 gate 写成 regression；它还不能稳定避免 easy damage。
+- 不要继续 blanket 扩大 `wide + single-MF` DoA step 或默认打开 joint `fdRef/fdRate` bank。
+- 不要把 `coherence-not-collapsed` hard miss 继续强行归入 collapse-gated rescue；它应进入 ordinary angle miss / non-collapse 分类。
+- 不要把 `subset-not-trusted` hard miss 简单解释为 candidate 不足；它可能是 trust gate 过严。
+
+## 9. 恢复与复现
+
+```matlab
+snapshotFile = 'test/data/cache/replay/replayMfFlowLikeGatedBasinEntryEffectiveness_20260505-160714.mat';
+loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'replayData'}}));
+```
+
+随后打开：
+
+```text
+test/dev/replay/replayMfFlowLikeGatedBasinEntryEffectiveness.m
+```
+
+只运行 `Summary output and plotting` 小节，即可重出 compact table 和图。
+
+## 10. 历史备注
+
+- 本 snapshot 是当前唯一代表性 flow-like gated basin-entry 结果。
+- 它与 controlled `replayMfInToothGatedRescueEffectiveness_20260504-215932.mat` 的关系是：controlled replay 支持 family 有救力，本 flow-like replay 暴露 gate/adoption 在真实 flow 中不安全。
+- 在 easy damage、trust gate hard miss 与 ordinary non-collapse miss 未拆清前，不建议继续扩大该 replay 的 repeat。
