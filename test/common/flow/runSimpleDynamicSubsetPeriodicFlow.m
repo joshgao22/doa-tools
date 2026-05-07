@@ -290,12 +290,13 @@ runSubsetCaseFn = @(fixtureUse, pilotWaveUse, carrierFreqUse, sampleRateUse, opt
 buildSummaryFn = @(caseUse, truthLocal, toothStepLocal) ...
   buildDynamicUnknownCaseSummary(caseUse, toothStepLocal, struct());
 subsetSeedInfo = struct();
+numSubsetRequested = numel(subsetFixtureCell);
+useParfor = localShouldUseSubsetParfor(localGetFieldOrDefault(flowOpt, 'parallelOpt', struct()), numSubsetRequested);
 [subsetCaseCell, subsetDecisionSummaryCell, subsetRunTimeSec] = evaluateDynamicSubsetBank( ...
   subsetFixtureCell, pilotWave, carrierFreq, sampleRate, optVerbose, flowOpt, ...
   [NaN, NaN], [NaN, NaN], subsetSeedInfo, truthUse, toothStepHz, ...
   runSubsetCaseFn, buildSummaryFn);
 subsetSummaryCell = localBuildSubsetEvalSummaryCell(subsetCaseCell, subsetFixtureCell, toothStepHz);
-useParfor = localShouldUseSubsetParfor(flowOpt.parallelOpt, numel(subsetCaseCell));
 end
 
 

@@ -106,6 +106,8 @@ try
     checkpointOpt = struct();
   end
   printMfScanHeader(char(scanName), scanConfig, checkpointDir);
+  fprintf('Preparing runtime cache...\n');
+  scanRuntime = localBuildScanRuntime(scanConfig);
 
   %% Run scan batch
 
@@ -116,7 +118,7 @@ try
     if progressTracker.enabled
       checkpointOpt.progressFcn = @(~) localAdvanceScanProgress(progressTracker, false);
     end
-    checkpointRunState = runPerfTaskGridWithCheckpoint(taskList, scanConfig, ...
+    checkpointRunState = runPerfTaskGridWithCheckpoint(taskList, scanRuntime, ...
       @localRunCheckpointTask, checkpointOpt);
     taskOutCell = checkpointRunState.resultCell;
     localCloseScanProgressTracker(progressTracker);
@@ -128,16 +130,16 @@ try
     if useParfor && progressTracker.enabled && ~isempty(progressTracker.queue)
       progressQueue = progressTracker.queue;
       parfor iTask = 1:numel(taskList)
-        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanConfig);
+        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanRuntime);
         send(progressQueue, 1);
       end
     elseif useParfor
       parfor iTask = 1:numel(taskList)
-        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanConfig);
+        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanRuntime);
       end
     else
       for iTask = 1:numel(taskList)
-        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanConfig);
+        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanRuntime);
         localAdvanceScanProgress(progressTracker, false);
       end
     end
@@ -149,6 +151,7 @@ try
   aggregateTable = localBuildAggregateTable(perfTable, scanConfig);
   failureSummaryTable = localBuildFailureSummaryTable(perfTable);
   topTailTable = localBuildTopTailTable(perfTable, scanConfig.topTailCountPerGroup);
+  topTailExportTable = localBuildTopTailExportTable(topTailTable);
   if scanConfig.checkpointEnable && localGetFieldOrDefault(checkpointRunState, 'isComplete', false) && ...
       scanConfig.checkpointCleanupOnSuccess
     checkpointCleanupReport = cleanupPerfTaskGridCheckpoint(checkpointRunState, ...
@@ -168,6 +171,7 @@ try
   scanData.aggregateTable = aggregateTable;
   scanData.failureSummaryTable = failureSummaryTable;
   scanData.topTailTable = topTailTable;
+  scanData.topTailExportTable = topTailExportTable;
   scanData.repeatOutCell = repeatOutCell;
   scanData.checkpointSummaryTable = checkpointSummaryTable;
   scanData.checkpointCleanupReport = checkpointCleanupReport;
@@ -193,10 +197,13 @@ try
   if height(scanData.topTailTable) > 0
     printMfScanSection('Top CRB-normalized tail preview', ...
       localTablePreview(scanData.topTailTable, scanData.config.topTailPrintMaxRows));
+    printMfScanSection('Top-tail compact export preview', ...
+      localTablePreview(scanData.topTailExportTable, scanData.config.topTailPrintMaxRows));
   end
   fprintf('Frames                           : %s\n', localFormatRow(scanData.config.frameCountList));
   fprintf('SNR list (dB)                    : %s\n', localFormatRow(scanData.config.snrDbList));
   fprintf('Active method list               : %s\n', localFormatStringRow(scanData.config.methodNameList));
+  fprintf('Runtime cache                    : context per frame, CRB per frame/SNR.\n');
   fprintf('Dynamic init mode                : %s\n', char(scanData.config.initMode));
   fprintf('Repeats per config               : %d\n', scanData.config.numRepeat);
   fprintf('fdRef oracle half-tooth fraction : %.3f\n', scanData.config.oracleFdHalfToothFraction);
@@ -248,10 +255,10 @@ end
 
 %% Local helpers
 
-function taskOut = localRunCheckpointTask(task, scanConfig)
+function taskOut = localRunCheckpointTask(task, scanRuntime)
 %LOCALRUNCHECKPOINTTASK Run one checkpointed scan task.
 
-taskOut = localRunOneTask(task, scanConfig);
+taskOut = localRunOneTask(task, scanRuntime);
 end
 
 function checkpointOpt = localBuildCheckpointOpt(scanName, scanConfig, taskList, useParfor)
@@ -450,24 +457,104 @@ for iFrame = 1:numel(frameCountList)
 end
 end
 
-function taskOut = localRunOneTask(task, scanConfig)
+function taskOut = localRunOneTask(task, scanRuntime)
 %LOCALRUNONETASK Run one frame-count, SNR, and seed configuration.
 
-contextOpt = struct();
-contextOpt.periodicOffsetIdx = localCenteredOffsets(task.numFrame);
-contextOpt.masterOffsetIdx = contextOpt.periodicOffsetIdx;
-contextOpt.numSubsetRandomTrial = 0;
-contextOpt.parallelOpt = localBuildSerialInnerParallelOpt();
-context = buildDynamicDualSatEciContext(contextOpt);
-context = localDisableSubsetBankForInTooth(context);
-flowOpt = localBuildFlowOpt(scanConfig.staticLocalDoaHalfWidthDeg, context.parallelOpt);
-methodList = localBuildMethodList(scanConfig.staticLocalDoaHalfWidthDeg, scanConfig.methodNameList);
-localValidateInitMode(scanConfig.initMode);
-repeatOut = localRunOneRepeat(context, flowOpt, methodList, scanConfig, task.snrDb, task.taskSeed);
+scanConfig = scanRuntime.config;
+context = localGetRuntimeContext(scanRuntime, task.numFrame);
+flowOpt = localGetRuntimeFlowOpt(scanRuntime, task.numFrame);
+methodList = scanRuntime.methodList;
+crbTable = localGetRuntimeCrbTable(scanRuntime, task.numFrame, task.snrDb);
+repeatOut = localRunOneRepeat(context, flowOpt, methodList, scanConfig, ...
+  task.snrDb, task.taskSeed, crbTable);
 
 taskOut = struct();
 taskOut.caseRowList = repeatOut.caseRowList;
 taskOut.repeatSlim = localStripRepeatOut(repeatOut);
+end
+
+function scanRuntime = localBuildScanRuntime(scanConfig)
+%LOCALBUILDSCANRUNTIME Cache frame-level context and CRB tables outside task workers.
+
+localValidateInitMode(scanConfig.initMode);
+frameCountList = reshape(unique(scanConfig.frameCountList, 'stable'), [], 1);
+contextBank = repmat(struct('numFrame', NaN, 'context', struct(), 'flowOpt', struct()), numel(frameCountList), 1);
+crbTableBank = repmat(struct('numFrame', NaN, 'snrDb', NaN, 'crbTable', table()), 0, 1);
+parallelOpt = localBuildSerialInnerParallelOpt();
+for iFrame = 1:numel(frameCountList)
+  numFrame = frameCountList(iFrame);
+  contextOpt = struct();
+  contextOpt.periodicOffsetIdx = localCenteredOffsets(numFrame);
+  contextOpt.masterOffsetIdx = contextOpt.periodicOffsetIdx;
+  contextOpt.numSubsetRandomTrial = 0;
+  contextOpt.parallelOpt = parallelOpt;
+  context = buildDynamicDualSatEciContext(contextOpt);
+  context = localDisableSubsetBankForInTooth(context);
+  flowOpt = localBuildFlowOpt(scanConfig.staticLocalDoaHalfWidthDeg, context.parallelOpt);
+  contextBank(iFrame).numFrame = numFrame;
+  contextBank(iFrame).context = context;
+  contextBank(iFrame).flowOpt = flowOpt;
+
+  refRepeat = buildDynamicRepeatData(context, 0, scanConfig.baseSeed);
+  refFixture = refRepeat.periodicFixture;
+  for iSnr = 1:numel(scanConfig.snrDbList)
+    snrDb = scanConfig.snrDbList(iSnr);
+    noiseVar = 1 / (10^(snrDb / 10));
+    crbBundle = localBuildCrbBundleQuiet(refFixture, context.pilotWave, ...
+      context.carrierFreq, context.waveInfo.sampleRate, noiseVar);
+    crbTable = buildDynamicCrbSummaryTable(crbBundle.truth, ...
+      crbBundle.crbSfRef, crbBundle.auxCrbSfRef, ...
+      crbBundle.crbSfMs, crbBundle.auxCrbSfMs, ...
+      crbBundle.crbMfRefKnown, crbBundle.auxCrbMfRefKnown, ...
+      crbBundle.crbMfMsKnown, crbBundle.auxCrbMfMsKnown, ...
+      crbBundle.crbMfRefUnknown, crbBundle.auxCrbMfRefUnknown, ...
+      crbBundle.crbMfMsUnknown, crbBundle.auxCrbMfMsUnknown, snrDb);
+    crbTableBank(end + 1, 1).numFrame = numFrame; %#ok<AGROW>
+    crbTableBank(end, 1).snrDb = snrDb;
+    crbTableBank(end, 1).crbTable = crbTable;
+  end
+end
+
+scanRuntime = struct();
+scanRuntime.config = scanConfig;
+scanRuntime.contextBank = contextBank;
+scanRuntime.crbTableBank = crbTableBank;
+scanRuntime.methodList = localBuildMethodList(scanConfig.staticLocalDoaHalfWidthDeg, scanConfig.methodNameList);
+end
+
+function context = localGetRuntimeContext(scanRuntime, numFrame)
+%LOCALGETRUNTIMECONTEXT Return the cached context for one frame count.
+
+idx = find([scanRuntime.contextBank.numFrame] == numFrame, 1, 'first');
+if isempty(idx)
+  error('scanMfMleCrbInToothConsistency:MissingRuntimeContext', ...
+    'No cached runtime context found for numFrame=%g.', numFrame);
+end
+context = scanRuntime.contextBank(idx).context;
+end
+
+function flowOpt = localGetRuntimeFlowOpt(scanRuntime, numFrame)
+%LOCALGETRUNTIMEFLOWOPT Return the cached flow options for one frame count.
+
+idx = find([scanRuntime.contextBank.numFrame] == numFrame, 1, 'first');
+if isempty(idx)
+  error('scanMfMleCrbInToothConsistency:MissingRuntimeFlowOpt', ...
+    'No cached runtime flow options found for numFrame=%g.', numFrame);
+end
+flowOpt = scanRuntime.contextBank(idx).flowOpt;
+end
+
+function crbTable = localGetRuntimeCrbTable(scanRuntime, numFrame, snrDb)
+%LOCALGETRUNTIMECRBTABLE Return the cached CRB summary for one frame/SNR pair.
+
+frameVec = [scanRuntime.crbTableBank.numFrame];
+snrVec = [scanRuntime.crbTableBank.snrDb];
+idx = find(frameVec == numFrame & abs(snrVec - snrDb) < 1e-12, 1, 'first');
+if isempty(idx)
+  error('scanMfMleCrbInToothConsistency:MissingRuntimeCrbTable', ...
+    'No cached CRB table found for numFrame=%g, snrDb=%g.', numFrame, snrDb);
+end
+crbTable = scanRuntime.crbTableBank(idx).crbTable;
 end
 
 function parallelOpt = localBuildSerialInnerParallelOpt()
@@ -571,7 +658,7 @@ method.fdRateRangeMode = string(fdRateRangeMode);
 method.doaHalfWidthDeg = reshape(double(doaHalfWidthDeg), [], 1);
 end
 
-function repeatOut = localRunOneRepeat(context, flowOpt, methodList, scanConfig, snrDb, taskSeed)
+function repeatOut = localRunOneRepeat(context, flowOpt, methodList, scanConfig, snrDb, taskSeed, crbTable)
 %LOCALRUNONEREPEAT Run one noisy repeat and collect MLE/CRB rows.
 
 lastwarn('', '');
@@ -599,17 +686,6 @@ if scanConfig.initMode == "staticTruthFreq"
 else
   staticBundle = struct();
 end
-
-noiseVar = 1 / (10^(snrDb / 10));
-crbBundle = localBuildCrbBundleQuiet(fixture, context.pilotWave, ...
-  context.carrierFreq, context.waveInfo.sampleRate, noiseVar);
-crbTable = buildDynamicCrbSummaryTable(crbBundle.truth, ...
-  crbBundle.crbSfRef, crbBundle.auxCrbSfRef, ...
-  crbBundle.crbSfMs, crbBundle.auxCrbSfMs, ...
-  crbBundle.crbMfRefKnown, crbBundle.auxCrbMfRefKnown, ...
-  crbBundle.crbMfMsKnown, crbBundle.auxCrbMfMsKnown, ...
-  crbBundle.crbMfRefUnknown, crbBundle.auxCrbMfRefUnknown, ...
-  crbBundle.crbMfMsUnknown, crbBundle.auxCrbMfMsUnknown, snrDb);
 
 caseRowList = repmat(localEmptyCaseRow(), numel(methodList), 1);
 for iMethod = 1:numel(methodList)
@@ -750,6 +826,12 @@ else
 end
 info = summarizeDoaDopplerCase(caseUse, truth);
 dynSummary = buildDynamicUnknownCaseSummary(caseUse, toothStepHz, truth);
+estResult = localGetFieldOrDefault(caseUse, 'estResult', struct());
+estAux = localGetFieldOrDefault(estResult, 'aux', struct());
+estDebug = localGetFieldOrDefault(estAux, 'debug', struct());
+initEval = localGetFieldOrDefault(estDebug, 'initEval', struct());
+finalEval = localGetFieldOrDefault(estDebug, 'finalEval', struct());
+optimInfo = localGetFieldOrDefault(estResult, 'optimInfo', struct());
 row.solverResolved = logical(localGetFieldOrDefault(info, 'isResolved', false));
 row.angleErrDeg = localGetFieldOrDefault(info, 'angleErrDeg', NaN);
 [latlonEstDeg, truthLatlonDeg] = localResolveCaseLatlon(caseUse, truth);
@@ -760,12 +842,26 @@ row.lonTrueDeg = truthLatlonDeg(2);
 if all(isfinite(latlonEstDeg(1:2))) && all(isfinite(truthLatlonDeg(1:2)))
   row.angleErrDeg = calcLatlonAngleError(latlonEstDeg(1:2), truthLatlonDeg(1:2));
 end
+row.initAngleErrDeg = localResolveInitAngleErrDeg(estResult, truth);
+row.finalMinusInitAngleDeg = localResolveFinalMinusInitAngleDeg(estResult, row.angleErrDeg);
+row.exitflag = localGetFieldOrDefault(info, 'exitflag', NaN);
+row.iterations = localGetFieldOrDefault(info, 'iterations', NaN);
+row.funcCount = localGetFieldOrDefault(info, 'funcCount', NaN);
+row.initObj = localGetFieldOrDefault(initEval, 'obj', NaN);
+row.finalObj = localGetFieldOrDefault(finalEval, 'obj', localGetFieldOrDefault(estResult, 'fval', NaN));
+row.objectiveImprove = row.initObj - row.finalObj;
+row.firstOrderOpt = localGetFieldOrDefault(optimInfo, 'firstorderopt', NaN);
+row.stepSize = localGetFieldOrDefault(optimInfo, 'stepsize', NaN);
 row.fdRefEstHz = localGetFieldOrDefault(info, 'fdRefEstHz', NaN);
 row.fdRefErrHz = localGetFieldOrDefault(info, 'fdRefErrHz', NaN);
 row.fdRefAbsErrHz = abs(row.fdRefErrHz);
 row.fdRateEstHzPerSec = localGetFieldOrDefault(info, 'fdRateEstHzPerSec', NaN);
 row.fdRateErrHzPerSec = localGetFieldOrDefault(info, 'fdRateErrHzPerSec', NaN);
 row.fdRateAbsErrHzPerSec = abs(row.fdRateErrHzPerSec);
+row.initFdRefHz = localResolveInitFdRefHz(estResult);
+row.initFdRateHzPerSec = localResolveInitFdRateHzPerSec(estResult);
+row.fdRefInitMoveHz = row.fdRefEstHz - row.initFdRefHz;
+row.fdRateInitMoveHzPerSec = row.fdRateEstHzPerSec - row.initFdRateHzPerSec;
 row.fdLineRmseHz = localGetFieldOrDefault(info, 'fdLineRmseHz', NaN);
 row.fdSatRmseHz = localGetFieldOrDefault(info, 'fdSatRmseHz', NaN);
 row.deltaFdRmseHz = localGetFieldOrDefault(info, 'deltaFdRmseHz', NaN);
@@ -926,9 +1022,14 @@ row = struct('displayName', "", 'satMode', "", 'phaseMode', "", 'fdRateMode', ""
   'windowSec', NaN, 'toothStepHz', NaN, 'inToothMode', "", ...
   'fdRateRangeMode', "", 'doaSeedMode', "", 'initMode', "", ...
   'latEstDeg', NaN, 'lonEstDeg', NaN, 'latTrueDeg', NaN, 'lonTrueDeg', NaN, ...
-  'angleErrDeg', NaN, 'fdRefEstHz', NaN, 'fdRefErrHz', NaN, ...
+  'angleErrDeg', NaN, 'initAngleErrDeg', NaN, 'finalMinusInitAngleDeg', NaN, ...
+  'exitflag', NaN, 'iterations', NaN, 'funcCount', NaN, 'initObj', NaN, ...
+  'finalObj', NaN, 'objectiveImprove', NaN, 'firstOrderOpt', NaN, 'stepSize', NaN, ...
+  'fdRefEstHz', NaN, 'fdRefErrHz', NaN, ...
   'fdRefAbsErrHz', NaN, 'fdRateEstHzPerSec', NaN, 'fdRateErrHzPerSec', NaN, ...
-  'fdRateAbsErrHzPerSec', NaN, 'fdLineRmseHz', NaN, 'fdSatRmseHz', NaN, ...
+  'fdRateAbsErrHzPerSec', NaN, 'initFdRefHz', NaN, 'initFdRateHzPerSec', NaN, ...
+  'fdRefInitMoveHz', NaN, 'fdRateInitMoveHzPerSec', NaN, ...
+  'fdLineRmseHz', NaN, 'fdSatRmseHz', NaN, ...
   'deltaFdRmseHz', NaN, 'toothIdx', NaN, 'toothResidualHz', NaN, ...
   'nonRefCoherenceFloor', NaN, 'nonRefRmsPhaseResidRad', NaN, ...
   'angleCrbStdDeg', NaN, 'fdRefCrbStdHz', NaN, 'angleNormErr', NaN, ...
@@ -1124,8 +1225,10 @@ for iGroup = 1:height(groupKey)
   keepIdx = orderIdx(1:keepCount);
   topTable = groupTable(keepIdx, {'displayName', 'snrDb', 'numFrame', 'taskSeed', ...
     'angleErrDeg', 'angleNormErr', 'fdRefAbsErrHz', 'fdRefNormErr', ...
-    'fdRateAbsErrHzPerSec', 'nonRefCoherenceFloor', 'failureReason', ...
-    'coreResolved', 'trimmedCore', 'trimmedOutlier'});
+    'fdRateAbsErrHzPerSec', 'nonRefCoherenceFloor', 'initAngleErrDeg', ...
+    'finalMinusInitAngleDeg', 'fdRefInitMoveHz', 'fdRateInitMoveHzPerSec', ...
+    'objectiveImprove', 'iterations', 'exitflag', 'firstOrderOpt', ...
+    'failureReason', 'coreResolved', 'trimmedCore', 'trimmedOutlier'});
   topTable.tailScore = tailScore(keepIdx);
   tailTableCell{end + 1, 1} = topTable; %#ok<AGROW>
 end
@@ -1145,6 +1248,67 @@ if isempty(dataTable) || height(dataTable) <= maxRows
   return;
 end
 previewTable = dataTable(1:maxRows, :);
+end
+
+function topTailExportTable = localBuildTopTailExportTable(topTailTable)
+%LOCALBUILDTOPTAILEXPORTTABLE Keep compact tail rows for replay seed selection.
+
+topTailExportTable = table();
+if isempty(topTailTable) || height(topTailTable) == 0
+  return;
+end
+fieldList = {'displayName', 'snrDb', 'numFrame', 'taskSeed', 'tailScore', ...
+  'angleErrDeg', 'angleNormErr', 'fdRefAbsErrHz', 'fdRefNormErr', ...
+  'fdRateAbsErrHzPerSec', 'nonRefCoherenceFloor', 'initAngleErrDeg', ...
+  'finalMinusInitAngleDeg', 'fdRefInitMoveHz', 'fdRateInitMoveHzPerSec', ...
+  'objectiveImprove', 'iterations', 'exitflag', 'firstOrderOpt', ...
+  'failureReason', 'coreResolved', 'trimmedCore', 'trimmedOutlier'};
+keepField = fieldList(ismember(fieldList, topTailTable.Properties.VariableNames));
+topTailExportTable = topTailTable(:, keepField);
+end
+
+function initAngleErrDeg = localResolveInitAngleErrDeg(estResult, truth)
+%LOCALRESOLVEINITANGLEERRDEG Read estimator init DoA and compare to truth.
+
+initAngleErrDeg = NaN;
+initParam = reshape(localGetFieldOrDefault(estResult, 'initParam', []), [], 1);
+truthDoa = reshape(localGetFieldOrDefault(truth, 'latlonTrueDeg', []), [], 1);
+if numel(initParam) >= 2 && numel(truthDoa) >= 2 && all(isfinite(initParam(1:2)))
+  initAngleErrDeg = calcLatlonAngleError(initParam(1:2), truthDoa(1:2));
+end
+end
+
+function finalMinusInitDeg = localResolveFinalMinusInitAngleDeg(estResult, fallbackAngleErrDeg)
+%LOCALRESOLVEFINALMINUSINITANGLEDEG Measure final DoA movement from estimator init.
+
+finalMinusInitDeg = NaN;
+initParam = reshape(localGetFieldOrDefault(estResult, 'initParam', []), [], 1);
+finalDoa = reshape(localGetFieldOrDefault(estResult, 'doaParamEst', []), [], 1);
+if numel(initParam) >= 2 && numel(finalDoa) >= 2 && all(isfinite(initParam(1:2))) && all(isfinite(finalDoa(1:2)))
+  finalMinusInitDeg = calcLatlonAngleError(finalDoa(1:2), initParam(1:2));
+elseif isfinite(fallbackAngleErrDeg)
+  finalMinusInitDeg = NaN;
+end
+end
+
+function initFdRefHz = localResolveInitFdRefHz(estResult)
+%LOCALRESOLVEINITFDREFHZ Read fdRef from estimator initParam when available.
+
+initFdRefHz = NaN;
+initParam = reshape(localGetFieldOrDefault(estResult, 'initParam', []), [], 1);
+if numel(initParam) >= 3
+  initFdRefHz = initParam(3);
+end
+end
+
+function initFdRateHzPerSec = localResolveInitFdRateHzPerSec(estResult)
+%LOCALRESOLVEINITFDRATEHZPERSEC Read fdRate from estimator initParam when available.
+
+initFdRateHzPerSec = NaN;
+initParam = reshape(localGetFieldOrDefault(estResult, 'initParam', []), [], 1);
+if numel(initParam) >= 4
+  initFdRateHzPerSec = initParam(4);
+end
 end
 
 function failureSummaryTable = localBuildFailureSummaryTable(perfTable)

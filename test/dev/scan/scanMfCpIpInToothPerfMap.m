@@ -69,6 +69,8 @@ try
     checkpointOpt = struct();
   end
   printMfScanHeader(char(scanName), scanConfig, checkpointDir);
+  fprintf('Preparing runtime cache...\n');
+  scanRuntime = localBuildScanRuntime(scanConfig);
 
   %% Run scan batch
 
@@ -79,7 +81,7 @@ try
     if progressTracker.enabled
       checkpointOpt.progressFcn = @(~) localAdvanceScanProgress(progressTracker, false);
     end
-    checkpointRunState = runPerfTaskGridWithCheckpoint(taskList, scanConfig, ...
+    checkpointRunState = runPerfTaskGridWithCheckpoint(taskList, scanRuntime, ...
       @localRunCheckpointTask, checkpointOpt);
     taskOutCell = checkpointRunState.resultCell;
     localCloseScanProgressTracker(progressTracker);
@@ -91,16 +93,16 @@ try
     if useParfor && progressTracker.enabled && ~isempty(progressTracker.queue)
       progressQueue = progressTracker.queue;
       parfor iTask = 1:numel(taskList)
-        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanConfig);
+        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanRuntime);
         send(progressQueue, 1);
       end
     elseif useParfor
       parfor iTask = 1:numel(taskList)
-        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanConfig);
+        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanRuntime);
       end
     else
       for iTask = 1:numel(taskList)
-        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanConfig);
+        taskOutCell{iTask} = localRunOneTask(taskList(iTask), scanRuntime);
         localAdvanceScanProgress(progressTracker, false);
       end
     end
@@ -151,6 +153,7 @@ try
   fprintf('Frames                          : %s\n', localFormatRow(scanData.config.frameCountList));
   fprintf('SNR list (dB)                   : %s\n', localFormatRow(scanData.config.snrDbList));
   fprintf('Repeats per config              : %d\n', scanData.config.numRepeat);
+  fprintf('Runtime cache                   : context per frame.\n');
   fprintf('fdRef oracle half-tooth fraction: %.3f\n', scanData.config.oracleFdHalfToothFraction);
   fprintf('fdRate oracle half-width        : %.2f Hz/s\n', scanData.config.oracleFdRateHalfWidthHzPerSec);
   fprintf('Truth-tooth rule                : toothIdx == 0 and |residual| <= %.2f Hz\n', ...
@@ -193,10 +196,10 @@ end
 
 %% Local helpers
 
-function taskOut = localRunCheckpointTask(task, scanConfig)
+function taskOut = localRunCheckpointTask(task, scanRuntime)
 %LOCALRUNCHECKPOINTTASK Run one checkpointed scan task.
 
-taskOut = localRunOneTask(task, scanConfig);
+taskOut = localRunOneTask(task, scanRuntime);
 end
 
 function checkpointOpt = localBuildCheckpointOpt(scanName, scanConfig, taskList, useParfor)
@@ -322,23 +325,66 @@ for iP = 1:numel(frameCountList)
 end
 end
 
-function taskOut = localRunOneTask(task, scanConfig)
+function taskOut = localRunOneTask(task, scanRuntime)
 %LOCALRUNONETASK Run one frame-count, SNR, and seed configuration.
 
-contextOpt = struct();
-contextOpt.periodicOffsetIdx = localCenteredOffsets(task.numFrame);
-contextOpt.masterOffsetIdx = contextOpt.periodicOffsetIdx;
-contextOpt.numSubsetRandomTrial = 0;
-contextOpt.parallelOpt = localBuildSerialInnerParallelOpt();
-context = buildDynamicDualSatEciContext(contextOpt);
-context = localDisableSubsetBankForInTooth(context);
-flowOpt = localBuildFlowOpt(scanConfig.staticLocalDoaHalfWidthDeg, context.parallelOpt);
-methodList = localBuildMethodList(scanConfig.staticLocalDoaHalfWidthDeg);
+scanConfig = scanRuntime.config;
+context = localGetRuntimeContext(scanRuntime, task.numFrame);
+flowOpt = localGetRuntimeFlowOpt(scanRuntime, task.numFrame);
+methodList = scanRuntime.methodList;
 repeatOut = localRunOneRepeat(context, flowOpt, methodList, scanConfig, task.snrDb, task.taskSeed);
 
 taskOut = struct();
 taskOut.caseRowList = repeatOut.caseRowList;
 taskOut.repeatSlim = localStripRepeatOut(repeatOut);
+end
+
+function scanRuntime = localBuildScanRuntime(scanConfig)
+%LOCALBUILDSCANRUNTIME Cache frame-level context outside task workers.
+
+frameCountList = reshape(unique(scanConfig.frameCountList, 'stable'), [], 1);
+contextBank = repmat(struct('numFrame', NaN, 'context', struct(), 'flowOpt', struct()), numel(frameCountList), 1);
+parallelOpt = localBuildSerialInnerParallelOpt();
+for iFrame = 1:numel(frameCountList)
+  numFrame = frameCountList(iFrame);
+  contextOpt = struct();
+  contextOpt.periodicOffsetIdx = localCenteredOffsets(numFrame);
+  contextOpt.masterOffsetIdx = contextOpt.periodicOffsetIdx;
+  contextOpt.numSubsetRandomTrial = 0;
+  contextOpt.parallelOpt = parallelOpt;
+  context = buildDynamicDualSatEciContext(contextOpt);
+  context = localDisableSubsetBankForInTooth(context);
+  contextBank(iFrame).numFrame = numFrame;
+  contextBank(iFrame).context = context;
+  contextBank(iFrame).flowOpt = localBuildFlowOpt(scanConfig.staticLocalDoaHalfWidthDeg, context.parallelOpt);
+end
+
+scanRuntime = struct();
+scanRuntime.config = scanConfig;
+scanRuntime.contextBank = contextBank;
+scanRuntime.methodList = localBuildMethodList(scanConfig.staticLocalDoaHalfWidthDeg);
+end
+
+function context = localGetRuntimeContext(scanRuntime, numFrame)
+%LOCALGETRUNTIMECONTEXT Return the cached context for one frame count.
+
+idx = find([scanRuntime.contextBank.numFrame] == numFrame, 1, 'first');
+if isempty(idx)
+  error('scanMfCpIpInToothPerfMap:MissingRuntimeContext', ...
+    'No cached runtime context found for numFrame=%g.', numFrame);
+end
+context = scanRuntime.contextBank(idx).context;
+end
+
+function flowOpt = localGetRuntimeFlowOpt(scanRuntime, numFrame)
+%LOCALGETRUNTIMEFLOWOPT Return the cached flow options for one frame count.
+
+idx = find([scanRuntime.contextBank.numFrame] == numFrame, 1, 'first');
+if isempty(idx)
+  error('scanMfCpIpInToothPerfMap:MissingRuntimeFlowOpt', ...
+    'No cached runtime flow options found for numFrame=%g.', numFrame);
+end
+flowOpt = scanRuntime.contextBank(idx).flowOpt;
 end
 
 function parallelOpt = localBuildSerialInnerParallelOpt()
