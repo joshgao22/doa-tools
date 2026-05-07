@@ -44,21 +44,7 @@ todoIdx = find(~doneMask);
 localPrintStartStatus(runDir, numDone, numTask);
 
 if opt.useParfor && ~isempty(todoIdx)
-  progressQueue = [];
-  if ~isempty(opt.progressFcn)
-    progressQueue = parallel.pool.DataQueue;
-    afterEach(progressQueue, @(~) opt.progressFcn(1));
-  end
-
-  parfor iTodo = 1:numel(todoIdx)
-    iTask = todoIdx(iTodo);
-    taskInfo = taskGrid(iTask);
-    taskResult = taskRunner(taskInfo, sharedData);
-    localSaveTaskResult(taskDir, iTask, taskResult);
-    if ~isempty(progressQueue)
-      send(progressQueue, iTask);
-    end
-  end
+  localRunParallelCheckpointTasks(taskGrid, sharedData, taskRunner, taskDir, todoIdx, opt.progressFcn);
 else
   for iTodo = 1:numel(todoIdx)
     iTask = todoIdx(iTodo);
@@ -175,6 +161,77 @@ if numDone > 0
   fprintf('[checkpoint] Resume run from %s (%d/%d done).\n', runDir, numDone, numTask);
 else
   fprintf('[checkpoint] Start new run at %s (0/%d done).\n', runDir, numTask);
+end
+end
+
+
+function localRunParallelCheckpointTasks(taskGrid, sharedData, taskRunner, taskDir, todoIdx, progressFcn)
+%LOCALRUNPARALLELCHECKPOINTTASKS Run checkpoint tasks without returning large payloads.
+%
+% Each worker writes the full task result to its checkpoint MAT file and only
+% returns a tiny status struct to the client. This avoids the parfor gather
+% path deserializing large replay task payloads after all workers finish.
+
+poolObj = gcp('nocreate');
+if isempty(poolObj)
+  poolObj = parpool;
+end
+
+sharedDataConst = parallel.pool.Constant(sharedData);
+numTodo = numel(todoIdx);
+futureList = parallel.FevalFuture.empty(numTodo, 0);
+for iTodo = 1:numTodo
+  iTask = todoIdx(iTodo);
+  taskInfo = taskGrid(iTask);
+  futureList(iTodo, 1) = parfeval(poolObj, @localRunAndSaveCheckpointTask, 1, ...
+    taskDir, iTask, taskInfo, sharedDataConst, taskRunner);
+end
+futureCleanup = onCleanup(@() localCancelUnfinishedFutures(futureList)); %#ok<NASGU>
+
+for iDone = 1:numTodo
+  [~, taskStatus] = fetchNext(futureList);
+  localValidateCheckpointTaskStatus(taskStatus);
+  if ~isempty(progressFcn)
+    progressFcn(1);
+  end
+end
+end
+
+
+function taskStatus = localRunAndSaveCheckpointTask(taskDir, taskIndex, taskInfo, sharedDataConst, taskRunner)
+%LOCALRUNANDSAVECHECKPOINTTASK Run one task on a worker and save its result.
+
+sharedData = sharedDataConst.Value;
+taskResult = taskRunner(taskInfo, sharedData);
+localSaveTaskResult(taskDir, taskIndex, taskResult);
+taskStatus = struct();
+taskStatus.taskIndex = taskIndex;
+taskStatus.taskFile = string(localTaskFile(taskDir, taskIndex));
+end
+
+
+function localValidateCheckpointTaskStatus(taskStatus)
+%LOCALVALIDATECHECKPOINTTASKSTATUS Validate the tiny status returned by workers.
+
+if ~(isstruct(taskStatus) && isfield(taskStatus, 'taskIndex') && isfield(taskStatus, 'taskFile'))
+  error('runPerfTaskGridWithCheckpoint:InvalidTaskStatus', ...
+    'Parallel checkpoint task returned an invalid status payload.');
+end
+if ~(isfinite(double(taskStatus.taskIndex)) && isfile(taskStatus.taskFile))
+  error('runPerfTaskGridWithCheckpoint:MissingTaskFile', ...
+    'Parallel checkpoint task %d did not create the expected task file: %s', ...
+    double(taskStatus.taskIndex), char(taskStatus.taskFile));
+end
+end
+
+
+function localCancelUnfinishedFutures(futureList)
+%LOCALCANCELUNFINISHEDFUTURES Cancel pending futures after an error.
+
+for iFuture = 1:numel(futureList)
+  if ~strcmp(futureList(iFuture).State, 'finished')
+    cancel(futureList(iFuture));
+  end
 end
 end
 

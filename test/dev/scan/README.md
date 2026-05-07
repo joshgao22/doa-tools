@@ -110,7 +110,7 @@ scan 顶层工程外壳可使用 `test/common/scan/` 的薄 helper：
 - 作用：扫描 Doppler-aided / in-tooth 条件下 CP-K / CP-U local MLE 与 CRB 的一致性。
 - 用途：作为论文 MLE-vs-CRB resolved-regime 主图候选；在 truth-centered 单 tooth `fdRef` range 与 truth-local unknown-rate range 下，报告 full-sample、loose resolved、core resolved、trimmed core、CRB-normalized error、keep rate 与 outlier reason。
 - truth 口径：truth 默认只用于构造 oracle in-tooth 频率盒、known-rate 真值条件、CRB 计算和离线 resolved / trimming / top-tail 评价；默认 `initMode="auto"` 不使用 static 结果或 truth-frequency `initParam`。`initMode="staticTruthFreq"` 仅作为诊断 oracle baseline，不能作为论文主估计口径。
-- 主要输出：`perfTable`、`aggregateTable`、`failureSummaryTable`、`topTailTable`、轻量 `repeatOutCell`、`checkpointSummaryTable` 与可重画 `plotData`；命令行打印 aggregate、failure reason、top-tail 预览和 checkpoint summary，完整逐 repeat 表留在 `scanData`。
+- 主要输出：`perfTable`、`aggregateTable`、`failureSummaryTable`、`topTailTable`、`topTailExportTable`、轻量 `repeatOutCell`、`checkpointSummaryTable` 与可重画 `plotData`；命令行打印 aggregate、failure reason、top-tail 与 compact export 预览和 checkpoint summary，完整逐 repeat 表留在 `scanData`。`topTailExportTable` 只保存 seed-level 轻量诊断字段，用于喂给 SS/MS replay，不保存 estimator 内部大 trace。
 - 方法选择：配置区保留完整 `methodNameList=["SS-MF-CP-K", "SS-MF-CP-U", "MS-MF-CP-K", "MS-MF-CP-U"]`；需要先看动态单星时可直接注释掉 MS 两行，需要只看多星时可注释掉 SS 两行。该列表只影响 scan 运行的 method bank，不改 estimator 默认路径。
 - 初始化口径：默认 `initMode="auto"`，每个 MF 方法内部自行用 frame-aggregated MUSIC/Bartlett 形成 DoA seed，并用 reference-sat single-sat frame-line / continuous-phase refiner 形成 `fdRef/fdRate` seed；不共享 upstream static 估计结果。若需要复现早期 oracle-local 结果，可手动改为 `"staticTruthFreq"`。
 - 统计口径：loose resolved 不使用 angle error；core resolved 在 multi-sat case 中进一步要求 non-ref coherence floor 达标；trimmed core 在 core 样本上按固定 CRB-normalized angle/fdRef cap 剔除极端 tail，并单独报告 keep rate。
