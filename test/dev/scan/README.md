@@ -108,13 +108,13 @@ scan 顶层工程外壳可使用 `test/common/scan/` 的薄 helper：
 #### `scanMfMleCrbInToothConsistency.m`
 
 - 作用：扫描 Doppler-aided / in-tooth 条件下 CP-K / CP-U local MLE 与 CRB 的一致性。
-- 用途：作为论文 MLE-vs-CRB resolved-regime 主图候选；在 truth-centered 单 tooth `fdRef` range 与 truth-local unknown-rate range 下，报告 full-sample、loose resolved、core resolved、trimmed core、CRB-normalized error、keep rate 与 outlier reason。
+- 用途：作为论文 MLE-vs-CRB resolved-regime 主图候选；在 truth-centered 单 tooth `fdRef` range 与 truth-local unknown-rate range 下，报告 full-sample、loose resolved、core resolved、trimmed core、CRB-local、CRB-normalized error、keep rate 与 outlier reason。
 - truth 口径：truth 默认只用于构造 oracle in-tooth 频率盒、known-rate 真值条件、CRB 计算和离线 resolved / trimming / top-tail 评价；默认 `initMode="auto"` 不使用 static 结果或 truth-frequency `initParam`。`initMode="staticTruthFreq"` 仅作为诊断 oracle baseline，不能作为论文主估计口径。
-- 主要输出：`perfTable`、`aggregateTable`、`failureSummaryTable`、`topTailTable`、`topTailExportTable`、轻量 `repeatOutCell`、`checkpointSummaryTable` 与可重画 `plotData`；命令行打印 aggregate、failure reason、top-tail 与 compact export 预览和 checkpoint summary，完整逐 repeat 表留在 `scanData`。`topTailExportTable` 只保存 seed-level 轻量诊断字段，用于喂给 SS/MS replay，不保存 estimator 内部大 trace。
+- 主要输出：`perfTable`、`aggregateTable`、`crbLocalSummaryTable`、`failureSummaryTable`、`topTailTable`、`topTailExportTable`、轻量 `repeatOutCell`、`checkpointSummaryTable` 与可重画 `plotData`；命令行打印 aggregate、CRB-local compact summary、failure reason、top-tail 与 compact export 预览和 checkpoint summary，完整逐 repeat 表留在 `scanData`。`topTailTable` / `topTailExportTable` 增加 `tailSubtype`，用于区分 `same-tooth-fdref-tail`、`outside-tooth-tail`、`fd-boundary-tail`、`angle-local-tail` 等 seed-level 轻量诊断字段，不保存 estimator 内部大 trace。
 - 方法选择：配置区保留完整 `methodNameList=["SS-MF-CP-K", "SS-MF-CP-U", "MS-MF-CP-K", "MS-MF-CP-U"]`；需要先看动态单星时可直接注释掉 MS 两行，需要只看多星时可注释掉 SS 两行。该列表只影响 scan 运行的 method bank，不改 estimator 默认路径。
 - 初始化口径：默认 `initMode="auto"`，每个 MF 方法内部自行用 frame-aggregated MUSIC/Bartlett 形成 DoA seed，并用 reference-sat single-sat frame-line / continuous-phase refiner 形成 `fdRef/fdRate` seed；不共享 upstream static 估计结果。若需要复现早期 oracle-local 结果，可手动改为 `"staticTruthFreq"`。
-- 统计口径：loose resolved 不使用 angle error；core resolved 在 multi-sat case 中进一步要求 non-ref coherence floor 达标；trimmed core 在 core 样本上按固定 CRB-normalized angle/fdRef cap 剔除极端 tail，并单独报告 keep rate。
-- 图形口径：默认画 static perf 风格的 angle/fdRef 并列 RMSE-vs-CRB 图、angle/fdRef 并列 MSE/CRB 图，以及 loose/core/trimmed keep-rate 图；不保存图片。
+- 统计口径：loose resolved 不使用 angle error；core resolved 在 multi-sat case 中进一步要求 non-ref coherence floor 达标；trimmed core 在 core 样本上按固定 CRB-normalized angle/fdRef cap 剔除极端 tail，并单独报告 keep rate。`crbLocal*` 是当前 trimmed-core 的 paper-facing alias，用于表达 CRB-local resolved 样本，而不是改变筛选逻辑。
+- 图形口径：默认画 static perf 风格的 angle/fdRef 并列 RMSE-vs-CRB 图、angle/fdRef 并列 MSE/CRB 图，以及 loose/core/CRB-local keep-rate 图；不保存图片。
 - checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfMleCrbInToothConsistency/<shortRunKey>/`。`shortRunKey` 只保留 frame / SNR range / seed range / repeat 和 8 位 hash，完整语义签名写入 checkpoint meta，避免 Windows 路径超过 260 字符；中断后用同一配置直接重跑可恢复已完成 task，成功构造 `scanData` 后默认清理 checkpoint 目录。
 - 存储口径：默认不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。
 

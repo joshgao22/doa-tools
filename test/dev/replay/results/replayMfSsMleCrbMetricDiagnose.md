@@ -42,8 +42,6 @@
 | snapshot | 日期 | 状态 | 配置摘要 | 结论 | 覆盖 / 取代 |
 |---|---:|---|---|---|---|
 | `test/data/cache/replay/replayMfSsMleCrbMetricDiagnose_20260507-174134.mat` | 2026-05-07 | `representative` | `numRepeat=5`，seed `[266,271,347,253,260]`，SNR `[-15:3:9] dB`，`fdRefOracleHalfWidth=0.400 tooth`，外层 parfor，objective/solve/path probe 全开。 | post-fix SS-MF 已恢复到约 `1.17 x CRB` 的 DoA 局部 MLE 行为；CP-K `fdRefNormRmse < 1` 作为 diagnostic caveat 记录。 | 当前代表性结果。 |
-| `test/data/cache/replay/replayMfSsMleCrbMetricDiagnose_20260507-170849.mat` | 2026-05-07 | `superseded` | `numRepeat=5`，SNR `[-15,-10,-5,0,5,10] dB`，targeted basin probe。 | 证明 DoA basin-entry 修复有效，但 fdRef CRB-normalized 口径尚未补全。 | 被最新 snapshot 的更密 SNR 与 fdRef normalized metrics 覆盖。 |
-| `test/data/cache/replay/replayMfSsMleCrbMetricDiagnose_20260507-123251.mat` | 2026-05-07 | `superseded` | compact-only / pre basin-entry fix。 | 低 SNR `SS-MF` angle/CRB 约 `3 x`，用于说明旧 compact local box 存在系统性 basin-entry failure。 | 被 estimator basin-entry fix 后结果覆盖。 |
 
 ## 4. 最新代表性运行
 

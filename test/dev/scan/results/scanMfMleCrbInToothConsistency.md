@@ -4,274 +4,216 @@
 
 | 项目 | 内容 |
 |---|---|
-| 当前状态 | `representative / diagnostic-gate / SS paper-facing candidate / MS needs replay diagnosis` |
-| 最新代表性 snapshot | `test/data/cache/scan/scanMfMleCrbInToothConsistency_20260507-003909.mat` |
-| 当前一句话结论 | `SS-MF` 在 auto init + in-tooth 条件下，local-consistent trimmed 子样本已经接近 CRB 尺度；`MS-MF` 当前不能稳定进入 multi-sat local basin，暂不适合作为正文 MS-vs-CRB 主图。 |
-| 论文图定位 | `SS-MF`: main-figure candidate after metric wording check；`MS-MF`: internal diagnostic / replay input，不作为当前主图。 |
-| 决策影响 | 当前 scan 版本可以固定为统计筛查入口；下一步转 replay 排查 MS 的 same-tooth tail、non-ref coherence / fdRef near-boundary branch 和 CP-U fdRate-unresolved。 |
-| 下一步动作 | 新增或运行 `replayMfSsMleCrbMetricDiagnose` 与 `replayMfMsMleCrbMetricDiagnose`；SS 用于确认 angle CRB metric 与 trimmed conditional 口径，MS 用于定位 auto-init / warm-anchor / coherence / boundary 失败。 |
-| 禁止误用 | 不要把 `trimmedCore` 曲线解释为 unconditional estimator efficiency；不要把 `trimmed RMSE/CRB < 1` 写成超过 CRB；不要用当前 MS 的极低 trimmed 样本率声称 MS-MF 已接近 CRB；不要把 in-tooth oracle range 当成 runtime tooth selector。 |
+| 当前状态 | `representative / SS paper-facing candidate / CRB-local main-figure candidate` |
+| 最新代表性 snapshot | `test/data/cache/scan/scanMfMleCrbInToothConsistency_20260507-222606.mat` |
+| 当前一句话结论 | 500-repeat SS-only in-tooth scan 表明，`SS-MF-CP-K/U` 在 CRB-local 样本上 DoA 与 `fdRef` 均稳定接近 CRB；full / tooth-resolved 结果仍含 tooth / boundary tail，因此主图应使用 `crbLocal*` 口径并同步报告 resolved / CRB-local rate。 |
+| 论文图定位 | `SS-MF`: main-figure candidate；`CP-U resolved-rate`: paper-facing auxiliary curve；full/resolved RMSE: outlier / tail diagnostic，不作为主 CRB-consistency 曲线。 |
+| 决策影响 | 固定该 snapshot 作为当前 SS in-tooth MLE-vs-CRB 代表结果；不继续改 estimator，不再调 `trimNormCap=5`；后续可基于 `crbLocalAngleRmseOverCrb` / `crbLocalFdRefRmseOverCrb` 画初版论文图。 |
+| 下一步动作 | 写/更新本文档与图脚本；若要扩展，下一步单独恢复 MS 或做 SS/MS 总览 scan，不在本 SS-only snapshot 上继续加诊断。 |
+| 禁止误用 | 不要把 full/resolved RMSE 当作 CRB-local 主曲线；不要把 `crbLocal*` 解释成 unconditional efficiency；不要把 `CP-U` 的低 SNR RMSE 单独画出而不报告 resolved / boundary rate；不要把 in-tooth oracle range 当成 runtime tooth acquisition 已通过。 |
 
 ## 1. Scan 身份
 
 - 脚本：`test/dev/scan/scanMfMleCrbInToothConsistency.m`
 - 结果文档：`test/dev/scan/results/scanMfMleCrbInToothConsistency.md`
-- scan 类型：`paper-facing curve / local consistency screening / engineering diagnostic gate`
-- 主要问题：在 coarse Doppler compensation 已将参考星 `fdRef` 限制到同一 Doppler tooth 内时，`SS/MS-MF-CP-K/U` 的 dynamic local MLE 是否能在 resolved/local 条件下与对应 CRB 对齐？
-- 扫描对象：`SNR=-15:5:10 dB`，`P=10`，`SS/MS`，`CP-K/CP-U`，`auto` internal MF initializer，`full/resolved/core/trimmed` 四层统计。
-- 不覆盖范围：不验证 full-flow tooth acquisition；不验证 subset tooth selection；不比较 rescue / ordinary-wide / flow-like gate；不下结论 estimator 默认路径已经修复；不形成 regression 契约。
-- truth 使用口径：truth 只用于 offline evaluation、CRB、in-tooth oracle local range 与 error / tail label；不进入 runtime selector、gate、candidate adoption 或 final winner。
-- 是否 paper-facing：`SS-MF` 可作为局部一致性论文候选；`MS-MF` 当前仅为 diagnostic，需 replay 修复或解释后再回到 scan。
+- scan 类型：`paper-facing curve / local CRB consistency / resolved-regime diagnostic`
+- 主要问题：在 coarse Doppler compensation 已将参考星 `fdRef` 限制到单个 Doppler tooth 内时，`SS-MF-CP-K/U` 的 in-tooth local MLE 是否能在 CRB-local 样本上与对应 CRB 对齐？
+- 扫描对象：`SNR=-15:3:9 dB`，`P=10`，`SS-MF-CP-K/U`，`numRepeat=500`，`initMode=auto`，`fdRef oracle half-tooth=0.40`，`fdRate oracle half-width=1000 Hz/s`。
+- 不覆盖范围：不验证 full-flow tooth acquisition；不验证 subset tooth selection；不比较 rescue / ordinary-wide / flow-like gate；不验证 MS；不形成 regression 契约。
+- truth 使用口径：truth 只用于构造 oracle in-tooth 频率盒、known-rate 真值条件、CRB 计算和离线 resolved / CRB-local / top-tail 评价；不进入 runtime selector、gate、candidate adoption 或 final winner。
+- 是否 paper-facing：`SS-MF` 的 `crbLocal*` 曲线可作为正文主图候选；full / resolved 曲线只用于解释 threshold / tooth / fdRate tail。
 
 ## 2. 术语与曲线口径
 
 | 名称 / 字段 | 含义 | 是否使用 truth | 如何解读 | 禁止解释 |
 |---|---|---:|---|---|
-| `Doppler-aided / in-tooth` | 用 `truth ± 0.25 tooth` 的 `fdRef` local box 表示前端 coarse Doppler compensation 已消除全局 tooth ambiguity。 | Oracle / eval only | 验证 tooth-resolved local MLE 与 CRB 是否同尺度。 | 不能解释为真实 runtime tooth acquisition 已通过。 |
-| `initMode=auto` | 不再把 static DoA seed 或 truth-frequency init 作为外部初值传入 dynamic case；由 MF estimator 内部 initializer 构造初值。 | No | 更真实暴露 estimator 内部 init / warm-anchor / basin 问题。 | 不能和旧 `staticTruthFreq` 结果直接混成同一性能曲线。 |
-| `SS-MF-CP-K` | 单星、多帧、连续相位、known `fdRate`。 | Eval only | 单星 dynamic known-rate local MLE 基线。 | 不能代表 multi-sat 结果。 |
-| `SS-MF-CP-U` | 单星、多帧、连续相位、unknown `fdRate` nuisance。 | Eval only | 观察 nuisance-rate release 对 DoA / `fdRef` 的影响。 | 低 SNR `resolvedRate` 下降不能直接解释为 CRB 失效。 |
-| `MS-MF-CP-K` | 多星、多帧、连续相位、known `fdRate`。 | Eval only | 用于检查 MS local basin、non-ref coherence 和 fdRef tail。 | 当前不能作为 MS-vs-CRB 主图。 |
-| `MS-MF-CP-U` | 多星、多帧、连续相位、unknown `fdRate` nuisance。 | Eval only | 用于暴露 MS unknown-rate warm-anchor / release 失败。 | 当前不能作为 unknown-rate information loss 的性能结论。 |
-| `full-sample` | 所有 finite estimator 输出。 | Eval only | 显示 auto-init 工程风险和 tail 污染。 | 不要求 full RMSE 必须贴 CRB。 |
-| `resolved` | solver-valid、in-tooth、无 frequency boundary hit；CP-U 还要求 `fdRate` 在预设健康范围内。 | Eval only | 用于排除明显非局部 / boundary / fdRate failure 样本。 | angle error 不参与 loose resolved，不能用它循环筛选 angle 性能。 |
-| `coreResolved` | 对 MS 额外要求 `nonRefCoherenceFloor >= 0.8`；对 SS 等同 resolved。 | Eval only | 区分 MS non-ref coherence collapse 与健康 coherence 子样本。 | core 通过不代表 CRB-normalized error 一定健康。 |
-| `trimmedCore` | 在 core 样本上固定剔除 `angleNormErr > 5` 或 `fdRefNormErr > 5` 的 tail。 | Eval only | 表示 local-consistent conditional subset，用于观察 tail 剔除后与 CRB 的尺度关系。 | 不是 unconditional efficiency；必须同时报告 `trimmedCoreRate` / `trimKeepRate`。 |
-| `trimmedCoreRate` | `trimmedCoreCount / numRepeat`。 | Eval only | 表示所有 repeat 中真正可用于 local-consistent CRB 对比的比例。 | 不能用只剩极少样本的 trimmed 曲线支撑主结论。 |
-| `trimKeepRate` | `trimmedCoreCount / coreResolvedCount`。 | Eval only | 表示 core 样本内部有多少没有被 5σ tail 剔除。 | 不等同于总 seed 正确率。 |
-| `RMSE/CRB` | `RMSE / CRB standard deviation`。 | Eval only | 用于看误差标准差是否与 CRB 同尺度。 | 小于 1 尤其在 trimmed 条件样本中不代表超过 CRB。 |
-| `MSE/CRB` | `mean(error^2) / CRB variance`。 | Eval only | 更直接回答 MSE 是否接近 CRB。 | 仍受条件样本选择影响。 |
-| `KKT singular / ill-conditioned warning` | `fmincon` barrier / KKT system 中出现病态或奇异警告。 | No | 指示 MS/unknown 分支优化数值状态不稳定，应进入 replay 诊断。 | 不直接等价于该 seed 失败，需与输出和 failure reason 联合判断。 |
+| `Doppler-aided / in-tooth` | 用 truth-centered single-tooth local `fdRef` range 表示前端 coarse Doppler compensation 已消除全局 tooth ambiguity。 | Oracle / eval only | 验证 tooth-resolved local MLE 与 CRB 是否同尺度。 | 不能解释为真实 runtime tooth acquisition 已通过。 |
+| `initMode=auto` | MF 方法内部自行构造 DoA 与 frequency seed，不使用 replay 中的 `static-doa-truth-fd`。 | No | 更接近论文主估计器自身初始化口径。 | 不与旧 oracle-init replay 结果直接混作同一曲线。 |
+| `resolved` | solver-valid、in-tooth、无 frequency boundary hit；CP-U 还要求 `fdRate` 在健康范围内。 | Eval only | 排除明显非局部 / boundary / fdRate failure 样本。 | angle error 不参与 resolved，不能把 resolved 直接等同 CRB-local。 |
+| `coreResolved` | 对 SS 等同于 resolved；对 MS 会额外要求 non-ref coherence。 | Eval only | 本轮 SS-only 中与 resolved 等价。 | 不应在 SS 结果里过度解释 coherence 字段。 |
+| `trimmedCore` | 在 core 样本上用固定 CRB-normalized angle / fdRef cap 剔除极端 tail。 | Eval only | dev/statistical 旧字段。 | 不是 unconditional estimator efficiency。 |
+| `crbLocal*` | 当前等价于 `trimmedCore` 的 paper-facing alias。 | Eval only | 表示 CRB-local resolved 样本，用于 MLE-vs-CRB 主曲线。 | 不是另一个新 estimator，也不是通过调参改善结果。 |
+| `crbLocalRate` | `crbLocalCount / numRepeat`。 | Eval only | 表示所有 repeat 中进入 CRB-local 对比区间的比例。 | 不能忽略该比例只画 RMSE。 |
+| `crbLocalKeepRate` | `crbLocalCount / coreResolvedCount`。 | Eval only | 表示 resolved/core 样本中有多少没有被 5σ CRB-normalized cap 剔除。 | 不等同于总 resolved rate。 |
+| `full-sample` | 所有 finite estimator 输出。 | Eval only | 显示 threshold、tooth tail 与 boundary 风险。 | 不要求 full RMSE 必须贴 CRB。 |
+| `tailSubtype` | top-tail seed 的轻量诊断标签，例如 `outside-tooth-tail`。 | Eval only | 用于解释污染来源。 | 不作为 estimator runtime selector。 |
 
 常见口径固定如下：
 
-- `full-sample` 用于工程风险；`resolved/core/trimmed` 用于分层判断是否进入 local CRB 对比区间。
-- `trimmedCore` 只能作为 local-consistent conditional curve；它必须和 keep rate / failure reason 一起出现。
-- `truth` 只用于 offline scan 评价与 oracle in-tooth local range，不迁移到 estimator 或 flow 的 runtime 分支。
+- 论文主 CRB-consistency 曲线优先使用 `crbLocalAngleRmseOverCrb` 与 `crbLocalFdRefRmseOverCrb`。
+- 每张 CRB-local RMSE 图必须配套 `resolvedRate` 或 `crbLocalRate`，尤其是 `CP-U`。
+- `full-sample` / `resolved` 用于说明 outlier 和 tooth / boundary 风险，不作为证明 MLE 达到 CRB 的主曲线。
+- `truth` 只用于 offline evaluation 与 oracle in-tooth local range，不迁移到 estimator 或 flow 的 runtime 分支。
 
 ## 3. Snapshot index
 
 | snapshot | 日期 | 状态 | 配置摘要 | 结论 | 覆盖 / 取代 |
 |---|---:|---|---|---|---|
-| `test/data/cache/scan/scanMfMleCrbInToothConsistency_20260507-003909.mat` | 2026-05-07 | `representative` | `SS/MS-MF-CP-K/U`，`initMode=auto`，`P=10`，`SNR=-15:5:10 dB`，`numRepeat=200`，`fdRef half-tooth=0.25`，`fdRate half-width=1000 Hz/s`，`coreCoherenceFloor=0.8`，`trim cap=5 sigma` | SS trimmed/local 子样本接近 CRB；MS trimmed 样本率极低，MS-K same-tooth tail 与 MS-U fdRate-unresolved 明显；scan 固定为统计筛查入口，MS 转 replay 排查。 | 本文档只保留该代表性结果，旧结果不再列出。 |
+| `test/data/cache/scan/scanMfMleCrbInToothConsistency_20260507-222606.mat` | 2026-05-07 | `representative` | `SS-MF-CP-K/U`，`initMode=auto`，`P=10`，`SNR=-15:3:9 dB`，`numRepeat=500`，`fdRef half-tooth=0.40`，`fdRate half-width=1000 Hz/s`，`trim/crbLocal cap=5 sigma` | CRB-local 样本上 DoA / `fdRef` 均稳定接近 CRB；CP-U 在低 SNR 主要损失 resolved rate，而非 CRB-local 精度。 | 当前唯一保留的 SS paper-facing 代表结果。 |
+| `test/data/cache/scan/scanMfMleCrbInToothConsistency_20260507-003909.mat` | 2026-05-07 | `historical / diagnostic` | `SS/MS-MF-CP-K/U`，`P=10`，`SNR=-15:5:10 dB`，`numRepeat=200`，旧 trimmed-only 口径 | SS 可用、MS 需要 replay 诊断；用于历史说明，不作为当前 SS 主图口径。 | 被后续 SS-only `crbLocal*` 结果覆盖。 |
 
 ## 4. 最新代表性运行
 
 ### 4.1 配置
 
 - `baseSeed = 253`
-- `seedList = 253:452`
-- `numRepeat = 200`
-- `snrDbList = [-15, -10, -5, 0, 5, 10]`
+- `seedList = 253:752`
+- `numRepeat = 500`
+- `snrDbList = [-15, -12, -9, -6, -3, 0, 3, 6, 9]`
 - `frameCountList = 10`
-- 关键 scan 轴：`SNR × methodNameList`
-- active methods：`SS-MF-CP-K`, `SS-MF-CP-U`, `MS-MF-CP-K`, `MS-MF-CP-U`
+- active methods：`SS-MF-CP-K`, `SS-MF-CP-U`
 - `initMode = auto`
-- `oracleFdHalfToothFraction = 0.25`
+- `oracleFdHalfToothFraction = 0.40`
 - `oracleFdRateHalfWidthHzPerSec = 1000`
 - `resolvedToothHalfWidthFraction = 0.25`
 - `resolvedFdRateAbsTolHzPerSec = 250`
-- `coreCoherenceFloor = 0.8`
+- `coreCoherenceFloor = 0.8`（本轮 SS-only 中不额外起作用）
 - `trimNormCap = 5`
-- `trimMinKeepRate = 0.8`
-- task count：`1200`
-- checkpoint：enabled；runKey 使用短 hash `f10_snrm15to10_seed253to452_rep200_050e3a5d`；正常完成后已清理 checkpoint artifacts。
+- `crbLocal* = trimmedCore*` paper-facing alias
+- task count：`4500`
+- checkpoint：enabled；runKey `f10_snrm15to9_seed253to752_rep500_5800bd69`；正常完成后已清理 checkpoint artifacts。
 - snapshot 保存变量：`scanData`
-- 运行时间：约 `1 h 37 m 46 s`
+- 运行时间：约 `1 h 7 m 0 s`
 
 ### 4.2 存档数据检查
 
 - 顶层 snapshot 内容：`scanData`
-- `scanData` 主要字段：`scanName`, `runKey`, `utcRun`, `config`, `perfTable`, `aggregateTable`, `failureSummaryTable`, `topTailTable`, `repeatOutCell`, `checkpointSummaryTable`, `checkpointCleanupReport`, `plotData`, `elapsedSec`
+- `scanData` 主要字段：`scanName`, `runKey`, `utcRun`, `config`, `perfTable`, `aggregateTable`, `crbLocalSummaryTable`, `failureSummaryTable`, `topTailTable`, `topTailExportTable`, `repeatOutCell`, `checkpointSummaryTable`, `checkpointCleanupReport`, `plotData`, `elapsedSec`
 - 未保存大体量数据：`rxSigCell`、完整 `sceneSeq`、fixture cache、transition bundle、全量 objective map、完整 debug trace、图片。
-- warning / fail 计数：运行过程中出现多次 `fmincon` KKT singular / ill-conditioned warning，调用链主要经过 `runDoaDopplerMfOptimization`、`runDoaDopplerMfUnknownWarmAnchor`、`solveDoaDopplerMfBranches`。本轮没有导致 scan 中断，但它们与 MS / CP-U 不稳定现象方向一致，后续应进入 replay 诊断。
+- warning / fail 计数：本轮命令行输出未显示导致 scan 中断的错误；checkpoint 正常清理，snapshot 正常保存。
 
 ## 5. 主要统计与曲线结果
 
 ### 5.1 主表 / 主切片
 
-#### SS-MF local-consistent 统计
-
-| case | SNR range | samples per SNR | resolved rate | trimmedCoreRate range | trimKeepRate range | trim angle RMSE/CRB | trim fdRef RMSE/CRB | 备注 |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| `SS-MF-CP-K` | `-15:5:10` | 200 | `1.00` all SNR | `0.80 -> 0.93` | `0.80 -> 0.93` | `0.964 -> 0.930` | `1.047 -> 1.032` | Known-rate SS 的 trimmed/local 子样本稳定接近 CRB 尺度；full/core fdRef 被 near-boundary tail 污染。 |
-| `SS-MF-CP-U` | `-15:5:10` | 200 | `0.67 -> 0.91` | `0.665 -> 0.91` | `0.993, 0.994, 1.0, 1.0, 1.0, 1.0` | `0.993 -> 0.935` | `0.990 -> 1.089` | Unknown-rate 在低 SNR 有 boundary / fdRate unresolved；resolved 后 trimmed 子样本接近 CRB，但低于 1 的点只能按 conditional subset 解释。 |
-
-#### MS-MF 统计筛查
-
-| case | SNR range | samples per SNR | coreResolvedRate range | trimmedCoreRate range | trimKeepRate range | main failure / pollution | 备注 |
-|---|---:|---:|---:|---:|---:|---|---|
-| `MS-MF-CP-K` | `-15:5:10` | 200 | `0.695 -> 0.78` | `0.015 -> 0.12` | `0.0216 -> 0.162` | `resolved-coherence-low` 与 `fdRef` near-boundary tail；中高 SNR trimmed 样本率只有约 `1.5%~2.5%`。 | 当前不能作为 MS-vs-CRB 主图；需要 replay 查 same-tooth tail / local basin。 |
-| `MS-MF-CP-U` | `-15:5:10` | 200 | `0.265 -> 0.52` | `0 -> 0.09` | `0 -> 0.264` | `fdRate-unresolved` 长期占主导，另有 frequency boundary hit。 | 当前 unknown-rate MS release 不稳；需要 replay 查 warm-anchor / fdRate branch。 |
+| case | samples / SNR | resolvedRate range | crbLocalRate range | crbLocalKeepRate range | crbLocal angle RMSE/CRB | crbLocal fdRef RMSE/CRB | 备注 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `SS-MF-CP-K` | 500 | `0.964–0.998` | `0.660–0.904` | `0.685–0.909` | `1.0336–1.0675` | `1.0203–1.0751` | Known-rate SS 在 CRB-local 样本上稳定贴近 CRB；低 SNR 仍有 outside-tooth tail，full/resolved 不宜作主曲线。 |
+| `SS-MF-CP-U` | 500 | `0.558–0.900` | `0.554–0.894` | `0.9837–0.9970` | `1.0201–1.0553` | `0.9922–1.0443` | Unknown-rate 一旦 resolved，CRB-local 精度不差；低 SNR 主要损失来自 boundary / fdRate resolved rate。 |
 
 ### 5.2 按扫描轴汇总
 
 #### `SS-MF-CP-K`
 
-| SNR (dB) | resolvedRate | trimmedCoreRate | trimAngleRmseOverCrb | trimAngleMseOverCrb | trimFdRefRmseOverCrb | trimFdRefMseOverCrb |
-|---:|---:|---:|---:|---:|---:|---:|
-| -15 | 1.000 | 0.800 | 0.9636 | 0.9284 | 1.0473 | 1.0968 |
-| -10 | 1.000 | 0.830 | 0.9603 | 0.9221 | 1.0422 | 1.0862 |
-| -5 | 1.000 | 0.845 | 0.9543 | 0.9106 | 1.0368 | 1.0749 |
-| 0 | 1.000 | 0.855 | 0.9476 | 0.8980 | 1.0468 | 1.0958 |
-| 5 | 1.000 | 0.875 | 0.9418 | 0.8869 | 1.0432 | 1.0882 |
-| 10 | 1.000 | 0.930 | 0.9298 | 0.8644 | 1.0322 | 1.0655 |
+| SNR (dB) | resolvedRate | crbLocalRate | crbLocalKeepRate | crbLocalAngleRmseOverCrb | crbLocalFdRefRmseOverCrb | 备注 |
+|---:|---:|---:|---:|---:|---:|---|
+| -15 | 0.964 | 0.660 | 0.68465 | 1.0597 | 1.0315 | 低 SNR CRB-local 精度好，但总样本保留率最低。 |
+| -12 | 0.970 | 0.746 | 0.76907 | 1.0408 | 1.0751 | fdRef ratio 是 CP-K 中较高点，但仍为 CRB-level。 |
+| -9 | 0.976 | 0.766 | 0.78484 | 1.0440 | 1.0613 | 进入稳定区间。 |
+| -6 | 0.976 | 0.714 | 0.73156 | 1.0675 | 1.0454 | angle ratio 是 CP-K 中较高点。 |
+| -3 | 0.982 | 0.728 | 0.74134 | 1.0565 | 1.0310 | CRB-local 稳定。 |
+| 0 | 0.986 | 0.786 | 0.79716 | 1.0414 | 1.0501 | full/resolved 仍有 tail，CRB-local 正常。 |
+| 3 | 0.992 | 0.824 | 0.83065 | 1.0336 | 1.0374 | 中高 SNR 保留率提升。 |
+| 6 | 0.998 | 0.856 | 0.85772 | 1.0437 | 1.0327 | resolved 几乎全通过。 |
+| 9 | 0.994 | 0.904 | 0.90946 | 1.0450 | 1.0203 | 最高 SNR 下保留率最高。 |
 
 #### `SS-MF-CP-U`
 
-| SNR (dB) | resolvedRate | trimmedCoreRate | trimKeepRate | trimAngleRmseOverCrb | trimAngleMseOverCrb | trimFdRefRmseOverCrb | trimFdRefMseOverCrb | fdRate RMSE (Hz/s) |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| -15 | 0.670 | 0.665 | 0.993 | 0.9933 | 0.9867 | 0.9897 | 0.9795 | 492.37 |
-| -10 | 0.785 | 0.780 | 0.994 | 0.9513 | 0.9049 | 1.0918 | 1.1919 | 458.43 |
-| -5 | 0.855 | 0.855 | 1.000 | 0.9405 | 0.8845 | 1.1035 | 1.2177 | 380.13 |
-| 0 | 0.850 | 0.850 | 1.000 | 0.9396 | 0.8829 | 1.1085 | 1.2288 | 369.64 |
-| 5 | 0.905 | 0.905 | 1.000 | 0.9467 | 0.8962 | 1.0900 | 1.1881 | 308.72 |
-| 10 | 0.910 | 0.910 | 1.000 | 0.9353 | 0.8748 | 1.0893 | 1.1865 | 292.25 |
-
-#### `MS-MF-CP-K`
-
-| SNR (dB) | resolvedRate | coreResolvedRate | trimmedCoreRate | trimKeepRate | coherenceCollapseRate | trimAngleRmseOverCrb | trimFdRefRmseOverCrb |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| -15 | 0.995 | 0.780 | 0.105 | 0.135 | 0.215 | 2.2525 | 0.8850 |
-| -10 | 1.000 | 0.740 | 0.120 | 0.162 | 0.260 | 2.5512 | 1.2123 |
-| -5 | 1.000 | 0.770 | 0.115 | 0.149 | 0.230 | 3.4897 | 1.7186 |
-| 0 | 1.000 | 0.760 | 0.025 | 0.0329 | 0.240 | 2.6336 | 1.4616 |
-| 5 | 0.985 | 0.695 | 0.015 | 0.0216 | 0.290 | 2.2918 | 0.3669 |
-| 10 | 0.980 | 0.715 | 0.020 | 0.0280 | 0.265 | 2.8741 | 3.3130 |
-
-> 注意：`MS-MF-CP-K` 的 trimmed 样本率太低，上表中的 trimmed RMSE/CRB 不应作为性能曲线，只能作为“极小 local-consistent 子集”的诊断值。
-
-#### `MS-MF-CP-U`
-
-| SNR (dB) | resolvedRate | coreResolvedRate | trimmedCoreRate | trimKeepRate | fdRate-unresolved rate | frequency-boundary-hit rate | trimAngleRmseOverCrb | trimFdRefRmseOverCrb |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| -15 | 0.265 | 0.265 | 0.070 | 0.264 | 0.545 | 0.190 | 2.7802 | 1.2246 |
-| -10 | 0.350 | 0.350 | 0.090 | 0.257 | 0.500 | 0.150 | 3.2439 | 1.2382 |
-| -5 | 0.390 | 0.375 | 0.040 | 0.107 | 0.585 | 0.025 | 3.7469 | 0.8981 |
-| 0 | 0.440 | 0.435 | 0.000 | 0.000 | 0.545 | 0.015 | NaN | NaN |
-| 5 | 0.500 | 0.495 | 0.010 | 0.020 | 0.495 | 0.005 | 1.3730 | 0.4241 |
-| 10 | 0.540 | 0.520 | 0.010 | 0.019 | 0.435 | 0.025 | 2.6600 | 3.5919 |
-
-> 注意：`MS-MF-CP-U` 在 0 dB 没有 trimmedCore 样本；5/10 dB 也只有 2 个 trimmed samples。该方法当前只能作为 failure diagnostic。
+| SNR (dB) | resolvedRate | crbLocalRate | crbLocalKeepRate | crbLocalAngleRmseOverCrb | crbLocalFdRefRmseOverCrb | freqBoundaryHitRate | fdRateResolvedRate | 备注 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| -15 | 0.558 | 0.554 | 0.99283 | 1.0553 | 1.0334 | 0.308 | 0.578 | 低 SNR 主要损失是 boundary / rate 解析率，不是 CRB-local 精度。 |
+| -12 | 0.630 | 0.628 | 0.99683 | 1.0201 | 0.9922 | 0.292 | 0.662 | fdRef ratio 略低于 1，但接近 CRB-level，不解释为超过 CRB。 |
+| -9 | 0.676 | 0.674 | 0.99704 | 1.0469 | 1.0171 | 0.274 | 0.712 | resolved 后几乎都保留为 CRB-local。 |
+| -6 | 0.652 | 0.646 | 0.99080 | 1.0458 | 1.0314 | 0.296 | 0.682 | 边界率仍高。 |
+| -3 | 0.706 | 0.698 | 0.98867 | 1.0492 | 1.0092 | 0.262 | 0.728 | CRB-local 稳定。 |
+| 0 | 0.736 | 0.724 | 0.98370 | 1.0475 | 1.0147 | 0.230 | 0.752 | 低中 SNR 过渡。 |
+| 3 | 0.784 | 0.772 | 0.98469 | 1.0468 | 1.0443 | 0.194 | 0.798 | resolved rate 继续上升。 |
+| 6 | 0.860 | 0.854 | 0.99302 | 1.0269 | 1.0432 | 0.128 | 0.862 | 高 SNR 下 CRB-local 与 resolved 基本一致。 |
+| 9 | 0.900 | 0.894 | 0.99333 | 1.0376 | 1.0316 | 0.094 | 0.902 | 最高 SNR 下表现稳定。 |
 
 ### 5.3 图形口径
 
 | 图 | 横轴 | 纵轴 | 曲线 | 是否论文候选 | 注意事项 |
 |---|---|---|---|---:|---|
-| Angle / fdRef RMSE with CRB | SNR | `RMSE` 与 CRB std | `SS/MS-MF-CP-K/U`, full/core/trimmed | SS: Yes after wording check；MS: No | MS trimmed 样本率太低；SS trimmed 曲线必须配 keep rate。 |
-| MSE/CRB ratio | SNR | `MSE / CRB variance` | 同上 | SS: conditional curve；MS: diagnostic only | 低于 1 的点只说明 conditional subset，不说明超过 CRB。 |
-| Resolved / core / trimmed rate | SNR | rate | loose/core/trimmed rates | Yes, required companion plot | 论文图必须与 RMSE/CRB 同时展示，避免 cherry-pick。 |
-| Failure reason summary | SNR / method | failure rate | resolved / fdRate-unresolved / boundary / coherence-low | Appendix / diagnostic | 用于说明 MS 暂缓原因与 CP-U threshold 行为。 |
-| Top-tail preview | SNR / seed | CRB-normalized tail score | worst seeds | diagnostic only | 供 replay 选 seed，不直接作为论文曲线。 |
+| CRB-local angle RMSE/CRB | SNR (dB) | `crbLocalAngleRmseOverCrb` | `SS-MF-CP-K`, `SS-MF-CP-U` | Yes | 主图候选；建议加 `y=1` 参考线。 |
+| CRB-local fdRef RMSE/CRB | SNR (dB) | `crbLocalFdRefRmseOverCrb` | `SS-MF-CP-K`, `SS-MF-CP-U` | Yes | `CP-U -12 dB` 略低于 1，按有限样本 / 条件样本 CRB-level 解读。 |
+| Resolved / CRB-local rate | SNR (dB) | `resolvedRate`, `crbLocalRate` | `SS-MF-CP-K`, `SS-MF-CP-U` | Yes / companion | 必须配合主 RMSE 图，尤其说明 CP-U 低 SNR resolved-rate 损失。 |
+| Full / resolved RMSE | SNR (dB) | full/resolved RMSE 或 RMSE/CRB | `SS-MF-CP-K`, `SS-MF-CP-U` | No / diagnostic | 用于说明 tail，不作为 estimator efficiency 主结论。 |
+| Failure reason | SNR (dB) | failure reason rate | `CP-U` boundary / fdRate | Appendix / diagnostic | 解释 unknown-rate nuisance 的 resolved-rate 损失。 |
 
 ## 6. 可观察现象
 
 ### 6.1 支持当前结论的现象
 
-- `SS-MF-CP-K` 在所有 SNR 上 loose resolved rate 为 `1.0`，trimmedCoreRate 从 `0.80` 单调提升到 `0.93`；trimmed angle RMSE/CRB 在 `0.93~0.96`，trimmed fdRef RMSE/CRB 在 `1.03~1.05`。这说明 SS known-rate 的 local-consistent 子样本已经接近 CRB 尺度。
-- `SS-MF-CP-U` 在中高 SNR 的 local-consistent 子样本也稳定：`SNR >= -5 dB` 时 trimmedCoreRate 为 `0.855, 0.850, 0.905, 0.910`，trimmed fdRef RMSE/CRB 约 `1.09~1.10`。unknown-rate nuisance 主要体现在低 SNR resolved rate 与 fdRate RMSE，而不是在 trimmed 子样本中完全破坏 DoA / fdRef。
-- `MS-MF-CP-K` 的 loose resolved rate 虽高，但 trimmedCoreRate 极低，尤其 `0/5/10 dB` 只有 `0.025/0.015/0.020`。这说明 MS-K 不是单纯 tooth 失败，而是在 same-tooth / non-ref coherence / fdRef tail 处没有稳定进入 local basin。
-- `MS-MF-CP-U` 的 `fdRate-unresolved` 率在全 SNR 范围都很高，最低也约 `43.5%`。这说明 MS unknown-rate release 当前不适合继续用大 MC 硬扫，而应进入 seed-level replay。
-- top-tail 表中大量 `fdRefAbsErrHz` 聚集在 `173~187 Hz`，接近 `0.25 tooth = 187.5 Hz` 的 local box 边缘，说明许多 tail 是 in-tooth near-boundary branch，而不是全局 wrong-tooth。
+- `SS-MF-CP-K` 在所有 SNR 的 `crbLocalAngleRmseOverCrb` 均处于 `1.0336–1.0675`，`crbLocalFdRefRmseOverCrb` 处于 `1.0203–1.0751`，说明 known-rate single-sat continuous-phase local MLE 已经达到 CRB-level。
+- `SS-MF-CP-U` 在 CRB-local 样本上的 angle / fdRef 也接近 CRB：angle ratio 处于 `1.0201–1.0553`，fdRef ratio 处于 `0.9922–1.0443`；这说明 unknown-rate nuisance 一旦 resolved，并未破坏主参数局部精度。
+- CP-U 的 `crbLocalKeepRate` 基本接近 1，说明 CRB-local cap 不是 CP-U 低 SNR 样本减少的主因；样本减少主要发生在 resolved 之前。
+- CP-K 的 `crbLocalRate` 随 SNR 从 `0.660` 上升到 `0.904`，CP-U 从 `0.554` 上升到 `0.894`，可用于论文中同时报告精度与可解析率。
 
 ### 6.2 反向、污染或未解决现象
 
-- `SS-MF-CP-K` 的 full/core fdRef RMSE/CRB 很大，原因是 core 仍包含 near-boundary fdRef tail。trimmed 后贴 CRB 并不意味着 full estimator 分布已经高效。
-- `SS-MF-CP-U` 的 trimmed RMSE/CRB 有低于 1 的点，尤其 -15 dB 的 fdRef 与 angle。该现象来自 resolved/trimmed 条件样本统计，不能写成 estimator 超过 CRB。
-- `MS-MF-CP-K` 的 `nonRefCoherenceFloorMedian` 很高，但仍有 large angle/fdRef tail；这说明仅用 coherence floor 不能充分定义 MS local consistency。
-- `MS-MF-CP-U` 在运行中伴随多次 KKT singular / ill-conditioned warning，且 failure reason 以 `fdRate-unresolved` 为主；unknown-rate MS branch 需要查 warm-anchor / solver / local box。
-- `MS-MF` 的 trimmed 样本数过少，导致一些 trimmed RMSE/CRB 数值看似可用但统计意义不足。
+- full / resolved 结果仍受 tooth / boundary tail 污染；即使 CP-K 的 resolved rate 很高，仍不能把 resolved RMSE/CRB 直接当作 local CRB consistency。
+- `CP-U` 在低 SNR 下 `freqBoundaryHitRate` 明显高，例如 `-15 dB` 为 `0.308`，`-12 dB` 为 `0.292`，说明 unknown-rate branch 的主要代价体现在 resolved-rate，而不是 CRB-local 样本精度。
+- `CP-U -12 dB` 的 `crbLocalFdRefRmseOverCrb=0.9922` 略低于 1，不能写成超过 CRB；当前解释为 500-repeat 条件样本下的 CRB-level 波动。
+- top-tail 的 compact export 显示大量 tail 被标为 `outside-tooth-tail`，说明 `tailSubtype` 已可帮助解释 full/resolved 污染来源。
 
-### 6.3 代表性异常格点 / strategy / seed
+### 6.3 代表性异常格点 / seed
 
 | 条件 | 类型 | 现象 | 对结论的作用 |
 |---|---|---|---|
-| `SS-MF-CP-K`, all SNR | fdRef tail | top-tail seed 反复出现 `fdRefAbsErrHz≈173~175 Hz`，但 failure reason 仍为 `resolved`。 | 说明 loose resolved 不足以定义 local CRB consistency；trimmed/local 口径必须保留。 |
-| `SS-MF-CP-U`, low SNR | fdRate / boundary | -15 dB resolved rate `0.67`，frequency-boundary-hit `0.215`，fdRate-unresolved `0.115`。 | 说明 unknown-rate nuisance 在低 SNR 有 threshold 行为。 |
-| `MS-MF-CP-K`, 0/5/10 dB | same-tooth tail | trimmedCoreRate 只有 `0.025/0.015/0.020`，coreResolvedRate 仍约 `0.695~0.76`。 | 说明 MS-K 的 core 条件仍混入大量 non-local tail，不能作为论文主图。 |
-| `MS-MF-CP-U`, 0 dB | no trimmed sample | trimmedCoreRate `0`，trimmed RMSE/CRB 为 NaN。 | 直接阻止 MS-U 作为当前 MLE-vs-CRB 主结果。 |
-| MS warning traces | solver warning | 多次 `fmincon` KKT singular / ill-conditioned warning 出现在 `runDoaDopplerMfOptimization` / `UnknownWarmAnchor` 链。 | 支持后续用 replay 查 solver / warm-anchor，而不是继续扩 scan。 |
+| `SS-MF-CP-K`, `-15 dB` | outside-tooth tail | top-tail 中 `taskSeed=293` 的 `fdRefNormErr=989.15`，failure reason 为 `outside-resolved-tooth`，tail subtype 为 `outside-tooth-tail`。 | 说明 full/top-tail 被 tooth tail 主导，不能用 full RMSE 做 CRB 主曲线。 |
+| `SS-MF-CP-U`, `-15 dB` | boundary / fdRate | `freqBoundaryHitRate=0.308`，`fdRateResolvedRate=0.578`。 | 说明 unknown-rate nuisance 的低 SNR 代价主要是解析率下降。 |
+| `SS-MF-CP-U`, `-12 dB` | near-CRB below-one caveat | `crbLocalFdRefRmseOverCrb=0.9922`。 | 作为 CRB-level 波动处理，不写成超过 CRB。 |
+| `SS-MF-CP-K`, `9 dB` | high-SNR local consistency | `crbLocalRate=0.904`，angle/fdRef ratio 分别为 `1.0450 / 1.0203`。 | 支持高 SNR 下 local estimator 主体稳定贴 CRB。 |
 
 ## 7. 机制解释
 
 ### 7.1 当前解释
 
-本次结果把 `scanMfMleCrbInToothConsistency` 的职责进一步固定为“统计筛查”和“是否值得进入论文图”的判定入口。它已经能清楚区分两类现象：
+这轮 500-repeat scan 说明，前面 replay 中修复的 SS-MF DoA basin-entry 已经在更大 Monte Carlo 中表现稳定。过去低 SNR `SS-MF` 的 `angle/CRB≈3×` 问题已经不再是当前主现象；在 CRB-local 条件下，known-rate 与 unknown-rate 的 angle / `fdRef` 都稳定处于 `≈1.0–1.08× CRB` 范围内。
 
-1. `SS-MF` 在 auto init 条件下，good / local-consistent 子样本已经可以达到 CRB 尺度附近；这说明 reference-sat 单星 continuous-phase MLE 主链基本健康。
-2. `MS-MF` 在同样 auto init 与 in-tooth local box 条件下，仍无法稳定进入 multi-sat local basin。MS-K 的问题表现为 same-tooth tail、near-boundary `fdRef` branch 和 coherence / local consistency 判据不足；MS-U 的问题表现为 `fdRate-unresolved` 和 boundary / warm-anchor 不稳。
+同时，full / tooth-resolved 分布仍然存在 tail。这说明 `tooth-resolved` 只表示没有明显跳出 coarse Doppler tooth，不等价于 CRB-local basin；真正用于 CRB consistency 的主口径应该是 `crbLocal*`，并用 `crbLocalRate` / `resolvedRate` 同步说明样本有效率。
 
-这里的关键不是“MS CRB 不存在”或“MS 理论不成立”。MS 有对应 CRB，但当前 estimator auto-init / solver / local basin 还不能稳定产生与该 CRB 对应的样本分布。因此，MS 暂不应继续靠扩大 repeat 形成论文主结果，而应该先用 replay 对 seed-level 路径进行分类。
+`CP-U` 的主要代价不是 CRB-local 样本上的 DoA / `fdRef` 精度，而是 unknown-rate nuisance 使低 SNR 下更容易出现 frequency-boundary hit 或 fdRate-unresolved，从而降低 resolved / CRB-local rate。这与论文主线中 “unknown Doppler-rate 作为 nuisance 会带来信息损失和解析率损失” 的解释方向一致，但本文档不把该 scan 单独当作 known/unknown-rate EFIM 证明。
 
 ### 7.2 这个 scan 支持什么
 
-- 支持将 `SS-MF-CP-K/U` 作为后续 local-consistent MLE-vs-CRB 的先行统计基线。
-- 支持论文仿真采用 `full/core/trimmed + keep rate + failure reason` 的联合报告口径，而不是只画一条 RMSE/CRB 曲线。
-- 支持把 `trimmedCore` 明确命名为 `local-consistent conditional subset`，并把 full/core tail 作为工程风险或 threshold/outlier 风险报告。
-- 支持将 MS 失败转入 replay，而不是继续在 scan 中扩大 repeat。
-- 支持下一步优先排查 `MS-MF-CP-K` 的 same-tooth near-boundary fdRef branch 与 `MS-MF-CP-U` 的 fdRate release / warm-anchor branch。
+- 支持将 `SS-MF-CP-K/U` 的 `crbLocal*` 曲线作为 paper-facing MLE-vs-CRB 主图候选。
+- 支持论文图同时报告 RMSE/CRB 与 resolved / CRB-local rate，而不是只画一条误差曲线。
+- 支持把 full / resolved tail 作为 threshold / tooth / boundary 风险单独解释。
+- 支持当前 estimator 主路径在 SS in-tooth local regime 下已经健康，不需要继续围绕 SS 改 estimator。
+- 支持后续把 MS 或 SS/MS/SF/MF 对比作为独立下一步，而不是继续修改本 SS-only scan。
 
 ### 7.3 这个 scan 不证明什么
 
-- 不证明 `MS-MF` 已接近 MS CRB。
-- 不证明 `trimmed RMSE/CRB < 1` 是 estimator 超过 CRB。
-- 不证明 in-tooth oracle local box 等价于真实 coarse Doppler compensation 的全部实现。
-- 不证明 full-flow tooth acquisition、subset selection 或 rescue flow 已经通过。
-- 不证明当前结果可以写 regression 契约。
-- 不证明 MS 理论模型错误；当前更像 estimator auto-init / local basin / solver 路径问题。
+- 不证明 full-flow tooth acquisition、subset selection 或 rescue flow 已通过。
+- 不证明 full-sample / tooth-resolved RMSE 应该贴 CRB。
+- 不证明 `CP-U` 在所有样本上都等价于 known-rate；它的 resolved-rate 明显低于 CP-K。
+- 不证明 estimator 超过 CRB；`crbLocalFdRefRmseOverCrb < 1` 的单个点只作为 CRB-level 有限样本波动。
+- 不证明 MS-MF 已接近 MS CRB；本 snapshot 只运行 SS 方法。
+- 不形成 regression 契约；scan 用于 paper-facing 统计，regression 只守已稳定自动契约。
 
 ## 8. 对主流程的影响
 
 | 项目 | 影响 |
 |---|---|
-| estimator 默认路径 | 不改。当前 scan 只暴露统计现象；不直接修改 estimator 主核、objective、residual、reference-sat 语义或 search bound。 |
+| estimator 默认路径 | 不改。当前结果支持 SS estimator 主路径已经足够用于 local CRB-consistency 图。 |
 | flow 默认路径 | 不改。该 scan 是 in-tooth local consistency scan，不回流到 subset / rescue flow。 |
-| replay 下一步 | 需要。建议新增或运行 `replayMfSsMleCrbMetricDiagnose` 与 `replayMfMsMleCrbMetricDiagnose`。SS replay 查 angle CRB metric、fdRef tail、CP-U release；MS replay 查 non-ref coherence / near-boundary fdRef branch / fdRate-unresolved / KKT warning seed。 |
-| regression | 不写。只有 replay 证明稳定契约后，再考虑补最小 regression，例如 CP-U release、reference-sat 不变量、boundary / warm-anchor 不回退等。 |
-| 论文图 | SS 可继续作为 main figure candidate；MS 暂时只能放 diagnostic / appendix，不能作为正文 MS-vs-CRB 主图。 |
-| 排障记录 | 主记录可摘一句：`scanMfMleCrbInToothConsistency_20260507-003909` 固定为统计筛查入口，SS 可用，MS 转 replay 排查。机制归并版可补充 MS tail / fdRate-unresolved 证据。 |
+| replay 下一步 | SS 不需要继续 replay；若恢复 MS，应使用 MS replay/scan 单独诊断，不混入本结果。 |
+| regression | 不写。当前是统计结果，不是自动 pass/fail 契约。 |
+| 论文图 | 可用作 SS in-tooth MLE-vs-CRB 主图候选；建议主图画 `crbLocalAngleRmseOverCrb` 与 `crbLocalFdRefRmseOverCrb`，副图/右轴画 `resolvedRate` 或 `crbLocalRate`。 |
+| 排障记录 | 主记录可摘一句：`scanMfMleCrbInToothConsistency_20260507-222606` 固定 SS in-tooth CRB-local 结果，SS-MF-CP-K/U 已达到 CRB-level，后续转向 MS / CP-IP / known-unknown 信息损失。 |
 
-### 后续仿真应围绕什么展开
+### 后续仿真建议
 
-后续 paper-facing 仿真应先围绕 **SS-MF local-consistent MLE-vs-CRB** 展开，配套报告：
-
-- `full/core/trimmed` RMSE 与 MSE；
-- CRB-normalized error；
-- `resolvedRate`、`trimmedCoreRate`、`trimKeepRate`；
-- failure reason summary；
-- known / unknown-rate 信息损失；
-- 后续再扩展到 `P` / SNR / CP-IP / known-unknown 的论文主图。
-
-MS 不应继续作为大 MC 主线硬扫。MS 当前应围绕以下 replay 目标展开：
-
-- `MS-MF-CP-K`：same-tooth fdRef near-boundary branch、core 通过但 trimmed 失败的 seed、non-ref coherence 高但 angle/fdRef 仍错的样本。
-- `MS-MF-CP-U`：`fdRate-unresolved`、frequency boundary hit、warm-anchor selected seed、KKT singular warning 与 final `fdRate/fdRef` 的关系。
-
-### 达到什么条件后可以回到本 scan
-
-满足以下条件后，再回到 `scanMfMleCrbInToothConsistency` 做正式 rerun：
-
-1. **SS 条件**：确认 angle error 与 angle CRB metric 同口径，或在结果文档中明确写清 conditional / transformed angular CRB 口径；`SS-MF-CP-K/U` 在目标 SNR 区间的 `trimmedCoreRate >= 0.85`，且 trimmed MSE/CRB 大体在 `0.8~1.3` 或有明确有限样本解释。
-2. **MS-K 条件**：通过 replay 解释并修复或稳定 gate 掉 near-boundary fdRef tail；中高 SNR 下 `coreResolvedRate >= 0.8`，`trimmedCoreRate >= 0.7~0.8`，`coherenceCollapseRate <= 0.1~0.15`，且 trimmed 样本不是个位数。
-3. **MS-U 条件**：通过 replay 降低 `fdRate-unresolved` 与 frequency-boundary-hit；中高 SNR 下 `resolvedRate >= 0.8`，`trimmedCoreRate >= 0.7`，`fdRate-unresolved <= 0.1~0.15`。
-4. **solver 条件**：KKT singular / ill-conditioned warning 不再集中出现在同一类 successful-looking result 中；若 warning 仍存在，必须能在 failure summary 或 replay 分类中解释，不污染 paper-facing curves。
-5. **文档条件**：scan 只保留统计和 compact top-tail，不把 replay 内部 trace 下沉到 scan；如果需要新的内部诊断，继续放 replay。
+1. 基于该 snapshot 先画 SS-only 初版图：angle RMSE/CRB、fdRef RMSE/CRB、resolved/CRB-local rate。
+2. 若要进入 SS/MS 总览，另开配置恢复 MS 方法行；不要在本 SS-only 结果中补 MS 结论。
+3. 若要解释 CP-U 的低 SNR rate 损失，优先结合 `failureSummaryTable` 与 known/unknown-rate CRB / EFIM scan，不在本 scan 中继续加 estimator trace。
+4. 若论文图需要更平滑曲线，可后续只扩 SNR 轴或帧数轴，不必改变 `trimNormCap=5`。
 
 ## 9. 限制与禁止解释
 
-- 不要把 offline truth evaluation 字段迁移到 runtime selector、gate、candidate adoption 或 final winner。
-- 不要把 in-tooth oracle box 解释成 full-flow tooth acquisition 已解决。
-- 不要把 trimmed-only 曲线单独作为 estimator efficiency 结论；必须同时报告 `trimmedCoreRate`、`trimKeepRate` 和 failure reason。
-- 不要把 `trimmed RMSE/CRB < 1` 写成超过 CRB；这是条件样本统计效应或 metric 口径 warning。
-- 不要把 MS 当前极低 trimmedCoreRate 下的 RMSE/CRB 值作为论文主图或正结论。
-- 不要用单一 hit rate 代替 RMSE / P95 / P99 / CRB-normalized error / resolved rate / outlier rate。
-- 不要把当前 scan 结果直接迁移为 regression；replay 分类和稳定契约形成前，regression 太早。
-- 不要继续在本 scan 中堆 objective trace、block compare、warm-anchor trace 或 per-frame residual matrix；这些属于 replay。
+- 不要把 offline truth 评价字段用于 runtime selector、gate、candidate adoption 或 final winner。
+- 不要把 `crbLocal*` 曲线解释为所有样本的 unconditional efficiency。
+- 不要只画 `CP-U` 的 CRB-local RMSE 而不报告 `resolvedRate / crbLocalRate`。
+- 不要用 full / resolved tail 直接否定 estimator 主路径；tail 应单独作为 threshold / outlier 风险报告。
+- 不要把 in-tooth oracle local range 直接解释为 full receiver 已完成 coarse Doppler / tooth acquisition。
+- 不要把本结果迁移成 regression，除非后续形成稳定、自动、可重复的契约。
 
 ## 10. 恢复与复现
 
 ```matlab
-snapshotFile = 'test/data/cache/scan/scanMfMleCrbInToothConsistency_20260507-003909.mat';
+snapshotFile = 'test/data/cache/scan/scanMfMleCrbInToothConsistency_20260507-222606.mat';
 loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'scanData'}}));
 ```
 
@@ -281,10 +223,9 @@ loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'scanData'}}));
 `test/dev/scan/scanMfMleCrbInToothConsistency.m`
 ```
 
-只运行 `Summary output and plotting` 小节，即可重出 compact aggregate table、failure summary、top-tail preview 和图。
+只运行 `Summary output and plotting` 小节，即可重出 compact table 和图。
 
 ## 11. 历史备注
 
-- 本文档只保留 `scanMfMleCrbInToothConsistency_20260507-003909.mat` 这一组代表性结果。
-- 旧 SS-only、旧 MS/SS mixed 或 `staticTruthFreq` 结果不在本文档中保留，避免读者混淆 auto init 与 oracle/static init 口径。
-- 当前版本的后续角色已经固定：scan 负责统计筛查和论文候选曲线；replay 负责 seed-level estimator / metric / solver 排障；regression 等 replay 形成稳定契约后再考虑。
+- 早期 `20260507-003909` 同时跑 SS/MS，结论是 SS 可用、MS 需要 replay 诊断；该结果不再作为当前 SS 主图依据。
+- 当前 500-repeat 结果把 SS 的 paper-facing 口径固定为 `CRB-local RMSE/CRB + resolved / CRB-local rate`；full/resolved tail 只作为 outlier 机制说明。

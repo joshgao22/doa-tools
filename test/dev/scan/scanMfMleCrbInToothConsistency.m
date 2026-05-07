@@ -2,7 +2,7 @@
 % Dev scan script. Edit the configuration section directly before running.
 % It evaluates tooth-resolved CP-K / CP-U local MLE under a truth-centered
 % Doppler tooth and reports full-sample, loose/core resolved, trimmed-tail,
-% and CRB-normalized metrics for paper-facing local consistency figures.
+% CRB-local aliases, and CRB-normalized metrics for local consistency figures.
 
 clear; close all; clc;
 
@@ -16,10 +16,10 @@ checkpointResume = true;
 checkpointCleanupOnSuccess = true;
 optVerbose = false;
 baseSeed = 253;
-numRepeat = 200;
-snrDbList = (-15:5:10).';
+numRepeat = 500;
+snrDbList = (-15:3:10).';
 frameCountList = 10;
-oracleFdHalfToothFraction = 0.25;
+oracleFdHalfToothFraction = 0.4;
 oracleFdRateHalfWidthHzPerSec = 1000;
 staticLocalDoaHalfWidthDeg = [0.002; 0.002];
 initMode = "auto";
@@ -37,11 +37,12 @@ trimNormCap = 5;
 trimMinKeepRate = 0.8;
 topTailCountPerGroup = 5;
 topTailPrintMaxRows = 40;
+diagnosticVersion = "crb-local-tail-subtype-v1";
 methodNameList = [
   "SS-MF-CP-K"
   "SS-MF-CP-U"
-  "MS-MF-CP-K"
-  "MS-MF-CP-U"
+  % "MS-MF-CP-K"
+  % "MS-MF-CP-U"
 ];
 % For single-satellite dynamic checks, comment out the MS rows above.
 % For multi-satellite-only checks, comment out the SS rows above.
@@ -77,6 +78,7 @@ scanConfig.trimNormCap = trimNormCap;
 scanConfig.trimMinKeepRate = trimMinKeepRate;
 scanConfig.topTailCountPerGroup = topTailCountPerGroup;
 scanConfig.topTailPrintMaxRows = topTailPrintMaxRows;
+scanConfig.diagnosticVersion = string(diagnosticVersion);
 scanConfig.methodNameList = methodNameList;
 scanConfig.saveSnapshot = logical(saveSnapshot);
 scanConfig.checkpointEnable = logical(checkpointEnable);
@@ -149,6 +151,7 @@ try
 
   [perfTable, repeatOutCell] = localCollectTaskOutput(taskOutCell);
   aggregateTable = localBuildAggregateTable(perfTable, scanConfig);
+  crbLocalSummaryTable = localBuildCrbLocalSummaryTable(aggregateTable);
   failureSummaryTable = localBuildFailureSummaryTable(perfTable);
   topTailTable = localBuildTopTailTable(perfTable, scanConfig.topTailCountPerGroup);
   topTailExportTable = localBuildTopTailExportTable(topTailTable);
@@ -169,6 +172,7 @@ try
   scanData.config = scanConfig;
   scanData.perfTable = perfTable;
   scanData.aggregateTable = aggregateTable;
+  scanData.crbLocalSummaryTable = crbLocalSummaryTable;
   scanData.failureSummaryTable = failureSummaryTable;
   scanData.topTailTable = topTailTable;
   scanData.topTailExportTable = topTailExportTable;
@@ -193,6 +197,7 @@ try
   %% Summary output and plotting
 
   printMfScanSection('In-tooth MLE/CRB consistency aggregate', scanData.aggregateTable);
+  printMfScanSection('CRB-local compact summary', scanData.crbLocalSummaryTable);
   printMfScanSection('Resolved failure reason summary', scanData.failureSummaryTable);
   if height(scanData.topTailTable) > 0
     printMfScanSection('Top CRB-normalized tail preview', ...
@@ -205,6 +210,7 @@ try
   fprintf('Active method list               : %s\n', localFormatStringRow(scanData.config.methodNameList));
   fprintf('Runtime cache                    : context per frame, CRB per frame/SNR.\n');
   fprintf('Dynamic init mode                : %s\n', char(scanData.config.initMode));
+  fprintf('Diagnostic version               : %s\n', char(scanData.config.diagnosticVersion));
   fprintf('Repeats per config               : %d\n', scanData.config.numRepeat);
   fprintf('fdRef oracle half-tooth fraction : %.3f\n', scanData.config.oracleFdHalfToothFraction);
   fprintf('fdRate oracle half-width         : %.2f Hz/s\n', scanData.config.oracleFdRateHalfWidthHzPerSec);
@@ -216,6 +222,7 @@ try
   fprintf('Resolved rule                    : solver-valid, in-tooth, no frequency-boundary hit, fdRate healthy for CP-U.\n');
   fprintf('Core rule                        : resolved plus non-ref coherence floor for multi-sat cases.\n');
   fprintf('Trim rule                        : core plus fixed CRB-normalized angle/fdRef cap; report keep rate separately.\n');
+  fprintf('CRB-local rule                   : alias of trimmed core; use as paper-facing local-regime metric.\n');
   fprintf('Angle error is report-only and is not used to define loose resolved samples.\n');
   if height(scanData.checkpointSummaryTable) > 0
     printMfScanSection('Checkpoint summary', scanData.checkpointSummaryTable);
@@ -311,6 +318,7 @@ signature = strjoin(string({ ...
   sprintf('trimCap%.8g', scanConfig.trimNormCap), ...
   sprintf('trimMin%.8g', scanConfig.trimMinKeepRate), ...
   sprintf('topTail%d', scanConfig.topTailCountPerGroup), ...
+  sprintf('diag%s', char(string(scanConfig.diagnosticVersion))), ...
   sprintf('methods%s', char(strjoin(reshape(string(scanConfig.methodNameList), 1, []), ','))), ...
   sprintf('init%s', char(string(scanConfig.initMode))), ...
   sprintf('doaHalf%s', mat2str(reshape(scanConfig.staticLocalDoaHalfWidthDeg(:), 1, []), 8)) ...
@@ -370,6 +378,7 @@ meta.trimEnable = scanConfig.trimEnable;
 meta.trimNormCap = scanConfig.trimNormCap;
 meta.trimMinKeepRate = scanConfig.trimMinKeepRate;
 meta.methodNameList = reshape(string(scanConfig.methodNameList), 1, []);
+meta.diagnosticVersion = string(scanConfig.diagnosticVersion);
 meta.numTask = numel(taskList);
 end
 
@@ -898,6 +907,7 @@ row.coreResolved = row.isResolved && localIsCoreCoherenceResolved(row, scanConfi
 row.trimmedCore = localIsTrimmedCore(row, scanConfig.trimEnable, scanConfig.trimNormCap);
 row.trimmedOutlier = row.coreResolved && ~row.trimmedCore;
 row.failureReason = localBuildFailureReason(row);
+row.tailSubtype = localBuildTailSubtype(row, scanConfig.trimNormCap);
 end
 
 function [latlonEstDeg, truthLatlonDeg] = localResolveCaseLatlon(caseUse, truth)
@@ -1014,6 +1024,32 @@ else
 end
 end
 
+function subtype = localBuildTailSubtype(row, normCap)
+%LOCALBUILDTAILSUBTYPE Classify the dominant outlier mechanism for diagnostics.
+
+subtype = "crb-local";
+if row.trimmedCore
+  return;
+end
+if ~row.solverResolved
+  subtype = "solver-tail";
+elseif ~row.toothResolved
+  subtype = "outside-tooth-tail";
+elseif row.freqBoundaryHit || row.fdRateBoundaryHit
+  subtype = "fd-boundary-tail";
+elseif ~row.fdRateResolved
+  subtype = "fdrate-unresolved-tail";
+elseif row.coreResolved && isfinite(row.fdRefNormErr) && abs(row.fdRefNormErr) > normCap
+  subtype = "same-tooth-fdref-tail";
+elseif row.coreResolved && isfinite(row.angleNormErr) && abs(row.angleNormErr) > normCap
+  subtype = "angle-local-tail";
+elseif row.coherenceCollapsed
+  subtype = "coherence-collapse-tail";
+else
+  subtype = "other-tail";
+end
+end
+
 function row = localEmptyCaseRow()
 %LOCALEMPTYCASEROW Return a typed empty row for per-repeat case metrics.
 
@@ -1037,7 +1073,7 @@ row = struct('displayName', "", 'satMode', "", 'phaseMode', "", 'fdRateMode', ""
   'fdRateResolved', false, 'freqBoundaryHit', false, 'fdRateBoundaryHit', false, ...
   'coherenceCollapsed', false, 'isResolved', false, 'coreResolved', false, ...
   'trimmedCore', false, 'trimmedOutlier', false, 'failureReason', "", ...
-  'solveVariant', "", 'runTimeMs', NaN, 'wallTimeMs', NaN);
+  'tailSubtype', "", 'solveVariant', "", 'runTimeMs', NaN, 'wallTimeMs', NaN);
 end
 
 function [perfTable, repeatOutCell] = localCollectTaskOutput(taskOutCell)
@@ -1117,18 +1153,28 @@ for iRow = 1:height(groupKey)
   row.trimAngleRmseDeg = sqrt(row.trimAngleMseDeg2);
   row.trimAngleP95Deg = localPrctileFinite(perfTable.angleErrDeg(trimMask), 95);
   row.trimAngleP99Deg = localPrctileFinite(perfTable.angleErrDeg(trimMask), 99);
+  row.crbLocalCount = row.trimmedCoreCount;
+  row.crbLocalRate = row.trimmedCoreRate;
+  row.crbLocalKeepRate = row.trimKeepRate;
+  row.crbLocalAngleMseDeg2 = row.trimAngleMseDeg2;
+  row.crbLocalAngleRmseDeg = row.trimAngleRmseDeg;
+  row.crbLocalAngleP95Deg = row.trimAngleP95Deg;
+  row.crbLocalAngleP99Deg = row.trimAngleP99Deg;
   row.angleCrbStdDeg = median(perfTable.angleCrbStdDeg(crbMask), 'omitnan');
   row.fullAngleRmseOverCrb = localSafeRatio(row.fullAngleRmseDeg, row.angleCrbStdDeg);
   row.resolvedAngleRmseOverCrb = localSafeRatio(row.resolvedAngleRmseDeg, row.angleCrbStdDeg);
   row.coreAngleRmseOverCrb = localSafeRatio(row.coreAngleRmseDeg, row.angleCrbStdDeg);
   row.trimAngleRmseOverCrb = localSafeRatio(row.trimAngleRmseDeg, row.angleCrbStdDeg);
+  row.crbLocalAngleRmseOverCrb = row.trimAngleRmseOverCrb;
   row.fullAngleMseOverCrb = localSafeRatio(row.fullAngleMseDeg2, row.angleCrbStdDeg.^2);
   row.resolvedAngleMseOverCrb = localSafeRatio(row.resolvedAngleMseDeg2, row.angleCrbStdDeg.^2);
   row.coreAngleMseOverCrb = localSafeRatio(row.coreAngleMseDeg2, row.angleCrbStdDeg.^2);
   row.trimAngleMseOverCrb = localSafeRatio(row.trimAngleMseDeg2, row.angleCrbStdDeg.^2);
+  row.crbLocalAngleMseOverCrb = row.trimAngleMseOverCrb;
   row.resolvedAngleNormP95 = localPrctileFinite(perfTable.angleNormErr(resolvedMask), 95);
   row.coreAngleNormP95 = localPrctileFinite(perfTable.angleNormErr(coreMask), 95);
   row.trimAngleNormP95 = localPrctileFinite(perfTable.angleNormErr(trimMask), 95);
+  row.crbLocalAngleNormP95 = row.trimAngleNormP95;
   row.fullFdRefMseHz2 = localMse(perfTable.fdRefAbsErrHz(mask));
   row.fullFdRefRmseHz = sqrt(row.fullFdRefMseHz2);
   row.fullFdRefP95Hz = localPrctileFinite(perfTable.fdRefAbsErrHz(mask), 95);
@@ -1145,18 +1191,25 @@ for iRow = 1:height(groupKey)
   row.trimFdRefRmseHz = sqrt(row.trimFdRefMseHz2);
   row.trimFdRefP95Hz = localPrctileFinite(perfTable.fdRefAbsErrHz(trimMask), 95);
   row.trimFdRefP99Hz = localPrctileFinite(perfTable.fdRefAbsErrHz(trimMask), 99);
+  row.crbLocalFdRefMseHz2 = row.trimFdRefMseHz2;
+  row.crbLocalFdRefRmseHz = row.trimFdRefRmseHz;
+  row.crbLocalFdRefP95Hz = row.trimFdRefP95Hz;
+  row.crbLocalFdRefP99Hz = row.trimFdRefP99Hz;
   row.fdRefCrbStdHz = median(perfTable.fdRefCrbStdHz(crbMask), 'omitnan');
   row.fullFdRefRmseOverCrb = localSafeRatio(row.fullFdRefRmseHz, row.fdRefCrbStdHz);
   row.resolvedFdRefRmseOverCrb = localSafeRatio(row.resolvedFdRefRmseHz, row.fdRefCrbStdHz);
   row.coreFdRefRmseOverCrb = localSafeRatio(row.coreFdRefRmseHz, row.fdRefCrbStdHz);
   row.trimFdRefRmseOverCrb = localSafeRatio(row.trimFdRefRmseHz, row.fdRefCrbStdHz);
+  row.crbLocalFdRefRmseOverCrb = row.trimFdRefRmseOverCrb;
   row.fullFdRefMseOverCrb = localSafeRatio(row.fullFdRefMseHz2, row.fdRefCrbStdHz.^2);
   row.resolvedFdRefMseOverCrb = localSafeRatio(row.resolvedFdRefMseHz2, row.fdRefCrbStdHz.^2);
   row.coreFdRefMseOverCrb = localSafeRatio(row.coreFdRefMseHz2, row.fdRefCrbStdHz.^2);
   row.trimFdRefMseOverCrb = localSafeRatio(row.trimFdRefMseHz2, row.fdRefCrbStdHz.^2);
+  row.crbLocalFdRefMseOverCrb = row.trimFdRefMseOverCrb;
   row.resolvedFdRefNormP95 = localPrctileFinite(perfTable.fdRefNormErr(resolvedMask), 95);
   row.coreFdRefNormP95 = localPrctileFinite(perfTable.fdRefNormErr(coreMask), 95);
   row.trimFdRefNormP95 = localPrctileFinite(perfTable.fdRefNormErr(trimMask), 95);
+  row.crbLocalFdRefNormP95 = row.trimFdRefNormP95;
   row.fdRateRmseHzPerSec = localRmse(perfTable.fdRateAbsErrHzPerSec(mask));
   row.nonRefCoherenceFloorMedian = median(perfTable.nonRefCoherenceFloor(mask), 'omitnan');
   row.meanWallTimeMs = mean(perfTable.wallTimeMs(mask), 'omitnan');
@@ -1174,6 +1227,7 @@ row = struct('displayName', "", 'satMode', "", 'phaseMode', "", 'fdRateMode', ""
   'coreResolvedCount', NaN, 'coreResolvedRate', NaN, 'coreRejectedRate', NaN, ...
   'trimmedCoreCount', NaN, 'trimmedCoreRate', NaN, 'trimKeepRate', NaN, ...
   'trimmedOutlierRate', NaN, 'trimKeepRateBelowMin', false, ...
+  'crbLocalCount', NaN, 'crbLocalRate', NaN, 'crbLocalKeepRate', NaN, ...
   'toothResolvedRate', NaN, 'freqBoundaryHitRate', NaN, 'fdRateResolvedRate', NaN, ...
   'coherenceCollapseRate', NaN, ...
   'fullAngleMseDeg2', NaN, 'fullAngleRmseDeg', NaN, 'fullAngleP95Deg', NaN, ...
@@ -1181,23 +1235,33 @@ row = struct('displayName', "", 'satMode', "", 'phaseMode', "", 'fdRateMode', ""
   'resolvedAngleP95Deg', NaN, 'resolvedAngleP99Deg', NaN, ...
   'coreAngleMseDeg2', NaN, 'coreAngleRmseDeg', NaN, 'coreAngleP95Deg', NaN, ...
   'coreAngleP99Deg', NaN, 'trimAngleMseDeg2', NaN, 'trimAngleRmseDeg', NaN, ...
-  'trimAngleP95Deg', NaN, 'trimAngleP99Deg', NaN, 'angleCrbStdDeg', NaN, ...
+  'trimAngleP95Deg', NaN, 'trimAngleP99Deg', NaN, ...
+  'crbLocalAngleMseDeg2', NaN, 'crbLocalAngleRmseDeg', NaN, ...
+  'crbLocalAngleP95Deg', NaN, 'crbLocalAngleP99Deg', NaN, 'angleCrbStdDeg', NaN, ...
   'fullAngleRmseOverCrb', NaN, 'resolvedAngleRmseOverCrb', NaN, ...
   'coreAngleRmseOverCrb', NaN, 'trimAngleRmseOverCrb', NaN, ...
+  'crbLocalAngleRmseOverCrb', NaN, ...
   'fullAngleMseOverCrb', NaN, 'resolvedAngleMseOverCrb', NaN, ...
   'coreAngleMseOverCrb', NaN, 'trimAngleMseOverCrb', NaN, ...
+  'crbLocalAngleMseOverCrb', NaN, ...
   'resolvedAngleNormP95', NaN, 'coreAngleNormP95', NaN, 'trimAngleNormP95', NaN, ...
+  'crbLocalAngleNormP95', NaN, ...
   'fullFdRefMseHz2', NaN, 'fullFdRefRmseHz', NaN, 'fullFdRefP95Hz', NaN, ...
   'fullFdRefP99Hz', NaN, 'resolvedFdRefMseHz2', NaN, 'resolvedFdRefRmseHz', NaN, ...
   'resolvedFdRefP95Hz', NaN, 'resolvedFdRefP99Hz', NaN, ...
   'coreFdRefMseHz2', NaN, 'coreFdRefRmseHz', NaN, 'coreFdRefP95Hz', NaN, ...
   'coreFdRefP99Hz', NaN, 'trimFdRefMseHz2', NaN, 'trimFdRefRmseHz', NaN, ...
-  'trimFdRefP95Hz', NaN, 'trimFdRefP99Hz', NaN, 'fdRefCrbStdHz', NaN, ...
+  'trimFdRefP95Hz', NaN, 'trimFdRefP99Hz', NaN, ...
+  'crbLocalFdRefMseHz2', NaN, 'crbLocalFdRefRmseHz', NaN, ...
+  'crbLocalFdRefP95Hz', NaN, 'crbLocalFdRefP99Hz', NaN, 'fdRefCrbStdHz', NaN, ...
   'fullFdRefRmseOverCrb', NaN, 'resolvedFdRefRmseOverCrb', NaN, ...
   'coreFdRefRmseOverCrb', NaN, 'trimFdRefRmseOverCrb', NaN, ...
+  'crbLocalFdRefRmseOverCrb', NaN, ...
   'fullFdRefMseOverCrb', NaN, 'resolvedFdRefMseOverCrb', NaN, ...
   'coreFdRefMseOverCrb', NaN, 'trimFdRefMseOverCrb', NaN, ...
+  'crbLocalFdRefMseOverCrb', NaN, ...
   'resolvedFdRefNormP95', NaN, 'coreFdRefNormP95', NaN, 'trimFdRefNormP95', NaN, ...
+  'crbLocalFdRefNormP95', NaN, ...
   'fdRateRmseHzPerSec', NaN, 'nonRefCoherenceFloorMedian', NaN, 'meanWallTimeMs', NaN);
 end
 
@@ -1228,7 +1292,7 @@ for iGroup = 1:height(groupKey)
     'fdRateAbsErrHzPerSec', 'nonRefCoherenceFloor', 'initAngleErrDeg', ...
     'finalMinusInitAngleDeg', 'fdRefInitMoveHz', 'fdRateInitMoveHzPerSec', ...
     'objectiveImprove', 'iterations', 'exitflag', 'firstOrderOpt', ...
-    'failureReason', 'coreResolved', 'trimmedCore', 'trimmedOutlier'});
+    'failureReason', 'tailSubtype', 'coreResolved', 'trimmedCore', 'trimmedOutlier'});
   topTable.tailScore = tailScore(keepIdx);
   tailTableCell{end + 1, 1} = topTable; %#ok<AGROW>
 end
@@ -1262,7 +1326,7 @@ fieldList = {'displayName', 'snrDb', 'numFrame', 'taskSeed', 'tailScore', ...
   'fdRateAbsErrHzPerSec', 'nonRefCoherenceFloor', 'initAngleErrDeg', ...
   'finalMinusInitAngleDeg', 'fdRefInitMoveHz', 'fdRateInitMoveHzPerSec', ...
   'objectiveImprove', 'iterations', 'exitflag', 'firstOrderOpt', ...
-  'failureReason', 'coreResolved', 'trimmedCore', 'trimmedOutlier'};
+  'failureReason', 'tailSubtype', 'coreResolved', 'trimmedCore', 'trimmedOutlier'};
 keepField = fieldList(ismember(fieldList, topTailTable.Properties.VariableNames));
 topTailExportTable = topTailTable(:, keepField);
 end
@@ -1309,6 +1373,22 @@ initParam = reshape(localGetFieldOrDefault(estResult, 'initParam', []), [], 1);
 if numel(initParam) >= 4
   initFdRateHzPerSec = initParam(4);
 end
+end
+
+function crbLocalSummaryTable = localBuildCrbLocalSummaryTable(aggregateTable)
+%LOCALBUILDCRBLOCALSUMMARYTABLE Build a compact paper-facing local-regime table.
+
+crbLocalSummaryTable = table();
+if isempty(aggregateTable) || height(aggregateTable) == 0
+  return;
+end
+fieldList = {'displayName', 'snrDb', 'numFrame', 'numRepeat', ...
+  'resolvedRate', 'coreResolvedRate', 'crbLocalRate', 'crbLocalKeepRate', ...
+  'crbLocalAngleRmseOverCrb', 'crbLocalFdRefRmseOverCrb', ...
+  'crbLocalAngleNormP95', 'crbLocalFdRefNormP95', ...
+  'outlierRate', 'freqBoundaryHitRate', 'fdRateResolvedRate'};
+keepField = fieldList(ismember(fieldList, aggregateTable.Properties.VariableNames));
+crbLocalSummaryTable = aggregateTable(:, keepField);
 end
 
 function failureSummaryTable = localBuildFailureSummaryTable(perfTable)
@@ -1364,7 +1444,7 @@ for iFrame = 1:numel(frameList)
     semilogy(plotTable.snrDb(rowMask), plotTable.coreAngleRmseDeg(rowMask), '-o', ...
       'DisplayName', char(methodList(iMethod) + " core RMSE"));
     semilogy(plotTable.snrDb(rowMask), plotTable.trimAngleRmseDeg(rowMask), '--s', ...
-      'DisplayName', char(methodList(iMethod) + " trimmed RMSE"));
+      'DisplayName', char(methodList(iMethod) + " CRB-local RMSE"));
     semilogy(plotTable.snrDb(rowMask), plotTable.angleCrbStdDeg(rowMask), ':x', ...
       'DisplayName', char(methodList(iMethod) + " CRB"));
   end
@@ -1381,7 +1461,7 @@ for iFrame = 1:numel(frameList)
     semilogy(plotTable.snrDb(rowMask), plotTable.coreFdRefRmseHz(rowMask), '-o', ...
       'DisplayName', char(methodList(iMethod) + " core RMSE"));
     semilogy(plotTable.snrDb(rowMask), plotTable.trimFdRefRmseHz(rowMask), '--s', ...
-      'DisplayName', char(methodList(iMethod) + " trimmed RMSE"));
+      'DisplayName', char(methodList(iMethod) + " CRB-local RMSE"));
     semilogy(plotTable.snrDb(rowMask), plotTable.fdRefCrbStdHz(rowMask), ':x', ...
       'DisplayName', char(methodList(iMethod) + " CRB"));
   end
@@ -1399,7 +1479,7 @@ for iFrame = 1:numel(frameList)
     plot(plotTable.snrDb(rowMask), plotTable.coreAngleMseOverCrb(rowMask), '-o', ...
       'DisplayName', char(methodList(iMethod) + " core"));
     plot(plotTable.snrDb(rowMask), plotTable.trimAngleMseOverCrb(rowMask), '--s', ...
-      'DisplayName', char(methodList(iMethod) + " trimmed"));
+      'DisplayName', char(methodList(iMethod) + " CRB-local"));
   end
   grid on;
   xlabel('SNR (dB)');
@@ -1414,7 +1494,7 @@ for iFrame = 1:numel(frameList)
     plot(plotTable.snrDb(rowMask), plotTable.coreFdRefMseOverCrb(rowMask), '-o', ...
       'DisplayName', char(methodList(iMethod) + " core"));
     plot(plotTable.snrDb(rowMask), plotTable.trimFdRefMseOverCrb(rowMask), '--s', ...
-      'DisplayName', char(methodList(iMethod) + " trimmed"));
+      'DisplayName', char(methodList(iMethod) + " CRB-local"));
   end
   grid on;
   xlabel('SNR (dB)');
@@ -1431,13 +1511,13 @@ for iFrame = 1:numel(frameList)
     plot(plotTable.snrDb(rowMask), plotTable.coreResolvedRate(rowMask), '--s', ...
       'DisplayName', char(methodList(iMethod) + " core"));
     plot(plotTable.snrDb(rowMask), plotTable.trimmedCoreRate(rowMask), ':x', ...
-      'DisplayName', char(methodList(iMethod) + " trimmed"));
+      'DisplayName', char(methodList(iMethod) + " CRB-local"));
   end
   grid on;
   ylim([0, 1.05]);
   xlabel('SNR (dB)');
   ylabel('Sample keep rate');
-  title(sprintf('Resolved/core/trimmed keep rates, P=%d', frameList(iFrame)));
+  title(sprintf('Resolved/core/CRB-local keep rates, P=%d', frameList(iFrame)));
   legend('Location', 'best');
 end
 plotData.aggregateTable = aggregateTable;
@@ -1530,12 +1610,12 @@ end
 lineList = strings(0, 1);
 lineList(end + 1, 1) = sprintf('<code>%s</code> P=%d SNR=%.1f dB', ...
   char(row.displayName(1)), row.numFrame(1), row.snrDb(1));
-lineList(end + 1, 1) = sprintf('loose/core/trim rates=<code>%.3f</code>/<code>%.3f</code>/<code>%.3f</code>', ...
-  row.resolvedRate(1), row.coreResolvedRate(1), row.trimmedCoreRate(1));
+lineList(end + 1, 1) = sprintf('loose/core/CRB-local rates=<code>%.3f</code>/<code>%.3f</code>/<code>%.3f</code>', ...
+  row.resolvedRate(1), row.coreResolvedRate(1), row.crbLocalRate(1));
 lineList(end + 1, 1) = sprintf('core angle/fdRef MSE-CRB=<code>%.3f</code>/<code>%.3f</code>', ...
   row.coreAngleMseOverCrb(1), row.coreFdRefMseOverCrb(1));
-lineList(end + 1, 1) = sprintf('trim angle/fdRef MSE-CRB=<code>%.3f</code>/<code>%.3f</code>', ...
-  row.trimAngleMseOverCrb(1), row.trimFdRefMseOverCrb(1));
+lineList(end + 1, 1) = sprintf('CRB-local angle/fdRef MSE-CRB=<code>%.3f</code>/<code>%.3f</code>', ...
+  row.crbLocalAngleMseOverCrb(1), row.crbLocalFdRefMseOverCrb(1));
 end
 
 function row = localFindAggregateRow(aggregateTable, displayName, snrDb, numFrame)
