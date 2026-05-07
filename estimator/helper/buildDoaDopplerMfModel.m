@@ -114,6 +114,12 @@ end
 if ~isfield(modelOpt, 'unknownDoaReleaseHalfWidth') || isempty(modelOpt.unknownDoaReleaseHalfWidth)
   modelOpt.unknownDoaReleaseHalfWidth = [];
 end
+if ~isfield(modelOpt, 'disableDoaBasinEntry') || isempty(modelOpt.disableDoaBasinEntry)
+  modelOpt.disableDoaBasinEntry = false;
+end
+if ~isfield(modelOpt, 'doaBasinEntryHalfWidthList') || isempty(modelOpt.doaBasinEntryHalfWidthList)
+  modelOpt.doaBasinEntryHalfWidthList = [];
+end
 if ~isfield(modelOpt, 'continuousPhaseConsistencyWeight') || isempty(modelOpt.continuousPhaseConsistencyWeight)
   modelOpt.continuousPhaseConsistencyWeight = 0;
 end
@@ -239,6 +245,19 @@ if ~isempty(modelOpt.unknownDoaReleaseHalfWidth)
   if numel(modelOpt.unknownDoaReleaseHalfWidth) ~= 2
     error('estimatorDoaDopplerMlePilotMfOpt:InvalidUnknownDoaReleaseHalfWidthSize', ...
       'modelOpt.unknownDoaReleaseHalfWidth must contain one value per DoA dimension.');
+  end
+end
+if ~isscalar(modelOpt.disableDoaBasinEntry) || ~islogical(modelOpt.disableDoaBasinEntry)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidDisableDoaBasinEntry', ...
+    'modelOpt.disableDoaBasinEntry must be a logical scalar.');
+end
+if ~isempty(modelOpt.doaBasinEntryHalfWidthList)
+  if ~isnumeric(modelOpt.doaBasinEntryHalfWidthList) || ...
+      any(~isfinite(modelOpt.doaBasinEntryHalfWidthList(:))) || ...
+      any(modelOpt.doaBasinEntryHalfWidthList(:) <= 0)
+    error('estimatorDoaDopplerMlePilotMfOpt:InvalidDoaBasinEntryHalfWidthList', ...
+      ['modelOpt.doaBasinEntryHalfWidthList must be empty or a positive ', ...
+       'finite numeric vector / 2-column matrix.']);
   end
 end
 if ~isscalar(modelOpt.continuousPhaseConsistencyWeight) || ...
@@ -515,6 +534,8 @@ model.disableUnknownWarmAnchor = logical(modelOpt.disableUnknownWarmAnchor);
 model.freezeDoa = logical(modelOpt.freezeDoa);
 model.disableUnknownDoaReleaseFloor = logical(modelOpt.disableUnknownDoaReleaseFloor);
 model.unknownDoaReleaseHalfWidth = reshape(modelOpt.unknownDoaReleaseHalfWidth, [], 1);
+model.disableDoaBasinEntry = logical(modelOpt.disableDoaBasinEntry);
+model.doaBasinEntryHalfWidthList = modelOpt.doaBasinEntryHalfWidthList;
 model.continuousPhaseConsistencyWeight = modelOpt.continuousPhaseConsistencyWeight;
 model.continuousPhaseCollapsePenaltyWeight = modelOpt.continuousPhaseCollapsePenaltyWeight;
 model.continuousPhaseNegativeProjectionPenaltyWeight = modelOpt.continuousPhaseNegativeProjectionPenaltyWeight;
@@ -527,15 +548,9 @@ model.unknownWarmAnchorMinParforSeed = modelOpt.unknownWarmAnchorMinParforSeed;
 model.unknownWarmAnchorFdRateReleaseHalfWidth = modelOpt.unknownWarmAnchorFdRateReleaseHalfWidth;
 model.unknownWarmAnchorFdRateReleaseOffsetList = reshape(modelOpt.unknownWarmAnchorFdRateReleaseOffsetList, [], 1);
 model.verboseSolverIterations = logical(modelOpt.verboseSolverIterations);
-[doaLbCache, doaUbCache] = localBuildDoaBounds(model);
-model.doaLb = doaLbCache;
-model.doaUb = doaUbCache;
-model.lb = [doaLbCache; model.fdRange(1)];
-model.ub = [doaUbCache; model.fdRange(2)];
-if strcmp(model.fdRateMode, 'unknown')
-  model.lb = [model.lb; model.fdRateRange(1)];
-  model.ub = [model.ub; model.fdRateRange(2)];
-end
+[model.lb, model.ub] = buildDoaDopplerMfBounds(model);
+model.doaLb = model.lb(1:2);
+model.doaUb = model.ub(1:2);
 model.cachedBoundsReady = true;
 end
 

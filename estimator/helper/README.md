@@ -61,7 +61,9 @@
 ### `solveDoaDopplerMfBranches.m`
 
 - 职责：MF known/unknown 分支求解。
-- 注意：这是 branch orchestration，不应塞 dev-only 诊断或大体量 trace。
+- 当前连续相位 MF local solve 在存在 `initDoaParam / initDoaHalfWidth` 时，会先运行 truth-free DoA basin-entry acquisition：用较宽 DoA 盒捕获好盆地，再回到原 compact local box 做 final polish；该逻辑只改变 DoA entry，不改变 fdRef / fdRate 范围、reference-sat 语义或 objective。
+- CP-U warm-anchor 会锚定在当前最佳 DoA basin 后再释放 fdRate，避免 unknown-rate 分支重复继承旧 static basin。
+- 注意：这是 branch orchestration，不应塞 dev-only 诊断或大体量 trace；truth / path probe 仍只能放在 replay。
 
 ### `runDoaDopplerMfUnknownWarmAnchor.m`
 
@@ -133,6 +135,7 @@
 ### warm-anchor parfor 特别规则
 
 - estimator 默认路径保持串行；
+- DoA basin-entry acquisition 也是串行候选求解；不要在 estimator 内层默认打开 parfor 或 nested parfor；
 - dev/perf 可显式 opt-in；
 - opt-in 后必须复核 wrong-tooth guard 和 quick regression；
 - 敏感性用 `replayMfWarmAnchorParforSensitivity.m` 观察。
