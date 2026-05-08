@@ -12,7 +12,7 @@ clear; close all; clc;
 %% Replay configuration
 % The representative scenario, satellite pair, waveform, frame offsets, and
 % default search boxes are defined by buildDynamicDualSatEciContext. This replay
-% only controls the seed, SNR, estimator mode, and objective scan grids.
+% only controls the seed, SNR, estimator modes, and objective scan grids.
 
 replayName = "replayMfCombToothSurface";
 
@@ -23,11 +23,12 @@ saveSnapshot = true;                % true saves the lightweight replayData only
 notifyTelegramEnable = true;        % true sends best-effort HTML Telegram notice on completion or failure.
 checkpointEnable = false;           % fixed-seed surface replay does not create per-repeat checkpoint files.
 optVerbose = false;                 % true enables compact estimator/flow trace.
-modeTag = "unknown";                % "unknown" scans CP-U; use "known" for CP-K.
+modeTagList = ["unknown", "known"];   % "unknown" scans CP-U; "known" scans CP-K.
 
-% Scan centers. "truth" shows the ideal tooth geometry; "finalEstimate" shows
-% the tooth selected by the current flow. "staticSeed" is also supported.
-centerNameList = ["truth", "finalEstimate"];
+% Scan centers. "truth" shows the ideal tooth geometry. "finalByMode" maps to
+% finalCpU for CP-U scans and finalCpK for CP-K scans. "finalCpU",
+% "finalCpK", "finalEstimate" (legacy CP-U alias), and "staticSeed" are also supported.
+centerNameList = ["truth", "finalByMode"];
 
 % fdRef comb line scan. scanHalfWidthHz=[] means numAliasSide * aliasStepHz,
 % where aliasStepHz is resolved from the MF model time offsets, normally 1/T_f.
@@ -35,11 +36,20 @@ numAliasSide = 2;                   % Number of +/- alias teeth to include.
 numFdGrid = 301;                    % Number of fdRef samples in each line scan.
 scanHalfWidthHz = [];               % Manual fdRef half-width override in Hz.
 
-% DoA-fdRef surface scan. The DoA axis is a 1-D cut along truth->finalEstimate,
+% DoA-fdRef surface scan. The DoA axis is a 1-D cut from truth to the active center,
 % not a full latitude/longitude grid. Increase grid counts only for smoother plots.
 surfaceFdGridCount = 121;           % Number of fdRef samples in the surface scan.
 surfaceDoaGridCount = 61;           % Number of DoA-line samples in the surface scan.
 surfaceDoaHalfWidthDeg = 0.004;     % DoA-line half-width around each center.
+surfaceClipDeltaObj = 1e4;          % Clipped heatmap upper limit; [] keeps the full color scale.
+
+% Optional CP-K local latitude/longitude surface. This checks whether the
+% known-rate DoA shape is hidden by the 1-D cut direction or fdRef tooth scale.
+latLonSurfaceModeList = "known";      % Empty disables the extra lat/lon surface scan.
+latLonSurfaceCenterNameList = "finalByMode";
+latLonSurfaceGridCount = 41;         % Number of samples per latitude/longitude axis.
+latLonSurfaceHalfWidthDeg = 0.004;   % Local lat/lon half-width around each center.
+latLonSurfaceFdOffsetTagList = ["centerFd", "surfaceMinFd"];  % center fd and surface-selected fd tooth.
 
 % Truth-centered DoA-fdRef coupling diagnostic. This local window is kept
 % narrower than the comb surface so the fitted curvature reflects local coupling.
@@ -52,6 +62,7 @@ runTic = tic;
 notifyConfig = struct( ...
   'snrDb', snrDb, ...
   'baseSeed', baseSeed, ...
+  'modeTagList', modeTagList, ...
   'saveSnapshot', saveSnapshot, ...
   'notifyTelegramEnable', notifyTelegramEnable, ...
   'checkpointEnable', checkpointEnable);
@@ -59,7 +70,7 @@ notifyConfig = struct( ...
 %% Build context and flow options
 
 printMfReplayHeader(char(replayName), notifyConfig, '');
-fprintf('  %-32s : %s\n', 'mode', char(modeTag));
+fprintf('  %-32s : %s\n', 'mode list', char(strjoin(string(modeTagList), ', ')));
 
 %% Run replay batch
 
@@ -69,7 +80,8 @@ fprintf('[%s] Build one fixed-seed replay case.\n', char(datetime('now', 'Format
 
 % Build reusable center points once so every line/surface scan uses the same
 % truth, static seed, and final-estimate parameter definitions.
-centerRegistry = localBuildCenterRegistry(caseData.truth, caseData.staticSeedCase, caseData.msFlow.caseFinal);
+centerRegistry = localBuildCenterRegistry(caseData.truth, caseData.staticSeedCase, caseData.msFlow.caseFinal, caseData.msKnownCase);
+centerTable = localBuildCenterTable(centerRegistry);
 centerNameList = reshape(string(centerNameList), [], 1);
 if isempty(centerNameList)
   centerNameList = "truth";
@@ -77,53 +89,131 @@ end
 
 % The probe model reuses the formal MF evaluator path. Only the probe point
 % changes during scans; no signal or objective code is duplicated here.
-fprintf('[%s] Build MF probe model for %s mode.\n', char(datetime('now', 'Format', 'HH:mm:ss')), char(modeTag));
-model = localBuildProbeModel(caseData.periodicFixture, context, flowOpt, modeTag);
-aliasStepHz = localResolveAliasStep(model);
-scanHalfWidthHzResolved = scanHalfWidthHz;
-if isempty(scanHalfWidthHzResolved)
-  scanHalfWidthHzResolved = numAliasSide * aliasStepHz;
+modeTagList = reshape(string(modeTagList), [], 1);
+centerNameList = reshape(string(centerNameList), [], 1);
+if isempty(modeTagList)
+  modeTagList = "unknown";
+end
+if isempty(centerNameList)
+  centerNameList = "truth";
 end
 
-lineRowCell = cell(numel(centerNameList), 1);
-surfaceRowCell = cell(numel(centerNameList), 1);
-lineScanCell = cell(numel(centerNameList), 1);
-surfaceScanCell = cell(numel(centerNameList), 1);
-for iCenter = 1:numel(centerNameList)
-  centerName = centerNameList(iCenter);
-  basePoint = localResolveCenterPoint(centerRegistry, centerName);
+numMode = numel(modeTagList);
+numCenter = numel(centerNameList);
+numScan = numMode * numCenter;
+lineRowCell = cell(numScan, 1);
+surfaceRowCell = cell(numScan, 1);
+sliceRowCell = cell(numScan, 1);
+lineScanCell = cell(numScan, 1);
+surfaceScanCell = cell(numScan, 1);
+latLonSurfaceRowCell = {};
+latLonSurfaceCell = {};
+latLonSurfaceIdx = 0;
+couplingRowCell = cell(numMode, 1);
+couplingScanCell = cell(numMode, 1);
+modeRowCell = cell(numMode, 1);
+scanHalfWidthHzResolvedList = nan(numMode, 1);
+aliasStepHzList = nan(numMode, 1);
+scanIdx = 0;
 
-  fprintf('[%s] Run fdRef comb line scan: center=%s.\n', char(datetime('now', 'Format', 'HH:mm:ss')), char(centerName));
-  lineScan = localRunFdRefLineScan(model, basePoint, numFdGrid, scanHalfWidthHzResolved, aliasStepHz, char("fdRef line " + centerName));
-  lineScan.centerName = centerName;
-  lineScanCell{iCenter} = lineScan;
+for iMode = 1:numMode
+  modeTag = modeTagList(iMode);
+  fprintf('[%s] Build MF probe model for %s mode.\n', char(datetime('now', 'Format', 'HH:mm:ss')), char(modeTag));
+  model = localBuildProbeModel(caseData.periodicFixture, context, flowOpt, modeTag);
+  aliasStepHz = localResolveAliasStep(model);
+  scanHalfWidthHzResolved = scanHalfWidthHz;
+  if isempty(scanHalfWidthHzResolved)
+    scanHalfWidthHzResolved = numAliasSide * aliasStepHz;
+  end
+  aliasStepHzList(iMode) = aliasStepHz;
+  scanHalfWidthHzResolvedList(iMode) = scanHalfWidthHzResolved;
+  modeRowCell{iMode} = table(string(modeTag), aliasStepHz, scanHalfWidthHzResolved, ...
+    'VariableNames', {'modeTag', 'aliasStepHz', 'scanHalfWidthHzResolved'});
 
-  fprintf('[%s] Run DoA-fdRef surface scan: center=%s.\n', char(datetime('now', 'Format', 'HH:mm:ss')), char(centerName));
-  surfaceScan = localRunDoaFdRefSurfaceScan(model, basePoint, centerRegistry.truth, centerRegistry.finalEstimate, ...
-    surfaceFdGridCount, surfaceDoaGridCount, surfaceDoaHalfWidthDeg, scanHalfWidthHzResolved, aliasStepHz, ...
-    char("DoA-fdRef surface " + centerName));
-  surfaceScan.centerName = centerName;
-  surfaceScanCell{iCenter} = surfaceScan;
+  for iCenter = 1:numCenter
+    centerName = centerNameList(iCenter);
+    basePoint = localResolveCenterPoint(centerRegistry, centerName, modeTag);
+    scanIdx = scanIdx + 1;
 
-  lineRowCell{iCenter} = table(string(centerName), lineScan.aliasStepHz, lineScan.minDeltaFdRef, ...
-    lineScan.minAliasIndex, lineScan.centerDeltaObj, lineScan.minObj, ...
-    'VariableNames', {'centerName', 'aliasStepHz', 'minDeltaFdRefHz', 'minAliasIndex', 'centerDeltaObj', 'minObj'});
-  surfaceRowCell{iCenter} = table(string(centerName), surfaceScan.minDoaOffsetDeg, surfaceScan.minFdOffsetHz, ...
-    surfaceScan.minAliasIndex, surfaceScan.centerDeltaObj, ...
-    'VariableNames', {'centerName', 'minDoaOffsetDeg', 'minFdOffsetHz', 'minAliasIndex', 'centerDeltaObj'});
+    fprintf('[%s] Run fdRef comb line scan: mode=%s, center=%s.\n', ...
+      char(datetime('now', 'Format', 'HH:mm:ss')), char(modeTag), char(basePoint.resolvedCenterName));
+    lineScan = localRunFdRefLineScan(model, basePoint, numFdGrid, scanHalfWidthHzResolved, aliasStepHz, ...
+      char("fdRef line " + modeTag + " " + basePoint.resolvedCenterName));
+    lineScan.modeTag = modeTag;
+    lineScan.centerName = centerName;
+    lineScan.resolvedCenterName = basePoint.resolvedCenterName;
+    lineScanCell{scanIdx} = lineScan;
+
+    fprintf('[%s] Run DoA-fdRef surface scan: mode=%s, center=%s.\n', ...
+      char(datetime('now', 'Format', 'HH:mm:ss')), char(modeTag), char(basePoint.resolvedCenterName));
+    surfaceScan = localRunDoaFdRefSurfaceScan(model, basePoint, centerRegistry.truth, basePoint, ...
+      surfaceFdGridCount, surfaceDoaGridCount, surfaceDoaHalfWidthDeg, scanHalfWidthHzResolved, aliasStepHz, ...
+      char("DoA-fdRef surface " + modeTag + " " + basePoint.resolvedCenterName));
+    surfaceScan.modeTag = modeTag;
+    surfaceScan.centerName = centerName;
+    surfaceScan.resolvedCenterName = basePoint.resolvedCenterName;
+    surfaceScan = localAttachSurfaceSliceMetrics(surfaceScan);
+    surfaceScanCell{scanIdx} = surfaceScan;
+
+    if localShouldRunLatLonSurface(modeTag, centerName, basePoint.resolvedCenterName, ...
+        latLonSurfaceModeList, latLonSurfaceCenterNameList)
+      fdOffsetTable = localResolveLatLonSurfaceFdOffsetTable(latLonSurfaceFdOffsetTagList, surfaceScan);
+      for iFdOffset = 1:height(fdOffsetTable)
+        fixedFdTag = fdOffsetTable.fixedFdTag(iFdOffset);
+        fixedFdOffsetHz = fdOffsetTable.fixedFdOffsetHz(iFdOffset);
+        fprintf('[%s] Run local lat/lon surface scan: mode=%s, center=%s, fdTag=%s, fdOffset=%.3f Hz.\n', ...
+          char(datetime('now', 'Format', 'HH:mm:ss')), char(modeTag), char(basePoint.resolvedCenterName), ...
+          char(fixedFdTag), fixedFdOffsetHz);
+        latLonSurfaceIdx = latLonSurfaceIdx + 1;
+        latLonSurface = localRunLatLonSurfaceScan(model, basePoint, fixedFdOffsetHz, ...
+          latLonSurfaceGridCount, latLonSurfaceHalfWidthDeg, aliasStepHz, ...
+          char("lat/lon surface " + modeTag + " " + basePoint.resolvedCenterName + " " + fixedFdTag));
+        latLonSurface.modeTag = modeTag;
+        latLonSurface.centerName = centerName;
+        latLonSurface.resolvedCenterName = basePoint.resolvedCenterName;
+        latLonSurface.fixedFdTag = fixedFdTag;
+        latLonSurfaceCell{latLonSurfaceIdx, 1} = latLonSurface;
+        latLonSurfaceRowCell{latLonSurfaceIdx, 1} = localBuildLatLonSurfaceRow(latLonSurface);
+      end
+    end
+
+    lineRowCell{scanIdx} = table(string(modeTag), string(centerName), string(lineScan.resolvedCenterName), ...
+      lineScan.aliasStepHz, lineScan.minDeltaFdRef, lineScan.minAliasIndex, lineScan.centerDeltaObj, lineScan.minObj, ...
+      'VariableNames', {'modeTag', 'centerName', 'resolvedCenterName', 'aliasStepHz', ...
+      'minDeltaFdRefHz', 'minAliasIndex', 'centerDeltaObj', 'minObj'});
+    surfaceRowCell{scanIdx} = table(string(modeTag), string(centerName), string(surfaceScan.resolvedCenterName), ...
+      surfaceScan.minDoaOffsetDeg, surfaceScan.minFdOffsetHz, surfaceScan.minAliasIndex, surfaceScan.centerDeltaObj, ...
+      'VariableNames', {'modeTag', 'centerName', 'resolvedCenterName', ...
+      'minDoaOffsetDeg', 'minFdOffsetHz', 'minAliasIndex', 'centerDeltaObj'});
+    sliceRowCell{scanIdx} = localBuildSurfaceSliceRow(surfaceScan);
+  end
+
+  fprintf('[%s] Run truth-centered DoA-fdRef coupling diagnostic: mode=%s.\n', ...
+    char(datetime('now', 'Format', 'HH:mm:ss')), char(modeTag));
+  finalByModePoint = localResolveCenterPoint(centerRegistry, "finalByMode", modeTag);
+  couplingScan = localRunDoaFdCouplingDiagnostic(model, centerRegistry.truth, finalByModePoint, ...
+    couplingFdGridCount, couplingDoaGridCount, couplingDoaHalfWidthDeg, couplingFdHalfWidthHz, aliasStepHz, ...
+    char("truth-centered DoA-fdRef coupling " + modeTag));
+  couplingScan.modeTag = modeTag;
+  couplingScanCell{iMode} = couplingScan;
+  couplingRowCell{iMode} = table(string(modeTag), string(couplingScan.centerName), couplingScan.rhoDoaFd, ...
+    couplingScan.ridgeSlopeHzPerDeg, couplingScan.quadRidgeSlopeHzPerDeg, couplingScan.quadFitRmse, ...
+    couplingScan.minDoaOffsetDeg, couplingScan.minFdOffsetHz, ...
+    'VariableNames', {'modeTag', 'centerName', 'rhoDoaFd', 'ridgeSlopeHzPerDeg', ...
+    'quadRidgeSlopeHzPerDeg', 'quadFitRmse', 'minDoaOffsetDeg', 'minFdOffsetHz'});
 end
 lineTable = vertcat(lineRowCell{:});
 surfaceTable = vertcat(surfaceRowCell{:});
-
-fprintf('[%s] Run truth-centered DoA-fdRef coupling diagnostic.\n', char(datetime('now', 'Format', 'HH:mm:ss')));
-couplingScan = localRunDoaFdCouplingDiagnostic(model, centerRegistry.truth, centerRegistry.finalEstimate, ...
-  couplingFdGridCount, couplingDoaGridCount, couplingDoaHalfWidthDeg, couplingFdHalfWidthHz, aliasStepHz, ...
-  'truth-centered DoA-fdRef coupling');
-couplingTable = table(string(couplingScan.centerName), couplingScan.rhoDoaFd, ...
-  couplingScan.ridgeSlopeHzPerDeg, couplingScan.quadRidgeSlopeHzPerDeg, couplingScan.quadFitRmse, ...
-  couplingScan.minDoaOffsetDeg, couplingScan.minFdOffsetHz, ...
-  'VariableNames', {'centerName', 'rhoDoaFd', 'ridgeSlopeHzPerDeg', ...
-  'quadRidgeSlopeHzPerDeg', 'quadFitRmse', 'minDoaOffsetDeg', 'minFdOffsetHz'});
+sliceTable = vertcat(sliceRowCell{:});
+if isempty(latLonSurfaceRowCell)
+  latLonSurfaceTable = table();
+else
+  latLonSurfaceTable = vertcat(latLonSurfaceRowCell{:});
+end
+couplingTable = vertcat(couplingRowCell{:});
+modeTable = vertcat(modeRowCell{:});
+aliasStepHz = aliasStepHzList(1);
+scanHalfWidthHzResolved = scanHalfWidthHzResolvedList(1);
 
 %% Data storage
 
@@ -134,15 +224,22 @@ config.saveSnapshot = saveSnapshot;
 config.notifyTelegramEnable = notifyTelegramEnable;
 config.checkpointEnable = checkpointEnable;
 config.optVerbose = optVerbose;
-config.modeTag = modeTag;
+config.modeTagList = modeTagList;
 config.centerNameList = centerNameList;
 config.numAliasSide = numAliasSide;
 config.numFdGrid = numFdGrid;
 config.scanHalfWidthHz = scanHalfWidthHz;
 config.scanHalfWidthHzResolved = scanHalfWidthHzResolved;
+config.scanHalfWidthHzResolvedList = scanHalfWidthHzResolvedList;
 config.surfaceFdGridCount = surfaceFdGridCount;
 config.surfaceDoaGridCount = surfaceDoaGridCount;
 config.surfaceDoaHalfWidthDeg = surfaceDoaHalfWidthDeg;
+config.surfaceClipDeltaObj = surfaceClipDeltaObj;
+config.latLonSurfaceModeList = latLonSurfaceModeList;
+config.latLonSurfaceCenterNameList = latLonSurfaceCenterNameList;
+config.latLonSurfaceGridCount = latLonSurfaceGridCount;
+config.latLonSurfaceHalfWidthDeg = latLonSurfaceHalfWidthDeg;
+config.latLonSurfaceFdOffsetTagList = latLonSurfaceFdOffsetTagList;
 config.couplingFdGridCount = couplingFdGridCount;
 config.couplingDoaGridCount = couplingDoaGridCount;
 config.couplingFdHalfWidthHz = couplingFdHalfWidthHz;
@@ -164,12 +261,18 @@ replayData.config = config;
 replayData.contextSummary = localBuildContextSummary(context, flowOpt, aliasStepHz);
 replayData.flowSummary = flowSummary;
 replayData.centerRegistry = centerRegistry;
+replayData.centerTable = centerTable;
+replayData.modeTable = modeTable;
 replayData.lineTable = lineTable;
 replayData.surfaceTable = surfaceTable;
+replayData.sliceTable = sliceTable;
+replayData.latLonSurfaceTable = latLonSurfaceTable;
 replayData.couplingTable = couplingTable;
 replayData.lineScanCell = lineScanCell;
 replayData.surfaceScanCell = surfaceScanCell;
-replayData.couplingScan = couplingScan;
+replayData.latLonSurfaceCell = latLonSurfaceCell;
+replayData.couplingScanCell = couplingScanCell;
+replayData.couplingScan = couplingScanCell{1};
 
 if saveSnapshot
   saveOpt = struct('includeVars', {{'replayData'}}, ...
@@ -204,10 +307,17 @@ end
 config = replayData.config;
 lineTable = replayData.lineTable;
 surfaceTable = replayData.surfaceTable;
+sliceTable = localGetFieldOrDefault(replayData, 'sliceTable', table());
+latLonSurfaceTable = localGetFieldOrDefault(replayData, 'latLonSurfaceTable', table());
 couplingTable = localGetFieldOrDefault(replayData, 'couplingTable', table());
+centerTable = localGetFieldOrDefault(replayData, 'centerTable', table());
 lineScanCell = replayData.lineScanCell;
 surfaceScanCell = replayData.surfaceScanCell;
-couplingScan = localGetFieldOrDefault(replayData, 'couplingScan', []);
+latLonSurfaceCell = localGetFieldOrDefault(replayData, 'latLonSurfaceCell', {});
+couplingScanCell = localGetFieldOrDefault(replayData, 'couplingScanCell', {});
+if isempty(couplingScanCell)
+  couplingScanCell = {localGetFieldOrDefault(replayData, 'couplingScan', [])};
+end
 flowSummary = replayData.flowSummary;
 contextSummary = localGetFieldOrDefault(replayData, 'contextSummary', struct());
 aliasStepHz = localGetFieldOrDefault(contextSummary, 'toothStepHz', NaN);
@@ -218,21 +328,40 @@ end
 fprintf('Running replayMfCombToothSurface ...\n');
 fprintf('  seed                             : %d\n', config.baseSeed);
 fprintf('  snr (dB)                         : %.2f\n', config.snrDb);
-fprintf('  mode                             : %s\n', char(string(config.modeTag)));
+modeTagText = strjoin(string(localGetFieldOrDefault(config, 'modeTagList', string(localGetFieldOrDefault(config, 'modeTag', "unknown")))), ', ');
+fprintf('  mode list                        : %s\n', char(modeTagText));
 fprintf('  alias step (Hz)                  : %.6f\n', aliasStepHz);
 fprintf('  scan half width (Hz)             : %.6f\n', config.scanHalfWidthHzResolved);
 fprintf('  selected subset                  : %s\n', char(string(flowSummary.selectedSubsetLabel)));
 fprintf('  selected final tag               : %s\n', char(string(flowSummary.selectedFinalTag)));
+if ~isempty(centerTable)
+  disp('========== center summary ==========');
+  disp(centerTable);
+end
+modeTable = localGetFieldOrDefault(replayData, 'modeTable', table());
+if ~isempty(modeTable)
+  disp('========== mode summary ==========');
+  disp(modeTable);
+end
 disp('========== fdRef comb line summary ==========');
 disp(lineTable);
 disp('========== DoA-fdRef surface summary ==========');
 disp(surfaceTable);
+if ~isempty(sliceTable)
+  disp('========== DoA-fdRef slice-scale summary ==========');
+  disp(sliceTable);
+end
+if ~isempty(latLonSurfaceTable)
+  disp('========== local lat/lon surface summary ==========');
+  disp(latLonSurfaceTable);
+end
 if ~isempty(couplingTable)
   disp('========== Truth-centered DoA-fdRef coupling summary ==========');
   disp(couplingTable);
 end
 
-localPlotReplay(lineScanCell, surfaceScanCell, couplingScan, aliasStepHz);
+localPlotReplay(lineScanCell, surfaceScanCell, couplingScanCell, aliasStepHz, ...
+  localGetFieldOrDefault(config, 'surfaceClipDeltaObj', []), latLonSurfaceCell);
 
 %% Local helpers
 
@@ -281,6 +410,27 @@ caseData.periodicFixture = repeatData.periodicFixture;
 caseData.truth = repeatData.truth;
 caseData.staticSeedCase = staticBundle.caseStaticMs;
 caseData.msFlow = msFlow;
+caseData.msKnownCase = localRunMsKnownFinalCase(repeatData.periodicFixture, staticBundle.caseStaticMs, context, flowOpt, optVerbose);
+end
+
+function caseKnown = localRunMsKnownFinalCase(periodicFixture, staticSeedCase, context, flowOpt, optVerbose)
+% Run one replay-local MS-MF-CP-K solve to define the CP-K final scan center.
+viewUse = periodicFixture.viewMs;
+truthUse = periodicFixture.truth;
+dynOpt = flowOpt.dynBaseOpt;
+dynOpt.steeringRefFrameIdx = periodicFixture.sceneSeq.refFrameIdx;
+dynOpt.enableFdAliasUnwrap = true;
+staticEst = localGetFieldOrDefault(staticSeedCase, 'estResult', struct());
+seedDoa = localResolveDoaParam(staticEst, truthUse.latlonTrueDeg(:));
+dynOpt.initDoaParam = seedDoa(:);
+dynOpt.initDoaHalfWidth = flowOpt.multiDoaHalfWidth(:);
+initParam = buildDynamicInitParamFromCase(staticSeedCase, true, 0);
+initCandidate = struct('startTag', "fromStaticCpK", 'initParam', initParam, ...
+  'initDoaParam', seedDoa(:), 'initDoaHalfWidth', flowOpt.multiDoaHalfWidth(:));
+debugTruth = localGetFieldOrDefault(periodicFixture, 'debugTruthMs', struct());
+caseKnown = runDynamicDoaDopplerCase("MS-MF-CP-K-CombSurfaceReplay", "multi", ...
+  viewUse, truthUse, context.pilotWave, context.carrierFreq, context.waveInfo.sampleRate, ...
+  periodicFixture.fdRange, periodicFixture.fdRateRange, optVerbose, dynOpt, true, debugTruth, initCandidate);
 end
 
 function model = localBuildProbeModel(periodicFixture, context, flowOpt, modeTag)
@@ -305,35 +455,74 @@ end
   periodicFixture.viewMs.doaGrid, periodicFixture.fdRange, fdRateRangeUse, modelOpt);
 end
 
-function centerRegistry = localBuildCenterRegistry(truth, staticSeedCase, finalCase)
-% Collect truth, static-seed, and final-estimate center points for probing.
+function centerRegistry = localBuildCenterRegistry(truth, staticSeedCase, finalCpUCase, finalCpKCase)
+% Collect truth, static-seed, CP-U final, and CP-K final center points.
 centerRegistry = struct();
-centerRegistry.truth = struct('latlon', reshape(truth.latlonTrueDeg(1:2), [], 1), ...
-  'fdRef', truth.fdRefFit, 'fdRate', truth.fdRateFit);
+centerRegistry.truth = localAttachCenterName(struct('latlon', reshape(truth.latlonTrueDeg(1:2), [], 1), ...
+  'fdRef', truth.fdRefFit, 'fdRate', truth.fdRateFit), "truth");
 staticEst = localGetFieldOrDefault(staticSeedCase, 'estResult', struct());
-centerRegistry.staticSeed = struct( ...
+centerRegistry.staticSeed = localAttachCenterName(struct( ...
   'latlon', localResolveDoaParam(staticEst, truth.latlonTrueDeg(:)), ...
   'fdRef', localResolveScalarField(staticEst, 'fdRefEst', truth.fdRefFit), ...
-  'fdRate', truth.fdRateFit);
-finalEst = localGetFieldOrDefault(finalCase, 'estResult', struct());
-centerRegistry.finalEstimate = struct( ...
-  'latlon', localResolveDoaParam(finalEst, centerRegistry.staticSeed.latlon(:)), ...
-  'fdRef', localResolveScalarField(finalEst, 'fdRefEst', centerRegistry.staticSeed.fdRef), ...
-  'fdRate', localResolveScalarField(finalEst, 'fdRateEst', truth.fdRateFit));
+  'fdRate', truth.fdRateFit), "staticSeed");
+finalCpUEst = localGetFieldOrDefault(finalCpUCase, 'estResult', struct());
+centerRegistry.finalCpU = localAttachCenterName(struct( ...
+  'latlon', localResolveDoaParam(finalCpUEst, centerRegistry.staticSeed.latlon(:)), ...
+  'fdRef', localResolveScalarField(finalCpUEst, 'fdRefEst', centerRegistry.staticSeed.fdRef), ...
+  'fdRate', localResolveScalarField(finalCpUEst, 'fdRateEst', truth.fdRateFit)), "finalCpU");
+finalCpKEst = localGetFieldOrDefault(finalCpKCase, 'estResult', struct());
+centerRegistry.finalCpK = localAttachCenterName(struct( ...
+  'latlon', localResolveDoaParam(finalCpKEst, centerRegistry.staticSeed.latlon(:)), ...
+  'fdRef', localResolveScalarField(finalCpKEst, 'fdRefEst', centerRegistry.staticSeed.fdRef), ...
+  'fdRate', truth.fdRateFit), "finalCpK");
+centerRegistry.finalEstimate = centerRegistry.finalCpU;
+centerRegistry.finalEstimate.resolvedCenterName = "finalEstimate";
 end
 
-function point = localResolveCenterPoint(centerRegistry, centerName)
+function centerTable = localBuildCenterTable(centerRegistry)
+% Build a compact center table for CP-U / CP-K surface interpretation.
+nameList = ["truth"; "staticSeed"; "finalCpU"; "finalCpK"];
+rowCell = cell(numel(nameList), 1);
+for iName = 1:numel(nameList)
+  nameCur = nameList(iName);
+  point = centerRegistry.(char(nameCur));
+  latlon = reshape(point.latlon, [], 1);
+  rowCell{iName} = table(nameCur, latlon(1), latlon(2), point.fdRef, point.fdRate, ...
+    'VariableNames', {'centerName', 'latDeg', 'lonDeg', 'fdRefHz', 'fdRateHzPerSec'});
+end
+centerTable = vertcat(rowCell{:});
+end
+
+function point = localResolveCenterPoint(centerRegistry, centerName, modeTag)
 % Resolve one named scan center from the prebuilt center registry.
-switch lower(char(centerName))
+centerKey = lower(char(centerName));
+modeKey = lower(char(modeTag));
+switch centerKey
   case 'truth'
     point = centerRegistry.truth;
   case 'staticseed'
     point = centerRegistry.staticSeed;
-  case 'finalestimate'
-    point = centerRegistry.finalEstimate;
+  case {'finalcpu', 'finalestimate'}
+    point = centerRegistry.finalCpU;
+    if strcmp(centerKey, 'finalestimate')
+      point.resolvedCenterName = "finalEstimate";
+    end
+  case 'finalcpk'
+    point = centerRegistry.finalCpK;
+  case 'finalbymode'
+    if ismember(modeKey, {'known', 'cp-k', 'k'})
+      point = centerRegistry.finalCpK;
+    else
+      point = centerRegistry.finalCpU;
+    end
   otherwise
     error('replayMfCombToothSurface:UnknownCenter', 'Unsupported centerName: %s', centerName);
 end
+end
+
+function point = localAttachCenterName(point, resolvedCenterName)
+% Attach a resolved center label used in tables and plot titles.
+point.resolvedCenterName = string(resolvedCenterName);
 end
 
 function lineScan = localRunFdRefLineScan(model, basePoint, numFdGrid, scanHalfWidthHz, aliasStepHz, progressTitle)
@@ -457,6 +646,191 @@ surfaceScan.minAliasIndex = round(surfaceScan.minFdOffsetHz / aliasStepHz);
 surfaceScan.centerDeltaObj = objMat(centerDoaIdx, centerFdIdx) - minObj;
 end
 
+function surfaceScan = localAttachSurfaceSliceMetrics(surfaceScan)
+% Attach scale diagnostics along the best and center fd/DoA slices.
+zMat = surfaceScan.deltaObjMat;
+[~, minLinearIdx] = min(zMat(:));
+[minDoaIdx, minFdIdx] = ind2sub(size(zMat), minLinearIdx);
+[~, centerDoaIdx] = min(abs(surfaceScan.doaOffsetGridDeg));
+[~, centerFdIdx] = min(abs(surfaceScan.fdOffsetGridHz));
+surfaceScan.minDoaIdx = minDoaIdx;
+surfaceScan.minFdIdx = minFdIdx;
+surfaceScan.centerDoaIdx = centerDoaIdx;
+surfaceScan.centerFdIdx = centerFdIdx;
+surfaceScan.bestFdDoaSlice = zMat(:, minFdIdx);
+surfaceScan.centerFdDoaSlice = zMat(:, centerFdIdx);
+surfaceScan.bestDoaFdSlice = zMat(minDoaIdx, :).';
+surfaceScan.centerDoaFdSlice = zMat(centerDoaIdx, :).';
+surfaceScan.bestFdDoaSpan = localFiniteSpan(surfaceScan.bestFdDoaSlice);
+surfaceScan.centerFdDoaSpan = localFiniteSpan(surfaceScan.centerFdDoaSlice);
+surfaceScan.bestDoaFdSpan = localFiniteSpan(surfaceScan.bestDoaFdSlice);
+surfaceScan.centerDoaFdSpan = localFiniteSpan(surfaceScan.centerDoaFdSlice);
+surfaceScan.bestSliceFdToDoaSpanRatio = localSafeRatio(surfaceScan.bestDoaFdSpan, surfaceScan.bestFdDoaSpan);
+surfaceScan.centerSliceFdToDoaSpanRatio = localSafeRatio(surfaceScan.centerDoaFdSpan, surfaceScan.centerFdDoaSpan);
+end
+
+function row = localBuildSurfaceSliceRow(surfaceScan)
+% Build a compact table row that exposes DoA-vs-fdRef scale dominance.
+row = table(string(localGetFieldOrDefault(surfaceScan, 'modeTag', "unknown")), ...
+  string(localGetFieldOrDefault(surfaceScan, 'centerName', "unknown")), ...
+  string(localGetFieldOrDefault(surfaceScan, 'resolvedCenterName', "unknown")), ...
+  surfaceScan.minDoaOffsetDeg, surfaceScan.minFdOffsetHz, ...
+  surfaceScan.bestFdDoaSpan, surfaceScan.centerFdDoaSpan, ...
+  surfaceScan.bestDoaFdSpan, surfaceScan.centerDoaFdSpan, ...
+  surfaceScan.bestSliceFdToDoaSpanRatio, surfaceScan.centerSliceFdToDoaSpanRatio, ...
+  'VariableNames', {'modeTag', 'centerName', 'resolvedCenterName', ...
+  'minDoaOffsetDeg', 'minFdOffsetHz', 'bestFdDoaSpan', 'centerFdDoaSpan', ...
+  'bestDoaFdSpan', 'centerDoaFdSpan', 'bestSliceFdToDoaSpanRatio', 'centerSliceFdToDoaSpanRatio'});
+end
+
+function latLonSurface = localRunLatLonSurfaceScan(model, basePoint, fdOffsetHz, ...
+  latLonSurfaceGridCount, latLonSurfaceHalfWidthDeg, aliasStepHz, progressTitle)
+% Scan a local latitude/longitude surface at one fixed fdRef tooth.
+baseLatlon = basePoint.latlon(:);
+baseFdRef = basePoint.fdRef;
+baseFdRate = basePoint.fdRate;
+latOffsetGrid = linspace(-latLonSurfaceHalfWidthDeg, latLonSurfaceHalfWidthDeg, latLonSurfaceGridCount).';
+lonOffsetGrid = linspace(-latLonSurfaceHalfWidthDeg, latLonSurfaceHalfWidthDeg, latLonSurfaceGridCount).';
+numLat = numel(latOffsetGrid);
+numLon = numel(lonOffsetGrid);
+numPoint = numLat * numLon;
+latOffsetEvalVec = repmat(latOffsetGrid, numLon, 1);
+lonOffsetEvalVec = repelem(lonOffsetGrid, numLat);
+latEvalVec = baseLatlon(1) + latOffsetEvalVec;
+lonEvalVec = baseLatlon(2) + lonOffsetEvalVec;
+fdRefUse = baseFdRef + fdOffsetHz;
+objVec = nan(numPoint, 1);
+useParfor = localUseParfor(numPoint);
+tracker = localCreateProgressTracker(progressTitle, numPoint, useParfor);
+if useParfor
+  progressQueue = tracker.queue;
+  parfor iPoint = 1:numPoint
+    doaParam = [latEvalVec(iPoint); lonEvalVec(iPoint)];
+    objVec(iPoint) = localEvalObjAtPoint(model, doaParam, fdRefUse, baseFdRate);
+    if ~isempty(progressQueue)
+      send(progressQueue, iPoint);
+    end
+  end
+else
+  for iPoint = 1:numPoint
+    doaParam = [latEvalVec(iPoint); lonEvalVec(iPoint)];
+    objVec(iPoint) = localEvalObjAtPoint(model, doaParam, fdRefUse, baseFdRate);
+    localAdvanceProgressTracker(tracker);
+  end
+end
+localCloseProgressTracker(tracker);
+objMat = reshape(objVec, numLat, numLon);
+[minObj, minLinearIdx] = min(objMat(:));
+[minLatIdx, minLonIdx] = ind2sub(size(objMat), minLinearIdx);
+[~, centerLatIdx] = min(abs(latOffsetGrid));
+[~, centerLonIdx] = min(abs(lonOffsetGrid));
+deltaObjMat = objMat - minObj;
+latLonSurface = struct();
+latLonSurface.basePoint = basePoint;
+latLonSurface.fixedFdOffsetHz = fdOffsetHz;
+latLonSurface.fixedFdAliasIndex = round(fdOffsetHz / aliasStepHz);
+latLonSurface.fixedFdRefHz = fdRefUse;
+latLonSurface.latOffsetGridDeg = latOffsetGrid;
+latLonSurface.lonOffsetGridDeg = lonOffsetGrid;
+latLonSurface.deltaObjMat = deltaObjMat;
+latLonSurface.minObj = minObj;
+latLonSurface.minLatOffsetDeg = latOffsetGrid(minLatIdx);
+latLonSurface.minLonOffsetDeg = lonOffsetGrid(minLonIdx);
+latLonSurface.minDoaRadialOffsetDeg = hypot(latLonSurface.minLatOffsetDeg, latLonSurface.minLonOffsetDeg);
+latLonSurface.centerDeltaObj = objMat(centerLatIdx, centerLonIdx) - minObj;
+latLonSurface.bestLonLatSlice = deltaObjMat(:, minLonIdx);
+latLonSurface.bestLatLonSlice = deltaObjMat(minLatIdx, :).';
+latLonSurface.centerLonLatSlice = deltaObjMat(:, centerLonIdx);
+latLonSurface.centerLatLonSlice = deltaObjMat(centerLatIdx, :).';
+latLonSurface.bestLonLatSpan = localFiniteSpan(latLonSurface.bestLonLatSlice);
+latLonSurface.bestLatLonSpan = localFiniteSpan(latLonSurface.bestLatLonSlice);
+latLonSurface.centerLonLatSpan = localFiniteSpan(latLonSurface.centerLonLatSlice);
+latLonSurface.centerLatLonSpan = localFiniteSpan(latLonSurface.centerLatLonSlice);
+end
+
+function row = localBuildLatLonSurfaceRow(latLonSurface)
+% Build a compact table row for the optional fixed-fdRef lat/lon surface.
+row = table(string(localGetFieldOrDefault(latLonSurface, 'modeTag', "unknown")), ...
+  string(localGetFieldOrDefault(latLonSurface, 'centerName', "unknown")), ...
+  string(localGetFieldOrDefault(latLonSurface, 'resolvedCenterName', "unknown")), ...
+  string(localGetFieldOrDefault(latLonSurface, 'fixedFdTag', "unknown")), ...
+  latLonSurface.fixedFdOffsetHz, latLonSurface.fixedFdAliasIndex, ...
+  latLonSurface.minLatOffsetDeg, latLonSurface.minLonOffsetDeg, latLonSurface.minDoaRadialOffsetDeg, ...
+  latLonSurface.centerDeltaObj, latLonSurface.bestLonLatSpan, latLonSurface.bestLatLonSpan, ...
+  latLonSurface.centerLonLatSpan, latLonSurface.centerLatLonSpan, ...
+  'VariableNames', {'modeTag', 'centerName', 'resolvedCenterName', 'fixedFdTag', 'fixedFdOffsetHz', ...
+  'fixedFdAliasIndex', 'minLatOffsetDeg', 'minLonOffsetDeg', 'minDoaRadialOffsetDeg', ...
+  'centerDeltaObj', 'bestLonLatSpan', 'bestLatLonSpan', 'centerLonLatSpan', 'centerLatLonSpan'});
+end
+
+function shouldRun = localShouldRunLatLonSurface(modeTag, requestedCenterName, resolvedCenterName, ...
+  latLonSurfaceModeList, latLonSurfaceCenterNameList)
+% Decide whether the optional lat/lon surface applies to this mode and center.
+shouldRun = localStringMatchesAny(modeTag, latLonSurfaceModeList) ...
+  && (localStringMatchesAny(requestedCenterName, latLonSurfaceCenterNameList) ...
+  || localStringMatchesAny(resolvedCenterName, latLonSurfaceCenterNameList));
+end
+
+function fdOffsetTable = localResolveLatLonSurfaceFdOffsetTable(fdOffsetTagList, surfaceScan)
+% Resolve fixed-fdRef tags for local latitude/longitude surface scans.
+fdOffsetTagList = reshape(string(fdOffsetTagList), [], 1);
+fdOffsetTagList = fdOffsetTagList(strlength(fdOffsetTagList) > 0);
+if isempty(fdOffsetTagList)
+  fdOffsetTagList = "surfaceMinFd";
+end
+numTag = numel(fdOffsetTagList);
+fixedFdTag = strings(numTag, 1);
+fixedFdOffsetHz = nan(numTag, 1);
+for iTag = 1:numTag
+  tagKey = lower(char(fdOffsetTagList(iTag)));
+  switch tagKey
+    case {'centerfd', 'center', 'fd0'}
+      fixedFdTag(iTag) = "centerFd";
+      fixedFdOffsetHz(iTag) = 0;
+    case {'surfaceminfd', 'bestfd', 'besttooth', 'minfd'}
+      fixedFdTag(iTag) = "surfaceMinFd";
+      fixedFdOffsetHz(iTag) = surfaceScan.minFdOffsetHz;
+    otherwise
+      error('replayMfCombToothSurface:InvalidLatLonFdTag', ...
+        'Unsupported latLonSurfaceFdOffsetTagList entry: %s', char(fdOffsetTagList(iTag)));
+  end
+end
+[~, uniqueIdx] = unique(fixedFdTag + "|" + string(fixedFdOffsetHz), 'stable');
+fdOffsetTable = table(fixedFdTag(uniqueIdx), fixedFdOffsetHz(uniqueIdx), ...
+  'VariableNames', {'fixedFdTag', 'fixedFdOffsetHz'});
+end
+
+function matches = localStringMatchesAny(value, listValue)
+% Case-insensitive string-list match; an empty list disables the match.
+listValue = reshape(string(listValue), [], 1);
+listValue = listValue(strlength(listValue) > 0);
+if isempty(listValue)
+  matches = false;
+  return;
+end
+matches = any(strcmpi(string(value), listValue));
+end
+
+function spanValue = localFiniteSpan(valueVec)
+% Return the finite max-min span of a vector.
+valueVec = valueVec(:);
+valueVec = valueVec(isfinite(valueVec));
+if isempty(valueVec)
+  spanValue = NaN;
+else
+  spanValue = max(valueVec) - min(valueVec);
+end
+end
+
+function ratioValue = localSafeRatio(numValue, denValue)
+% Return a protected ratio used only for scale diagnostics.
+if ~(isscalar(numValue) && isscalar(denValue) && isfinite(numValue) && isfinite(denValue)) || abs(denValue) < eps
+  ratioValue = NaN;
+else
+  ratioValue = numValue / denValue;
+end
+end
+
 function surfaceScan = localAttachCouplingMetrics(surfaceScan)
 % Fit local quadratic curvature and ridge slope metrics to one surface scan.
 [doaGridMat, fdGridMat] = ndgrid(surfaceScan.doaOffsetGridDeg(:), surfaceScan.fdOffsetGridHz(:));
@@ -529,14 +903,16 @@ probeEval = evalDoaDopplerMfProbePoint(model, pointCur, struct('probeTemplate', 
 objVal = localGetFieldOrDefault(probeEval, 'obj', NaN);
 end
 
-function localPlotReplay(lineScanCell, surfaceScanCell, couplingScan, aliasStepHz)
-% Plot line, folded-comb, heatmap, mesh, and local coupling diagnostic views.
+function localPlotReplay(lineScanCell, surfaceScanCell, couplingScanCell, aliasStepHz, surfaceClipDeltaObj, latLonSurfaceCell)
+% Plot comb, surface, clipped heatmap, slice, and optional lat/lon diagnostics.
 for iCase = 1:numel(lineScanCell)
   lineScan = lineScanCell{iCase};
   surfaceScan = surfaceScanCell{iCase};
-  centerName = char(lineScan.centerName);
+  centerName = char(localGetFieldOrDefault(lineScan, 'resolvedCenterName', string(lineScan.centerName)));
+  modeTag = char(localGetFieldOrDefault(lineScan, 'modeTag', "unknown"));
+  titleTag = sprintf('%s | %s', modeTag, centerName);
 
-  figure('Name', sprintf('comb and DoA-fdRef surface: %s', centerName));
+  figure('Name', sprintf('comb and DoA-fdRef surface: %s', titleTag));
 
   subplot(2, 2, 1);
   plot(lineScan.deltaFdRef, lineScan.deltaObjVec, 'LineWidth', 1.2);
@@ -546,7 +922,7 @@ for iCase = 1:numel(lineScanCell)
   grid on;
   xlabel('\Delta fdRef (Hz)');
   ylabel('\Delta objective');
-  title(sprintf('fdRef line | %s', centerName), 'Interpreter', 'none');
+  title(sprintf('fdRef line | %s', titleTag), 'Interpreter', 'none');
 
   subplot(2, 2, 2);
   scatter(lineScan.foldedOffset, lineScan.deltaObjVec, 16, 'filled');
@@ -575,15 +951,153 @@ for iCase = 1:numel(lineScanCell)
   ylabel('DoA-line offset (deg)');
   zlabel('\Delta objective');
   title('DoA-fdRef mesh', 'Interpreter', 'none');
+
+  localPlotSurfaceSliceDiagnostic(surfaceScan, aliasStepHz, surfaceClipDeltaObj, titleTag);
 end
-if nargin >= 3 && isstruct(couplingScan) && ~isempty(couplingScan)
-  localPlotCouplingDiagnostic(couplingScan, aliasStepHz);
+if nargin >= 6 && ~isempty(latLonSurfaceCell)
+  if isstruct(latLonSurfaceCell)
+    latLonSurfaceCell = {latLonSurfaceCell};
+  end
+  for iLatLon = 1:numel(latLonSurfaceCell)
+    latLonSurface = latLonSurfaceCell{iLatLon};
+    if isstruct(latLonSurface) && ~isempty(latLonSurface)
+      localPlotLatLonSurface(latLonSurface, surfaceClipDeltaObj);
+    end
+  end
+end
+if nargin >= 3 && ~isempty(couplingScanCell)
+  if isstruct(couplingScanCell)
+    couplingScanCell = {couplingScanCell};
+  end
+  for iCoupling = 1:numel(couplingScanCell)
+    couplingScan = couplingScanCell{iCoupling};
+    if isstruct(couplingScan) && ~isempty(couplingScan)
+      localPlotCouplingDiagnostic(couplingScan, aliasStepHz);
+    end
+  end
+end
+end
+
+function localPlotSurfaceSliceDiagnostic(surfaceScan, aliasStepHz, surfaceClipDeltaObj, titleTag)
+% Plot clipped heatmap and 1-D slices so weak DoA curvature remains visible.
+surfaceScan = localAttachSurfaceSliceMetrics(surfaceScan);
+clipMax = localResolveClipMax(surfaceScan.deltaObjMat, surfaceClipDeltaObj);
+figure('Name', sprintf('DoA-fdRef slice diagnostics: %s', titleTag));
+
+subplot(1, 3, 1);
+imagesc(surfaceScan.fdOffsetGridHz, surfaceScan.doaOffsetGridDeg, surfaceScan.deltaObjMat);
+set(gca, 'YDir', 'normal');
+colorbar;
+if isfinite(clipMax)
+  caxis([0, clipMax]);
+end
+hold on;
+xline(0, ':');
+yline(0, ':');
+localOverlayAliasLines(aliasStepHz, surfaceScan.fdOffsetGridHz);
+grid on;
+xlabel('\Delta fdRef (Hz)');
+ylabel('DoA-line offset (deg)');
+title(sprintf('clipped heatmap | <= %.3g', clipMax), 'Interpreter', 'none');
+
+subplot(1, 3, 2);
+plot(surfaceScan.doaOffsetGridDeg, surfaceScan.bestFdDoaSlice, 'LineWidth', 1.2);
+hold on;
+plot(surfaceScan.doaOffsetGridDeg, surfaceScan.centerFdDoaSlice, '--', 'LineWidth', 1.2);
+xline(surfaceScan.minDoaOffsetDeg, ':');
+yline(0, ':');
+grid on;
+xlabel('DoA-line offset (deg)');
+ylabel('\Delta objective');
+legend({'at best fd tooth', 'at center fd'}, 'Location', 'best');
+title(sprintf('DoA slice span %.3g / %.3g', surfaceScan.bestFdDoaSpan, surfaceScan.centerFdDoaSpan), ...
+  'Interpreter', 'none');
+
+subplot(1, 3, 3);
+plot(surfaceScan.fdOffsetGridHz, surfaceScan.bestDoaFdSlice, 'LineWidth', 1.2);
+hold on;
+plot(surfaceScan.fdOffsetGridHz, surfaceScan.centerDoaFdSlice, '--', 'LineWidth', 1.2);
+xline(surfaceScan.minFdOffsetHz, ':');
+yline(0, ':');
+localOverlayAliasLines(aliasStepHz, surfaceScan.fdOffsetGridHz);
+grid on;
+xlabel('\Delta fdRef (Hz)');
+ylabel('\Delta objective');
+legend({'at best DoA', 'at center DoA'}, 'Location', 'best');
+title(sprintf('fd slice span %.3g / %.3g', surfaceScan.bestDoaFdSpan, surfaceScan.centerDoaFdSpan), ...
+  'Interpreter', 'none');
+end
+
+function localPlotLatLonSurface(latLonSurface, surfaceClipDeltaObj)
+% Plot the optional fixed-fdRef latitude/longitude local surface.
+modeTag = char(localGetFieldOrDefault(latLonSurface, 'modeTag', "unknown"));
+centerName = char(localGetFieldOrDefault(latLonSurface, 'resolvedCenterName', "unknown"));
+fixedFdTag = char(localGetFieldOrDefault(latLonSurface, 'fixedFdTag', "unknown"));
+clipMax = localResolveClipMax(latLonSurface.deltaObjMat, surfaceClipDeltaObj);
+figure('Name', sprintf('local lat/lon surface: %s | %s | %s', modeTag, centerName, fixedFdTag));
+
+subplot(1, 3, 1);
+imagesc(latLonSurface.lonOffsetGridDeg, latLonSurface.latOffsetGridDeg, latLonSurface.deltaObjMat);
+set(gca, 'YDir', 'normal');
+colorbar;
+if isfinite(clipMax)
+  caxis([0, clipMax]);
+end
+hold on;
+xline(0, ':');
+yline(0, ':');
+plot(latLonSurface.minLonOffsetDeg, latLonSurface.minLatOffsetDeg, 'kx', 'LineWidth', 1.2);
+grid on;
+xlabel('longitude offset (deg)');
+ylabel('latitude offset (deg)');
+title(sprintf('%s | %s | %s | fdOffset %.3f Hz', modeTag, centerName, fixedFdTag, latLonSurface.fixedFdOffsetHz), ...
+  'Interpreter', 'none');
+
+subplot(1, 3, 2);
+plot(latLonSurface.latOffsetGridDeg, latLonSurface.bestLonLatSlice, 'LineWidth', 1.2);
+hold on;
+plot(latLonSurface.latOffsetGridDeg, latLonSurface.centerLonLatSlice, '--', 'LineWidth', 1.2);
+xline(latLonSurface.minLatOffsetDeg, ':');
+yline(0, ':');
+grid on;
+xlabel('latitude offset (deg)');
+ylabel('\Delta objective');
+legend({'at best longitude', 'at center longitude'}, 'Location', 'best');
+title(sprintf('lat slice span %.3g / %.3g', latLonSurface.bestLonLatSpan, latLonSurface.centerLonLatSpan), ...
+  'Interpreter', 'none');
+
+subplot(1, 3, 3);
+plot(latLonSurface.lonOffsetGridDeg, latLonSurface.bestLatLonSlice, 'LineWidth', 1.2);
+hold on;
+plot(latLonSurface.lonOffsetGridDeg, latLonSurface.centerLatLonSlice, '--', 'LineWidth', 1.2);
+xline(latLonSurface.minLonOffsetDeg, ':');
+yline(0, ':');
+grid on;
+xlabel('longitude offset (deg)');
+ylabel('\Delta objective');
+legend({'at best latitude', 'at center latitude'}, 'Location', 'best');
+title(sprintf('lon slice span %.3g / %.3g', latLonSurface.bestLatLonSpan, latLonSurface.centerLatLonSpan), ...
+  'Interpreter', 'none');
+end
+
+function clipMax = localResolveClipMax(deltaObjMat, surfaceClipDeltaObj)
+% Resolve a positive color-axis upper bound for clipped surface plots.
+clipMax = NaN;
+if nargin >= 2 && isscalar(surfaceClipDeltaObj) && isnumeric(surfaceClipDeltaObj) ...
+    && isfinite(surfaceClipDeltaObj) && surfaceClipDeltaObj > 0
+  clipMax = surfaceClipDeltaObj;
+  return;
+end
+finiteObj = deltaObjMat(isfinite(deltaObjMat));
+if ~isempty(finiteObj)
+  clipMax = max(finiteObj(:));
 end
 end
 
 function localPlotCouplingDiagnostic(couplingScan, aliasStepHz)
 % Plot the truth-centered local surface and the best-fd ridge used for coupling.
-figure('Name', 'truth-centered DoA-fdRef coupling');
+modeTag = char(localGetFieldOrDefault(couplingScan, 'modeTag', "unknown"));
+figure('Name', sprintf('truth-centered DoA-fdRef coupling: %s', modeTag));
 imagesc(couplingScan.fdOffsetGridHz, couplingScan.doaOffsetGridDeg, couplingScan.deltaObjMat);
 set(gca, 'YDir', 'normal');
 colorbar;
@@ -595,8 +1109,8 @@ localOverlayAliasLines(aliasStepHz, couplingScan.fdOffsetGridHz);
 grid on;
 xlabel('\Delta fdRef (Hz)');
 ylabel('DoA-line offset (deg)');
-title(sprintf('truth local coupling: rho=%.3g, ridge=%.3g Hz/deg', ...
-  couplingScan.rhoDoaFd, couplingScan.ridgeSlopeHzPerDeg), 'Interpreter', 'none');
+title(sprintf('truth local coupling | %s: rho=%.3g, ridge=%.3g Hz/deg', ...
+  modeTag, couplingScan.rhoDoaFd, couplingScan.ridgeSlopeHzPerDeg), 'Interpreter', 'none');
 end
 
 function contextSummary = localBuildContextSummary(context, flowOpt, aliasStepHz)

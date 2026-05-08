@@ -93,7 +93,7 @@ results/<scriptName>/<caseName>.md
 
 | replay | 结果文档 | representative snapshot | 当前结论 |
 |---|---|---|---|
-| `replayMfCombToothSurface.m` | `replayMfCombToothSurface.md` | `test/data/cache/replay/replayMfCombToothSurface_20260425-180232.mat` | `1/T_f` comb 是 objective 层真实结构。 |
+| `replayMfCombToothSurface.m` | `replayMfCombToothSurface.md` | `test/data/cache/replay/replayMfCombToothSurface_20260508-141941.mat` | CP-K 的 DoA 局部信息未退化，主要问题是 `fdRef` wrong-tooth；CP-U 另有 DoA-`fdRef`-`fdRate` coupling / bad basin。 |
 | `replayMfPeriodicVsSubsetToothSelect.m` | `replayMfPeriodicVsSubsetToothSelect.md` | `test/data/cache/replay/replayMfPeriodicVsSubsetToothSelect_20260425-182612.mat` | subset 负责选齿，periodic 主要负责同齿 refine；warning 只作为诊断元数据保留。 |
 | `replayMfRandomRescueEffectiveness.m` | `replayMfRandomRescueEffectiveness.md` | `test/data/cache/replay/replayMfRandomRescueEffectiveness_20260427-110427.mat` | rescue/random bank 明显提升 central tooth 命中率，但已有 easy-case damage，后续应转 scan/gate 验证而非 blanket 常驻。 |
 | `replayMfInToothFdRangeOracle.m` | `replayMfInToothFdRangeOracle.md` | `test/data/cache/replay/replayMfInToothFdRangeOracle_20260426-104249.mat` | half-tooth oracle 下频率链健康，但少数 same-tooth non-ref coherence tail 拉坏 RMSE。 |
