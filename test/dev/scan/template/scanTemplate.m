@@ -101,6 +101,7 @@ try
   scanData.aggregateTable = aggregateTable;
   scanData.checkpointSummaryTable = checkpointSummaryTable;
   scanData.checkpointCleanupReport = checkpointCleanupReport;
+  scanData.checkpointDir = checkpointDir;
   scanData.plotData = localBuildPlotData(aggregateTable);
   scanData.elapsedSec = toc(runTic);
   if ~scanConfig.checkpointEnable
@@ -117,20 +118,32 @@ try
 
   %% Summary output and plotting
 
+  if ~exist('scanData', 'var') || ~isstruct(scanData)
+    error('scanTemplate:MissingScanData', ...
+      'Scan data is missing. Load a snapshot containing scanData before running this section.');
+  end
+  scanData = localValidateScanDataForSummary(scanData);
+  scanNameForReport = string(localGetFieldOrDefault(scanData, 'scanName', "scanTemplate"));
+  scanConfigForReport = localGetFieldOrDefault(scanData, 'config', struct());
+  scanSnapshotFile = localGetFieldOrDefault(scanData, 'snapshotFile', "");
+  scanCheckpointDir = string(localGetFieldOrDefault(scanData, 'checkpointDir', ""));
+  scanElapsedSec = localGetFieldOrDefault(scanData, 'elapsedSec', NaN);
+
   printMfScanSection('Template aggregate summary', scanData.aggregateTable);
-  if height(scanData.checkpointSummaryTable) > 0
+  if isfield(scanData, 'checkpointSummaryTable') && istable(scanData.checkpointSummaryTable) && ...
+      height(scanData.checkpointSummaryTable) > 0
     printMfScanSection('Checkpoint summary', scanData.checkpointSummaryTable);
   end
   scanData.plotData = localPlotScan(scanData);
 
   metricLineList = localBuildTelegramMetricLines(scanData);
   notifyMfScanStatus(struct( ...
-    'scanName', scanName, ...
+    'scanName', scanNameForReport, ...
     'statusText', "DONE", ...
-    'config', scanConfig, ...
-    'snapshotFile', scanData.snapshotFile, ...
-    'checkpointDir', checkpointDir, ...
-    'elapsedSec', scanData.elapsedSec, ...
+    'config', scanConfigForReport, ...
+    'snapshotFile', scanSnapshotFile, ...
+    'checkpointDir', scanCheckpointDir, ...
+    'elapsedSec', scanElapsedSec, ...
     'metricLineList', metricLineList, ...
     'commentLineList', [ ...
       "Template completed with placeholder task output."; ...
@@ -149,6 +162,19 @@ catch ME
 end
 
 %% Local helpers
+
+
+function scanData = localValidateScanDataForSummary(scanData)
+%LOCALVALIDATESCANDATAFORSUMMARY Validate scanData contents for summary reruns.
+
+if ~isfield(scanData, 'aggregateTable') || ~istable(scanData.aggregateTable)
+  error('scanTemplate:MissingAggregateTable', ...
+    'scanData.aggregateTable is missing. Store summary and plot inputs inside scanData before saving.');
+end
+if ~isfield(scanData, 'plotData') || ~isstruct(scanData.plotData)
+  scanData.plotData = localBuildPlotData(scanData.aggregateTable);
+end
+end
 
 function taskOut = localRunCheckpointTask(task, sharedData)
 %LOCALRUNCHECKPOINTTASK Run one checkpointed scan task.

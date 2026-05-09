@@ -78,7 +78,18 @@ try
 
   %% Summary output and plotting
 
-  printMfReplaySection('Template summary', replayData.summaryTable);
+  if ~exist('replayData', 'var') || ~isstruct(replayData)
+    error('replayTemplate:MissingReplayData', ...
+      'Replay data is missing. Load a snapshot containing replayData before running this section.');
+  end
+  replayData = localValidateReplayDataForSummary(replayData);
+  replaySummaryTable = replayData.summaryTable;
+  replayNameForReport = string(localGetFieldOrDefault(replayData, 'replayName', "replayTemplate"));
+  replayConfigForReport = localGetFieldOrDefault(replayData, 'config', struct());
+  replaySnapshotFile = localGetFieldOrDefault(replayData, 'snapshotFile', '');
+  replayElapsedSec = localGetFieldOrDefault(replayData, 'elapsedSec', NaN);
+
+  printMfReplaySection('Template summary', replaySummaryTable);
 
   % Telegram report style:
   % - The common shell owns status, script, elapsed time, common config, and snapshot.
@@ -87,11 +98,11 @@ try
   % - Comment lines should carry the replay-level conclusion or recommendation.
   metricLineList = localBuildTelegramMetricLines(replayData);
   notifyMfReplayStatus(struct( ...
-    'replayName', replayName, ...
+    'replayName', replayNameForReport, ...
     'statusText', "DONE", ...
-    'config', config, ...
-    'snapshotFile', replayData.snapshotFile, ...
-    'elapsedSec', replayData.elapsedSec, ...
+    'config', replayConfigForReport, ...
+    'snapshotFile', replaySnapshotFile, ...
+    'elapsedSec', replayElapsedSec, ...
     'metricLineList', metricLineList, ...
     'commentLineList', [ ...
       "Template completed. Replace placeholder logic before use."; ...
@@ -109,6 +120,25 @@ catch ME
 end
 
 %% Local helpers
+
+
+function replayData = localValidateReplayDataForSummary(replayData)
+%LOCALVALIDATEREPLAYDATAFORSUMMARY Validate replayData contents for summary reruns.
+
+if ~isfield(replayData, 'summaryTable') || ~istable(replayData.summaryTable)
+  error('replayTemplate:MissingSummaryTable', ...
+    'replayData.summaryTable is missing. Store summary and plot inputs inside replayData before saving.');
+end
+end
+
+function value = localGetFieldOrDefault(dataStruct, fieldName, defaultValue)
+%LOCALGETFIELDORDEFAULT Read a nonempty struct field or return a default.
+
+value = defaultValue;
+if isstruct(dataStruct) && isfield(dataStruct, fieldName) && ~isempty(dataStruct.(fieldName))
+  value = dataStruct.(fieldName);
+end
+end
 
 function result = localRunSingleRepeat(repeatSeed, config)
 %LOCALRUNSINGLEREPEAT Placeholder for one replay repeat.
