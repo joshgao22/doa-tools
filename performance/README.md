@@ -14,7 +14,8 @@
 
 主要入口：
 
-- `crbPilotSfDoaDoppler.m`。
+- `crbPilotSfDoaDoppler.m`；
+- `crbPilotSfDoaOnlyEffective.m`。
 
 ### multi-frame dynamic 分析
 
@@ -51,6 +52,13 @@
 - 作用：SF static CRB。
 - 对应实验：static perf、SF regression。
 
+### `crbPilotSfDoaOnlyEffective.m`
+
+- 模型：single-frame DoA-only pilot-model deterministic CRB。
+- 作用：把已知 pilot、几何诱导 Doppler、path gain 与噪声方差折算为 `crbDetDoa` 的 per-sat effective source power。
+- 典型用途：DoA-only estimator 没有建模 Doppler，但接收 pilot 已经带 Doppler 相位时，用 pilot-model effective-gain CRB 对比 MLE；matched DoA-Doppler estimator 仍使用 `crbPilotSfDoaDoppler.m`。
+- 输出口径：`effectiveGainMode="unit"` 给 array-only unit-gain 对照，`"pilotModel"` 给当前 no-Doppler DoA-only atom 的 coherent-projection 口径。
+
 ### `crbPilotMfDoaDoppler.m`
 
 - 模型：multi-frame DoA-Doppler。
@@ -80,6 +88,7 @@
 - 模型：通用 DoA CRB。
 - 作用：通用阵列 baseline。
 - 对应实验：早期 / 通用实验。
+- 注意：`crbDetDoa` 不直接接收 path gain 或 Doppler pilot；这些信号模型细节应在上层 wrapper 中折算成 `pwrSource`，例如 `crbPilotSfDoaOnlyEffective.m`。
 
 ## crbHelper
 

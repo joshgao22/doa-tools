@@ -14,7 +14,8 @@
 - `fdRef / deltaFdRef / fdSat` 组合关系；
 - user-state 与 local/global DoA 映射；
 - CP/IP time-axis 语义；
-- CRB known/unknown 基本一致性。
+- CRB known/unknown 基本一致性；
+- DoA-only pilot-model CRB 的 effective-gain scaling。
 
 不放：
 
@@ -191,6 +192,12 @@
 
 - 唯一契约：known-rate 与 unknown-rate CRB/EFIM 的基本包含关系与量级一致。
 - 注意：full-FIM singular / pinv warning 是该 case 的 expected warning。
+
+### `regressionSfDoaOnlyPilotModelCrb.m`
+
+- 唯一契约：single-frame DoA-only pilot-model CRB 的 per-sat FIM 缩放必须等于 no-Doppler coherent-projection effective gain 的平方。
+- 重点检查：unit-gain 模式保持 gain=1；pilot-model 模式只降低或保持 unit-gain DoA-only CRB；joint FIM 的 per-sat 缩放不回退。
+- 失败含义：`crbPilotSfDoaOnlyEffective` 或其 `crbDetDoa` 输入映射被改坏。
 
 ## branch regression
 

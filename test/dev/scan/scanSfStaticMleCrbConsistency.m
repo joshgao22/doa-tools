@@ -16,8 +16,8 @@ checkpointResume = true;
 checkpointCleanupOnSuccess = true;
 optVerbose = false;
 baseSeed = 253;
-numRepeat = 2000;
-snrDbList = (-20:3:15).';
+numRepeat = 200;
+snrDbList = (-20:5:15).';
 trimEnable = true;
 trimNormCap = 5;
 trimMinKeepRate = 0.8;
@@ -226,7 +226,7 @@ try
     'metricLineList', localBuildTelegramMetricLines(scanData), ...
     'commentLineList', [ ...
       "Static scan completed with the existing SF estimator path."; ...
-      "Use full/resolved/CRB-local gaps as the dynamic comparison anchor."]));
+      "DoA-only rows use pilot-model effective-gain CRB; static rows use matched DoA-Doppler CRB."]));
 
 catch ME
   if exist('progressTracker', 'var')
@@ -490,8 +490,15 @@ function crbTable = localBuildCrbTable(scanRuntime, scanConfig)
 %LOCALBUILDCRBTABLE Evaluate the static pilot DoA-Doppler CRB over SNR.
 
 snrDbList = reshape(scanConfig.snrDbList, [], 1);
-rowTemplate = struct('snrDb', NaN, 'angleCrbSingleDeg', NaN, ...
-  'angleCrbJointDeg', NaN, 'fdRefCrbSingleHz', NaN, 'fdRefCrbJointHz', NaN);
+rowTemplate = struct('snrDb', NaN, ...
+  'angleCrbSingleDeg', NaN, 'angleCrbJointDeg', NaN, ...
+  'angleCrbDdSingleDeg', NaN, 'angleCrbDdJointDeg', NaN, ...
+  'angleCrbDoaUnitSingleDeg', NaN, 'angleCrbDoaUnitJointDeg', NaN, ...
+  'angleCrbDoaPilotSingleDeg', NaN, 'angleCrbDoaPilotJointDeg', NaN, ...
+  'doaPilotToUnitSingleRatio', NaN, 'doaPilotToUnitJointRatio', NaN, ...
+  'doaPilotFimTraceSingle', NaN, 'doaPilotFimTraceJoint', NaN, ...
+  'doaUnitFimTraceSingle', NaN, 'doaUnitFimTraceJoint', NaN, ...
+  'fdRefCrbSingleHz', NaN, 'fdRefCrbJointHz', NaN);
 rowList = repmat(rowTemplate, numel(snrDbList), 1);
 crbDdOpt = struct();
 crbDdOpt.doaType = 'latlon';
@@ -532,12 +539,47 @@ pwrNoise = scanRuntime.pwrSource / (10^(snrDb / 10));
   scanRuntime.pilotWave, scanRuntime.carrierFreq, scanRuntime.sampleRate, ...
   scanRuntime.truth.latlonTrueDeg, scanRuntime.truth.fdRefTrueHz, 1, pwrNoise, crbDdOpt);
 
+crbUnitOpt = crbDdOpt;
+crbUnitOpt.effectiveGainMode = 'unit';
+crbPilotOpt = crbDdOpt;
+crbPilotOpt.effectiveGainMode = 'pilotModel';
+[crbUnitSingle, auxUnitSingle] = crbPilotSfDoaOnlyEffective(scanRuntime.sceneRefOnly, ...
+  scanRuntime.pilotWave, scanRuntime.carrierFreq, scanRuntime.sampleRate, ...
+  scanRuntime.truth.latlonTrueDeg, scanRuntime.truth.fdRefTrueHz, 1, pwrNoise, crbUnitOpt);
+[crbUnitJoint, auxUnitJoint] = crbPilotSfDoaOnlyEffective(scanRuntime.scene, ...
+  scanRuntime.pilotWave, scanRuntime.carrierFreq, scanRuntime.sampleRate, ...
+  scanRuntime.truth.latlonTrueDeg, scanRuntime.truth.fdRefTrueHz, 1, pwrNoise, crbUnitOpt);
+[crbPilotSingle, auxPilotSingle] = crbPilotSfDoaOnlyEffective(scanRuntime.sceneRefOnly, ...
+  scanRuntime.pilotWave, scanRuntime.carrierFreq, scanRuntime.sampleRate, ...
+  scanRuntime.truth.latlonTrueDeg, scanRuntime.truth.fdRefTrueHz, 1, pwrNoise, crbPilotOpt);
+[crbPilotJoint, auxPilotJoint] = crbPilotSfDoaOnlyEffective(scanRuntime.scene, ...
+  scanRuntime.pilotWave, scanRuntime.carrierFreq, scanRuntime.sampleRate, ...
+  scanRuntime.truth.latlonTrueDeg, scanRuntime.truth.fdRefTrueHz, 1, pwrNoise, crbPilotOpt);
+
 row = struct();
 row.snrDb = snrDb;
-row.angleCrbSingleDeg = projectCrbToAngleMetric(crbDdSingle(1:2, 1:2), ...
+row.angleCrbDdSingleDeg = projectCrbToAngleMetric(crbDdSingle(1:2, 1:2), ...
   scanRuntime.truth.latlonTrueDeg, 'latlon');
-row.angleCrbJointDeg = projectCrbToAngleMetric(crbDdJoint(1:2, 1:2), ...
+row.angleCrbDdJointDeg = projectCrbToAngleMetric(crbDdJoint(1:2, 1:2), ...
   scanRuntime.truth.latlonTrueDeg, 'latlon');
+row.angleCrbDoaUnitSingleDeg = projectCrbToAngleMetric(crbUnitSingle, ...
+  scanRuntime.truth.latlonTrueDeg, 'latlon');
+row.angleCrbDoaUnitJointDeg = projectCrbToAngleMetric(crbUnitJoint, ...
+  scanRuntime.truth.latlonTrueDeg, 'latlon');
+row.angleCrbDoaPilotSingleDeg = projectCrbToAngleMetric(crbPilotSingle, ...
+  scanRuntime.truth.latlonTrueDeg, 'latlon');
+row.angleCrbDoaPilotJointDeg = projectCrbToAngleMetric(crbPilotJoint, ...
+  scanRuntime.truth.latlonTrueDeg, 'latlon');
+row.angleCrbSingleDeg = row.angleCrbDdSingleDeg;
+row.angleCrbJointDeg = row.angleCrbDdJointDeg;
+row.doaPilotToUnitSingleRatio = localSafeRatio(row.angleCrbDoaPilotSingleDeg, ...
+  row.angleCrbDoaUnitSingleDeg);
+row.doaPilotToUnitJointRatio = localSafeRatio(row.angleCrbDoaPilotJointDeg, ...
+  row.angleCrbDoaUnitJointDeg);
+row.doaUnitFimTraceSingle = trace(auxUnitSingle.fim);
+row.doaUnitFimTraceJoint = trace(auxUnitJoint.fim);
+row.doaPilotFimTraceSingle = trace(auxPilotSingle.fim);
+row.doaPilotFimTraceJoint = trace(auxPilotJoint.fim);
 row.fdRefCrbSingleHz = sqrt(crbDdSingle(3, 3));
 row.fdRefCrbJointHz = sqrt(crbDdJoint(3, 3));
 end
@@ -551,6 +593,9 @@ if isempty(repeatTable) || height(repeatTable) == 0
 end
 perfTable = repeatTable;
 perfTable.angleCrbStdDeg = nan(height(perfTable), 1);
+perfTable.angleCrbDdStdDeg = nan(height(perfTable), 1);
+perfTable.angleCrbDoaUnitStdDeg = nan(height(perfTable), 1);
+perfTable.angleCrbDoaPilotStdDeg = nan(height(perfTable), 1);
 perfTable.fdRefCrbStdHz = nan(height(perfTable), 1);
 for iRow = 1:height(perfTable)
   crbIdx = find(crbTable.snrDb == perfTable.snrDb(iRow), 1, 'first');
@@ -558,14 +603,27 @@ for iRow = 1:height(perfTable)
     continue;
   end
   if perfTable.satMode(iRow) == "multi"
-    perfTable.angleCrbStdDeg(iRow) = crbTable.angleCrbJointDeg(crbIdx);
+    perfTable.angleCrbDdStdDeg(iRow) = crbTable.angleCrbDdJointDeg(crbIdx);
+    perfTable.angleCrbDoaUnitStdDeg(iRow) = crbTable.angleCrbDoaUnitJointDeg(crbIdx);
+    perfTable.angleCrbDoaPilotStdDeg(iRow) = crbTable.angleCrbDoaPilotJointDeg(crbIdx);
     perfTable.fdRefCrbStdHz(iRow) = crbTable.fdRefCrbJointHz(crbIdx);
   else
-    perfTable.angleCrbStdDeg(iRow) = crbTable.angleCrbSingleDeg(crbIdx);
+    perfTable.angleCrbDdStdDeg(iRow) = crbTable.angleCrbDdSingleDeg(crbIdx);
+    perfTable.angleCrbDoaUnitStdDeg(iRow) = crbTable.angleCrbDoaUnitSingleDeg(crbIdx);
+    perfTable.angleCrbDoaPilotStdDeg(iRow) = crbTable.angleCrbDoaPilotSingleDeg(crbIdx);
     perfTable.fdRefCrbStdHz(iRow) = crbTable.fdRefCrbSingleHz(crbIdx);
+  end
+  if perfTable.paramMode(iRow) == "doa"
+    perfTable.angleCrbStdDeg(iRow) = perfTable.angleCrbDoaPilotStdDeg(iRow);
+    perfTable.fdRefCrbStdHz(iRow) = NaN;
+  else
+    perfTable.angleCrbStdDeg(iRow) = perfTable.angleCrbDdStdDeg(iRow);
   end
 end
 perfTable.angleNormErr = abs(perfTable.angleErrDeg) ./ perfTable.angleCrbStdDeg;
+perfTable.angleNormErrDd = abs(perfTable.angleErrDeg) ./ perfTable.angleCrbDdStdDeg;
+perfTable.angleNormErrDoaUnit = abs(perfTable.angleErrDeg) ./ perfTable.angleCrbDoaUnitStdDeg;
+perfTable.angleNormErrDoaPilot = abs(perfTable.angleErrDeg) ./ perfTable.angleCrbDoaPilotStdDeg;
 perfTable.fdRefNormErr = abs(perfTable.fdRefAbsErrHz) ./ perfTable.fdRefCrbStdHz;
 perfTable.crbLocalMask = perfTable.isResolved & isfinite(perfTable.angleNormErr);
 fdFiniteMask = isfinite(perfTable.fdRefNormErr);
@@ -624,15 +682,22 @@ fdNorm = perfTable.fdRefNormErr(mask);
 isResolved = perfTable.isResolved(mask);
 row.numRepeat = numRepeat;
 row.angleCrbStdDeg = median(perfTable.angleCrbStdDeg(mask), 'omitnan');
+row.angleCrbDdStdDeg = median(perfTable.angleCrbDdStdDeg(mask), 'omitnan');
+row.angleCrbDoaUnitStdDeg = median(perfTable.angleCrbDoaUnitStdDeg(mask), 'omitnan');
+row.angleCrbDoaPilotStdDeg = median(perfTable.angleCrbDoaPilotStdDeg(mask), 'omitnan');
 row.fdRefCrbStdHz = median(perfTable.fdRefCrbStdHz(mask), 'omitnan');
 row.fullFiniteRate = mean(isfinite(angleErr));
 row.resolvedRate = mean(isResolved);
 row.fullAngleRmseDeg = localRmse(angleErr(isfinite(angleErr)));
 row.fullAngleP95Deg = localPercentile(abs(angleErr(isfinite(angleErr))), 95);
 row.fullAngleRmseOverCrb = localSafeRatio(row.fullAngleRmseDeg, row.angleCrbStdDeg);
+row.fullAngleRmseOverDoaUnitCrb = localSafeRatio(row.fullAngleRmseDeg, row.angleCrbDoaUnitStdDeg);
+row.fullAngleRmseOverDoaPilotCrb = localSafeRatio(row.fullAngleRmseDeg, row.angleCrbDoaPilotStdDeg);
 row.resolvedAngleRmseDeg = localRmse(angleErr(isResolved & isfinite(angleErr)));
 row.resolvedAngleP95Deg = localPercentile(abs(angleErr(isResolved & isfinite(angleErr))), 95);
 row.resolvedAngleRmseOverCrb = localSafeRatio(row.resolvedAngleRmseDeg, row.angleCrbStdDeg);
+row.resolvedAngleRmseOverDoaUnitCrb = localSafeRatio(row.resolvedAngleRmseDeg, row.angleCrbDoaUnitStdDeg);
+row.resolvedAngleRmseOverDoaPilotCrb = localSafeRatio(row.resolvedAngleRmseDeg, row.angleCrbDoaPilotStdDeg);
 if any(isfinite(fdErr))
   row.fullFdRefRmseHz = localRmse(fdErr(isfinite(fdErr)));
   row.fullFdRefP95Hz = localPercentile(abs(fdErr(isfinite(fdErr))), 95);
@@ -653,6 +718,8 @@ row.outlierRate = 1 - row.crbLocalKeepRate;
 row.crbLocalAngleRmseDeg = localRmse(angleErr(crbLocalMask & isfinite(angleErr)));
 row.crbLocalAngleP95Deg = localPercentile(abs(angleErr(crbLocalMask & isfinite(angleErr))), 95);
 row.crbLocalAngleRmseOverCrb = localSafeRatio(row.crbLocalAngleRmseDeg, row.angleCrbStdDeg);
+row.crbLocalAngleRmseOverDoaUnitCrb = localSafeRatio(row.crbLocalAngleRmseDeg, row.angleCrbDoaUnitStdDeg);
+row.crbLocalAngleRmseOverDoaPilotCrb = localSafeRatio(row.crbLocalAngleRmseDeg, row.angleCrbDoaPilotStdDeg);
 if any(isfinite(fdErr))
   row.crbLocalFdRefRmseHz = localRmse(fdErr(crbLocalMask & isfinite(fdErr)));
   row.crbLocalFdRefP95Hz = localPercentile(abs(fdErr(crbLocalMask & isfinite(fdErr))), 95);
@@ -670,12 +737,17 @@ function row = localEmptyAggregateRow()
 
 row = struct('displayName', "", 'satMode', "", 'frameMode', "", ...
   'paramMode', "", 'dynamicMode', "", 'snrDb', NaN, 'numRepeat', NaN, ...
-  'angleCrbStdDeg', NaN, 'fdRefCrbStdHz', NaN, 'fullFiniteRate', NaN, ...
+  'angleCrbStdDeg', NaN, 'angleCrbDdStdDeg', NaN, ...
+  'angleCrbDoaUnitStdDeg', NaN, 'angleCrbDoaPilotStdDeg', NaN, ...
+  'fdRefCrbStdHz', NaN, 'fullFiniteRate', NaN, ...
   'resolvedRate', NaN, 'fullAngleRmseDeg', NaN, 'fullAngleP95Deg', NaN, ...
-  'fullAngleRmseOverCrb', NaN, 'resolvedAngleRmseDeg', NaN, ...
+  'fullAngleRmseOverCrb', NaN, 'fullAngleRmseOverDoaUnitCrb', NaN, ...
+  'fullAngleRmseOverDoaPilotCrb', NaN, 'resolvedAngleRmseDeg', NaN, ...
   'resolvedAngleP95Deg', NaN, 'resolvedAngleRmseOverCrb', NaN, ...
+  'resolvedAngleRmseOverDoaUnitCrb', NaN, 'resolvedAngleRmseOverDoaPilotCrb', NaN, ...
   'crbLocalKeepRate', NaN, 'crbLocalAngleRmseDeg', NaN, ...
   'crbLocalAngleP95Deg', NaN, 'crbLocalAngleRmseOverCrb', NaN, ...
+  'crbLocalAngleRmseOverDoaUnitCrb', NaN, 'crbLocalAngleRmseOverDoaPilotCrb', NaN, ...
   'fullFdRefRmseHz', NaN, 'fullFdRefP95Hz', NaN, ...
   'fullFdRefRmseOverCrb', NaN, 'resolvedFdRefRmseHz', NaN, ...
   'resolvedFdRefP95Hz', NaN, 'resolvedFdRefRmseOverCrb', NaN, ...
@@ -693,6 +765,8 @@ if isempty(aggregateTable) || height(aggregateTable) == 0
 end
 keepVar = {'displayName', 'snrDb', 'numRepeat', 'crbLocalKeepRate', ...
   'crbLocalAngleRmseDeg', 'angleCrbStdDeg', 'crbLocalAngleRmseOverCrb', ...
+  'angleCrbDoaUnitStdDeg', 'crbLocalAngleRmseOverDoaUnitCrb', ...
+  'angleCrbDoaPilotStdDeg', 'crbLocalAngleRmseOverDoaPilotCrb', ...
   'crbLocalFdRefRmseHz', 'fdRefCrbStdHz', 'crbLocalFdRefRmseOverCrb', ...
   'resolvedRate', 'outlierRate', 'crbLocalStatus'};
 summaryTable = aggregateTable(:, keepVar);
