@@ -133,15 +133,52 @@ lineList = strings(0, 1);
 if ~isstruct(config)
   return;
 end
+if isfield(config, 'runScale')
+  lineList(end + 1, 1) = "<b>Run scale</b>: <code>" + localHtmlEscape(localScalarToString(config.runScale)) + "</code>";
+end
 if isfield(config, 'baseSeed')
   lineList(end + 1, 1) = "<b>Base seed</b>: <code>" + localHtmlEscape(localScalarToString(config.baseSeed)) + "</code>";
 end
 if isfield(config, 'numRepeat')
   lineList(end + 1, 1) = "<b>Repeats</b>: <code>" + localHtmlEscape(localScalarToString(config.numRepeat)) + "</code>";
 end
+if isfield(config, 'seedList')
+  lineList(end + 1, 1) = "<b>Seed range</b>: <code>" + localHtmlEscape(localFormatNumericList(config.seedList, 'seedList')) + "</code>";
+end
 if isfield(config, 'snrDb')
   lineList(end + 1, 1) = "<b>SNR</b>: <code>" + localHtmlEscape(localScalarToString(config.snrDb)) + " dB</code>";
+elseif isfield(config, 'snrDbList')
+  lineList(end + 1, 1) = "<b>SNR list</b>: <code>" + localHtmlEscape(localFormatNumericList(config.snrDbList, 'snrDbList')) + " dB</code>";
 end
+end
+
+function textValue = localFormatNumericList(value, fieldName)
+% Format numeric vectors compactly for status messages.
+value = reshape(double(value), 1, []);
+if isempty(value)
+  textValue = '';
+  return;
+end
+if strcmp(fieldName, 'seedList') && localIsConsecutiveSeedList(value)
+  textValue = sprintf('%.0f:%.0f (%d seeds)', value(1), value(end), numel(value));
+  return;
+end
+maxFullCount = 8;
+if numel(value) <= maxFullCount
+  textValue = strjoin(compose('%.6g', value), ', ');
+  return;
+end
+textValue = sprintf('%s, ..., %s (%d values)', ...
+  strjoin(compose('%.6g', value(1:3)), ', '), ...
+  strjoin(compose('%.6g', value((end - 2):end)), ', '), numel(value));
+end
+
+function tf = localIsConsecutiveSeedList(value)
+% Return true when seeds are an integer unit-stride range.
+tf = numel(value) > 1 ...
+  && all(isfinite(value)) ...
+  && all(abs(value - round(value)) < sqrt(eps)) ...
+  && all(diff(round(value)) == 1);
 end
 
 function textValue = localScalarToString(value)

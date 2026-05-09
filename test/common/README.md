@@ -124,7 +124,7 @@
 - winner adoption；
 - objective 主核。
 
-`buildMfCandidateTraceTable.m`、`buildMfWideCoverageAggregateTable.m`、`buildMfBankFamilyAggregateTable.m`、`buildMfBankAdoptionShadow*.m`、`buildMfBankAdoptionRejectAggregateTable.m`、`buildMfBankAdoptedCaseTable.m` 与 `buildMfBankRescueOutcomeTable.m` 只重组已有 case / probe 表，允许 replay 与 scan 复用候选来源、objective delta、angle improvement、damage 统计、bank family 拆分、in-tooth tooth/comb 诊断字段、离线 shadow-adoption 评价、fixed-SNR rescue 统计比率、angle-or-fdRef bad-gated replay 诊断和 CRB-normalized soft-damage / healthy-adopt / bad-rescue 指标；它们不定义 MS rescue 策略，也不改变 estimator final winner。
+`buildMfCandidateTraceTable.m`、`buildMfWideCoverageAggregateTable.m`、`buildMfBankFamilyAggregateTable.m`、`buildMfBankAdoptionShadow*.m`、`buildMfBankAdoptionRejectAggregateTable.m`、`buildMfBankAdoptedCaseTable.m` 与 `buildMfBankRescueOutcomeTable.m` 只重组已有 case / probe 表，允许 replay 与 scan 复用候选来源、objective delta、angle improvement、damage 统计、bank family 拆分、in-tooth tooth/comb 诊断字段、离线 shadow-adoption 评价、fixed-SNR rescue 统计比率、angle-or-fdRef bad-gated replay 诊断、runtime-health-gated replay 诊断和 CRB-normalized soft-damage / healthy-adopt / bad-rescue 指标；它们不定义 MS rescue 策略，也不改变 estimator final winner。
 
 ### `summary/`
 

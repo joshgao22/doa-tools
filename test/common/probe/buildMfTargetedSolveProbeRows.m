@@ -3,14 +3,17 @@ function [solveRows, doaBasinEntryRows] = buildMfTargetedSolveProbeRows(method, 
 %BUILDMFTARGETEDSOLVEPROBEROWS Rerun controlled MF solver probes.
 % This helper keeps the replay's fixed targeted route: every method records a
 % baseline row, expensive reruns are gated to MS failures, and the replay-only
-% MS CP-U bank is delegated to buildMsCpuBankProbeRows. It does not alter the
-% estimator result or final winner.
+% MS CP-U bank is delegated to buildMsCpuBankProbeRows. The ms-bank-only route
+% skips deep solve reruns and keeps only baseline plus MS bank rows. It does
+% not alter the estimator result or final winner.
 
 solveRows = repmat(emptyMfSolveProbeRow(), 0, 1);
 doaBasinEntryRows = repmat(emptyMfDoaBasinEntryRow(), 0, 1);
 solveRows = [solveRows; buildMfSolveProbeRowFromCase(method, baselineCase, truth, task, ...
   "baseline", config.staticLocalDoaHalfWidthDeg, NaN, "baseline")];
-if ~localShouldRunDeepSolveProbe(method, baselineCase, truth, objectiveProbeRows, config)
+runDeepSolveProbe = localShouldRunDeepSolveProbe(method, baselineCase, truth, objectiveProbeRows, config);
+runMsBankProbe = localShouldRunMsBankProbe(method, baselineCase, objectiveProbeRows, config);
+if ~(runDeepSolveProbe || runMsBankProbe)
   return;
 end
 
@@ -44,35 +47,37 @@ if string(method.satMode) == "multi" && ~isempty(fieldnames(ssMfSeedCase))
   end
 end
 
-for iProbe = 1:numel(probeList)
-  initParam = makeMfProbeOptVar(method, probeList(iProbe).centerDoa, truthFdRefHz, truthFdRateHzPerSec);
-  initCandidate = struct('initParam', initParam, 'initDoaParam', probeList(iProbe).centerDoa, ...
-    'initDoaHalfWidth', probeList(iProbe).halfWidth, 'startTag', probeList(iProbe).tag);
-  try
-    probeCase = runDynamicDoaDopplerCase(method.displayName, method.satMode, ...
-      viewUse, truth, context.pilotWave, context.carrierFreq, context.waveInfo.sampleRate, ...
-      fdRangeUse, fdRateRangeUse, optVerbose, dynOpt, method.isKnownRate, ...
-      debugTruthUse, initCandidate);
-    solveRows = [solveRows; buildMfSolveProbeRowFromCase(method, probeCase, truth, task, ...
-      probeList(iProbe).tag, probeList(iProbe).halfWidth, solveRows(1).finalObj, "probe")]; %#ok<AGROW>
-    doaBasinEntryRows = [doaBasinEntryRows; buildMfDoaBasinEntryRowsFromCase( ...
-      method, probeCase, truth, task, probeList(iProbe).tag, "probe", solveRows(1).finalObj)]; %#ok<AGROW>
-  catch ME
-    row = emptyMfSolveProbeRow();
-    row.displayName = method.displayName;
-    row.snrDb = task.snrDb;
-    row.taskSeed = task.taskSeed;
-    row.probeTag = probeList(iProbe).tag;
-    row.probeGroup = "probe";
-    row.doaHalfWidthLatDeg = probeList(iProbe).halfWidth(1);
-    row.doaHalfWidthLonDeg = probeList(iProbe).halfWidth(2);
-    row.evalOk = false;
-    row.message = string(ME.message);
-    solveRows = [solveRows; row]; %#ok<AGROW>
+if runDeepSolveProbe
+  for iProbe = 1:numel(probeList)
+    initParam = makeMfProbeOptVar(method, probeList(iProbe).centerDoa, truthFdRefHz, truthFdRateHzPerSec);
+    initCandidate = struct('initParam', initParam, 'initDoaParam', probeList(iProbe).centerDoa, ...
+      'initDoaHalfWidth', probeList(iProbe).halfWidth, 'startTag', probeList(iProbe).tag);
+    try
+      probeCase = runDynamicDoaDopplerCase(method.displayName, method.satMode, ...
+        viewUse, truth, context.pilotWave, context.carrierFreq, context.waveInfo.sampleRate, ...
+        fdRangeUse, fdRateRangeUse, optVerbose, dynOpt, method.isKnownRate, ...
+        debugTruthUse, initCandidate);
+      solveRows = [solveRows; buildMfSolveProbeRowFromCase(method, probeCase, truth, task, ...
+        probeList(iProbe).tag, probeList(iProbe).halfWidth, solveRows(1).finalObj, "probe")]; %#ok<AGROW>
+      doaBasinEntryRows = [doaBasinEntryRows; buildMfDoaBasinEntryRowsFromCase( ...
+        method, probeCase, truth, task, probeList(iProbe).tag, "probe", solveRows(1).finalObj)]; %#ok<AGROW>
+    catch ME
+      row = emptyMfSolveProbeRow();
+      row.displayName = method.displayName;
+      row.snrDb = task.snrDb;
+      row.taskSeed = task.taskSeed;
+      row.probeTag = probeList(iProbe).tag;
+      row.probeGroup = "probe";
+      row.doaHalfWidthLatDeg = probeList(iProbe).halfWidth(1);
+      row.doaHalfWidthLonDeg = probeList(iProbe).halfWidth(2);
+      row.evalOk = false;
+      row.message = string(ME.message);
+      solveRows = [solveRows; row]; %#ok<AGROW>
+    end
   end
 end
 
-if localShouldRunMsBankProbe(method, baselineCase, objectiveProbeRows, config)
+if runMsBankProbe
   [bankRows, bankBasinRows] = buildMsCpuBankProbeRows(method, staticSeedCase, ssMfSeedCase, truth, task, ...
     viewUse, context, fdRangeUse, fdRateRangeUse, dynOpt, debugTruthUse, optVerbose, config, solveRows(1).finalObj);
   solveRows = [solveRows; bankRows(:)]; %#ok<AGROW>
@@ -85,6 +90,10 @@ function shouldRun = localShouldRunDeepSolveProbe(method, baselineCase, truth, o
 %LOCALSHOULDRUNDEEPSOLVEPROBE Gate expensive controlled solver reruns.
 
 probeRoute = string(localGetFieldOrDefault(config, 'solveProbeRoute', "ms-targeted"));
+if probeRoute == "disabled" || probeRoute == "ms-bank-only"
+  shouldRun = false;
+  return;
+end
 if string(method.satMode) ~= "multi"
   shouldRun = probeRoute == "ss-parity";
   return;
@@ -126,6 +135,14 @@ if string(localGetFieldOrDefault(config, 'msBankRoute', "cpu-release-only")) == 
   return;
 end
 if string(method.satMode) ~= "multi" || method.isKnownRate
+  return;
+end
+probeRoute = string(localGetFieldOrDefault(config, 'solveProbeRoute', "ms-targeted"));
+if probeRoute == "disabled"
+  return;
+end
+if probeRoute == "ms-bank-only"
+  shouldRun = true;
   return;
 end
 truthPointBetter = false;

@@ -104,6 +104,7 @@ results/<scriptName>/<caseName>.md
 | `replayMfInToothOrdinaryAngleMissDiagnose.m` | `replayMfInToothOrdinaryAngleMissDiagnose.md` | `test/data/cache/replay/replayMfInToothOrdinaryAngleMissDiagnose_20260505-171659.mat` | ordinary miss 不是 final-small-polish 问题，主要由 wide-basin-entry 救回且接近 truth-DoA oracle；后续应找 truth-free ordinary-wide gate，不 blanket 打开 wide。 |
 | `replayMfInToothOrdinaryWideGateDiagnose.m` | `replayMfInToothOrdinaryWideGateDiagnose.md` | `test/data/cache/replay/replayMfInToothOrdinaryWideGateDiagnose_20260505-233931.mat` | 500-repeat 扩大验证将 ordinary-wide 从 preferred candidate 降级为 hold / partial diagnostic；`objGain >= 10` 且 `0.001 <= wide DoA step <= 0.004 deg` 低误伤但只救约 59% ordinary miss，不推进默认 flow。 |
 | `replayMfFlowLikeGatedBasinEntryEffectiveness.m` | `replayMfFlowLikeGatedBasinEntryEffectiveness.md` | `test/data/cache/replay/replayMfFlowLikeGatedBasinEntryEffectiveness_20260505-160714.mat` | 100-repeat flow-like 结果显示 basin-entry family 有救力，但当前 gate/adoption 有 easy damage 且 P95/max 变差；作为 negative / diagnostic，不推进默认 flow。 |
+| `replaySfMsDoaCrbDiagnose.m` | `replaySfMsDoaCrbDiagnose.md` | `test/data/cache/replay/replaySfMsDoaCrbDiagnose_20260509-155057.mat` | `MS-SF-DoA` 的 unit-CRB gap 已定位为 second-sat signal-scale CRB 口径差；amp-aware CRB 后 Other / MS DoA-only 均回到 CRB-level 附近，下一步 formalize deterministic CRB 的 per-sat effective-SNR scaling。 |
 
 ## 维护规则
 
