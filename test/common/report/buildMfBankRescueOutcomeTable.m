@@ -79,6 +79,7 @@ opt = struct('MethodList', string.empty(0, 1), 'DiagnosticSuffix', "BankRescue",
   'BadGateFdRefNormMin', Inf, 'SoftDamageAngleNormMargin', 0.1, ...
   'LargeImproveAngleNormMargin', 0.5, 'HealthGateFirstOrderOptMin', Inf, ...
   'HealthGateIterationMin', Inf, 'HealthGateNonRefCoherenceMax', -Inf, ...
+  'HealthGateRequireFirstOrderAndIteration', false, ...
   'HealthGateBoundaryEnable', false, 'HealthGateNoSolveEnable', false);
 if mod(numel(varargin), 2) ~= 0
   error('buildMfBankRescueOutcomeTable:InvalidNameValue', 'Name-value arguments must be paired.');
@@ -107,6 +108,8 @@ for iArg = 1:2:numel(varargin)
       opt.HealthGateIterationMin = double(value);
     case "healthgatenonrefcoherencemax"
       opt.HealthGateNonRefCoherenceMax = double(value);
+    case "healthgaterequirefirstorderanditeration"
+      opt.HealthGateRequireFirstOrderAndIteration = logical(value);
     case "healthgateboundaryenable"
       opt.HealthGateBoundaryEnable = logical(value);
     case "healthgatenosolveenable"
@@ -249,8 +252,14 @@ noSolveHealthMask = false(size(baseAngle));
 if logical(opt.HealthGateNoSolveEnable)
   noSolveHealthMask = ~localLogicalColumn(baseRows, 'notNoSolve', true(size(baseAngle)));
 end
-healthGateMask = firstOrderHealthMask | iterationHealthMask | coherenceHealthMask | ...
-  boundaryHealthMask | noSolveHealthMask;
+firstOrderAndIterationHealthMask = firstOrderHealthMask & iterationHealthMask;
+if logical(opt.HealthGateRequireFirstOrderAndIteration)
+  healthGateMask = firstOrderAndIterationHealthMask | coherenceHealthMask | ...
+    boundaryHealthMask | noSolveHealthMask;
+else
+  healthGateMask = firstOrderHealthMask | iterationHealthMask | coherenceHealthMask | ...
+    boundaryHealthMask | noSolveHealthMask;
+end
 healthyMask = isfinite(baseAngle) & ~badGateMask;
 adoptedDelta = rescueAngle - baseAngle;
 softDamageMask = adoptFlag & isfinite(adoptedDelta) & adoptedDelta > double(opt.SoftDamageAngleNormMargin);
@@ -271,6 +280,8 @@ row.firstOrderHealthGateCaseCount = nnz(firstOrderHealthMask);
 row.firstOrderHealthGateCaseRate = localSafeRatio(row.firstOrderHealthGateCaseCount, numCase);
 row.iterationHealthGateCaseCount = nnz(iterationHealthMask);
 row.iterationHealthGateCaseRate = localSafeRatio(row.iterationHealthGateCaseCount, numCase);
+row.firstOrderAndIterationHealthGateCaseCount = nnz(firstOrderAndIterationHealthMask);
+row.firstOrderAndIterationHealthGateCaseRate = localSafeRatio(row.firstOrderAndIterationHealthGateCaseCount, numCase);
 row.coherenceHealthGateCaseCount = nnz(coherenceHealthMask);
 row.coherenceHealthGateCaseRate = localSafeRatio(row.coherenceHealthGateCaseCount, numCase);
 row.boundaryHealthGateCaseCount = nnz(boundaryHealthMask);
@@ -372,6 +383,7 @@ row = struct('displayName', "", 'rescueDisplayName', "", 'snrDb', NaN, 'numCase'
   'healthGateCaseCount', NaN, 'healthGateCaseRate', NaN, ...
   'firstOrderHealthGateCaseCount', NaN, 'firstOrderHealthGateCaseRate', NaN, ...
   'iterationHealthGateCaseCount', NaN, 'iterationHealthGateCaseRate', NaN, ...
+  'firstOrderAndIterationHealthGateCaseCount', NaN, 'firstOrderAndIterationHealthGateCaseRate', NaN, ...
   'coherenceHealthGateCaseCount', NaN, 'coherenceHealthGateCaseRate', NaN, ...
   'boundaryHealthGateCaseCount', NaN, 'boundaryHealthGateCaseRate', NaN, ...
   'noSolveHealthGateCaseCount', NaN, 'noSolveHealthGateCaseRate', NaN, ...

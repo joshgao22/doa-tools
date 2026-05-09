@@ -107,6 +107,7 @@ opt = struct('MethodList', "MS-MF-CP-U", 'DiagnosticSuffix', "CenterRescue", ...
   'BoundaryTolFraction', 0.02, 'BaselineBadAngleNormMin', -Inf, ...
   'BaselineBadFdRefNormMin', Inf, 'BaselineFirstOrderOptMin', Inf, ...
   'BaselineIterationMin', Inf, 'BaselineNonRefCoherenceMax', -Inf, ...
+  'BaselineRequireFirstOrderAndIteration', false, ...
   'BaselineBoundaryGateEnable', false, 'BaselineNoSolveGateEnable', false);
 if mod(numel(varargin), 2) ~= 0
   error('buildMfBankAdoptedCaseTable:InvalidNameValue', 'Name-value arguments must be paired.');
@@ -131,6 +132,8 @@ for iArg = 1:2:numel(varargin)
       opt.BaselineIterationMin = double(value);
     case "baselinenonrefcoherencemax"
       opt.BaselineNonRefCoherenceMax = double(value);
+    case "baselinerequirefirstorderanditeration"
+      opt.BaselineRequireFirstOrderAndIteration = logical(value);
     case "baselineboundarygateenable"
       opt.BaselineBoundaryGateEnable = logical(value);
     case "baselinenosolvegateenable"
@@ -158,12 +161,20 @@ if fdRefGateActive && isfinite(detail.baselineFdRefErrOverCrb) && abs(detail.bas
   reasonList(end + 1, 1) = "fdRef"; %#ok<AGROW>
 end
 firstOrderOptMin = double(opt.BaselineFirstOrderOptMin);
-if isfinite(firstOrderOptMin) && isfinite(detail.baselineFirstOrderOpt) && detail.baselineFirstOrderOpt > firstOrderOptMin
-  reasonList(end + 1, 1) = "firstOrderOpt"; %#ok<AGROW>
-end
+firstOrderPass = isfinite(firstOrderOptMin) && isfinite(detail.baselineFirstOrderOpt) && detail.baselineFirstOrderOpt > firstOrderOptMin;
 iterationMin = double(opt.BaselineIterationMin);
-if isfinite(iterationMin) && isfinite(detail.baselineIterations) && detail.baselineIterations >= iterationMin
-  reasonList(end + 1, 1) = "iterations"; %#ok<AGROW>
+iterationPass = isfinite(iterationMin) && isfinite(detail.baselineIterations) && detail.baselineIterations >= iterationMin;
+if logical(opt.BaselineRequireFirstOrderAndIteration)
+  if firstOrderPass && iterationPass
+    reasonList(end + 1, 1) = "firstOrderAndIteration"; %#ok<AGROW>
+  end
+else
+  if firstOrderPass
+    reasonList(end + 1, 1) = "firstOrderOpt"; %#ok<AGROW>
+  end
+  if iterationPass
+    reasonList(end + 1, 1) = "iterations"; %#ok<AGROW>
+  end
 end
 coherenceMax = double(opt.BaselineNonRefCoherenceMax);
 if isfinite(coherenceMax) && isfinite(detail.baselineNonRefCoherenceFloor) && detail.baselineNonRefCoherenceFloor < coherenceMax

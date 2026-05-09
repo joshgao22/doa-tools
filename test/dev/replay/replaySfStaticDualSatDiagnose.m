@@ -106,6 +106,7 @@ try
   representativeTable = localSelectRepresentativeRepeats(repeatCompareTable);
   representativeDetail = localBuildRepresentativeDetail(representativeTable, config);
   staticCrbSummaryTable = localBuildStaticCrbSummary(config);
+  doaOnlyCrbScaleTable = localBuildDoaOnlyCrbScaleSanity(caseSummaryTable, config);
   firstFixture = buildSfStaticSingleSnrRepeatFixture(1, config.snrDb);
   selectedSatelliteTable = localBuildSelectedSatelliteTable(firstFixture.truth);
   truthTable = localBuildTruthTable(firstFixture.truth);
@@ -134,6 +135,7 @@ try
   replayData.representativeTable = representativeTable;
   replayData.representativeDetail = representativeDetail;
   replayData.staticCrbSummaryTable = staticCrbSummaryTable;
+  replayData.doaOnlyCrbScaleTable = doaOnlyCrbScaleTable;
   replayData.referenceInvariantTable = referenceInvariantTable;
   if config.checkpointEnable
     replayData.checkpointSummary = buildMfReplayCheckpointSummary(runState);
@@ -168,6 +170,7 @@ try
   printMfReplaySection('Weight preference summary', replayData.weightPreferenceTable);
   printMfReplaySection('Worst MS angle-loss repeats', replayData.worstMsAngleLossTable);
   printMfReplaySection('Static CRB summary', replayData.staticCrbSummaryTable);
+  printMfReplaySection('DoA-only CRB-scale sanity', replayData.doaOnlyCrbScaleTable);
   printMfReplaySection('Reference-satellite invariant check', replayData.referenceInvariantTable);
   printMfReplaySection('Representative repeat index', replayData.representativeTable);
 
@@ -213,6 +216,7 @@ try
     'metricLineList', localBuildTelegramMetricLines(replayData), ...
     'commentLineList', [ ...
       "Static replay completed through the shared SF static fixture path."; ...
+      "DoA-only rows are compact CRB-scale sanity checks; SF-Static remains the matched constant-Doppler anchor."; ...
       "Use scanSfStaticMleCrbConsistency for paper-facing MC curves and this replay for representative weight/per-sat diagnostics."]));
 
 catch ME
@@ -696,6 +700,66 @@ crbTable = table(repmat(config.snrDb, 2, 1), caseName, satMode, angleCrbStdDeg, 
   'VariableNames', {'snrDb', 'displayName', 'satMode', 'angleCrbStdDeg', 'fdRefCrbStdHz', 'fdRateMode'});
 end
 
+function doaOnlyTable = localBuildDoaOnlyCrbScaleSanity(caseSummaryTable, config)
+%LOCALBUILDDOAONLYCRBSCALESANITY Build compact DoA-only CRB-scale sanity rows.
+% The rows keep the completed MS-SF-DoA signal-scale audit visible inside
+% the active static-anchor replay without reintroducing the retired heavy
+% replay probes. They are evaluation-only; matched SF-Static rows still use
+% crbPilotSfDoaDoppler through localBuildStaticCrbSummary.
+
+fixture = buildSfStaticSingleSnrRepeatFixture(1, config.snrDb);
+pwrNoise = fixture.pwrNoise;
+crbOpt = struct('doaType', 'latlon');
+unitOpt = crbOpt;
+unitOpt.effectiveGainMode = 'unit';
+pilotOpt = crbOpt;
+pilotOpt.effectiveGainMode = 'pilotModel';
+
+[crbUnitSingle, auxUnitSingle] = crbPilotSfDoaOnlyEffective( ...
+  fixture.sceneRefOnly, fixture.pilotWave, fixture.carrierFreq, fixture.sampleRate, ...
+  fixture.truth.latlonTrueDeg, fixture.truth.fdRefTrueHz, 1, pwrNoise, unitOpt);
+[crbUnitJoint, auxUnitJoint] = crbPilotSfDoaOnlyEffective( ...
+  fixture.scene, fixture.pilotWave, fixture.carrierFreq, fixture.sampleRate, ...
+  fixture.truth.latlonTrueDeg, fixture.truth.fdRefTrueHz, 1, pwrNoise, unitOpt);
+[crbPilotSingle, auxPilotSingle] = crbPilotSfDoaOnlyEffective( ...
+  fixture.sceneRefOnly, fixture.pilotWave, fixture.carrierFreq, fixture.sampleRate, ...
+  fixture.truth.latlonTrueDeg, fixture.truth.fdRefTrueHz, 1, pwrNoise, pilotOpt);
+[crbPilotJoint, auxPilotJoint] = crbPilotSfDoaOnlyEffective( ...
+  fixture.scene, fixture.pilotWave, fixture.carrierFreq, fixture.sampleRate, ...
+  fixture.truth.latlonTrueDeg, fixture.truth.fdRefTrueHz, 1, pwrNoise, pilotOpt);
+
+caseName = ["SS-SF-DoA"; "MS-SF-DoA"];
+satMode = ["single"; "multi"];
+angleRmseDeg = [ ...
+  localTableValue(localSelectCaseRow(caseSummaryTable, caseName(1)), 'angleRmseDeg', NaN); ...
+  localTableValue(localSelectCaseRow(caseSummaryTable, caseName(2)), 'angleRmseDeg', NaN)];
+angleCrbPilotStdDeg = [ ...
+  projectCrbToAngleMetric(crbPilotSingle, fixture.truth.latlonTrueDeg, 'latlon'); ...
+  projectCrbToAngleMetric(crbPilotJoint, fixture.truth.latlonTrueDeg, 'latlon')];
+angleCrbUnitStdDeg = [ ...
+  projectCrbToAngleMetric(crbUnitSingle, fixture.truth.latlonTrueDeg, 'latlon'); ...
+  projectCrbToAngleMetric(crbUnitJoint, fixture.truth.latlonTrueDeg, 'latlon')];
+rmseOverPilotCrb = arrayfun(@localSafeRatio, angleRmseDeg, angleCrbPilotStdDeg);
+rmseOverUnitCrb = arrayfun(@localSafeRatio, angleRmseDeg, angleCrbUnitStdDeg);
+pilotToUnitCrbRatio = arrayfun(@localSafeRatio, angleCrbPilotStdDeg, angleCrbUnitStdDeg);
+unitFimTrace = [trace(auxUnitSingle.fim); trace(auxUnitJoint.fim)];
+pilotFimTrace = [trace(auxPilotSingle.fim); trace(auxPilotJoint.fim)];
+pilotToUnitFimTraceRatio = arrayfun(@localSafeRatio, pilotFimTrace, unitFimTrace);
+refEffectiveGainAbs = [auxPilotSingle.effectivePilotGainAbs(1); auxPilotJoint.effectivePilotGainAbs(fixture.truth.refSatIdxLocal)];
+otherEffectiveGainAbs = [NaN; auxPilotJoint.effectivePilotGainAbs(fixture.otherSatIdxLocal)];
+
+% Keep the table compact and scalar-valued so it prints cleanly and can be
+% reused by summary-only snapshot reloads.
+doaOnlyTable = table(repmat(config.snrDb, 2, 1), caseName, satMode, angleRmseDeg, ...
+  angleCrbPilotStdDeg, rmseOverPilotCrb, angleCrbUnitStdDeg, rmseOverUnitCrb, ...
+  pilotToUnitCrbRatio, unitFimTrace, pilotFimTrace, pilotToUnitFimTraceRatio, ...
+  refEffectiveGainAbs, otherEffectiveGainAbs, ...
+  'VariableNames', {'snrDb', 'displayName', 'satMode', 'angleRmseDeg', ...
+  'angleCrbDoaPilotStdDeg', 'rmseOverPilotCrb', 'angleCrbDoaUnitStdDeg', ...
+  'rmseOverUnitCrb', 'pilotToUnitCrbRatio', 'unitFimTrace', 'pilotFimTrace', ...
+  'pilotToUnitFimTraceRatio', 'refEffectiveGainAbs', 'otherEffectiveGainAbs'});
+end
+
 function satTable = localBuildSelectedSatelliteTable(truth)
 %LOCALBUILDSELECTEDSATELLITETABLE Build compact selected-satellite truth table.
 
@@ -947,6 +1011,21 @@ if ~isempty(gainTable)
   msBetterRate = localMetricValue(gainTable, "msBetterAngleRate", NaN);
   metricLineList(end + 1, 1) = "• MS angle-better rate: <code>" + localFormatNumber(msBetterRate) + "</code>";
 end
+if isfield(replayData, 'doaOnlyCrbScaleTable') && height(replayData.doaOnlyCrbScaleTable) > 0
+  doaRow = localSelectCaseRow(replayData.doaOnlyCrbScaleTable, "MS-SF-DoA");
+  metricLineList(end + 1, 1) = "• MS-SF-DoA / pilot CRB sanity: <code>" + ...
+    localFormatNumber(localTableValue(doaRow, 'rmseOverPilotCrb', NaN)) + "x</code>";
+end
+end
+
+function ratioValue = localSafeRatio(numValue, denValue)
+%LOCALSAFERATIO Divide two scalars and return NaN for invalid denominator.
+
+if ~isfinite(numValue) || ~isfinite(denValue) || abs(denValue) < eps
+  ratioValue = NaN;
+  return;
+end
+ratioValue = numValue ./ denValue;
 end
 
 function value = localMetricValue(metricTable, metricName, defaultValue)

@@ -1,19 +1,27 @@
 # replaySfMsDoaCrbDiagnose 结果记录
 
+> 归档说明：`replaySfMsDoaCrbDiagnose.m` 已作为独立活跃入口移除；本文件仅保留 2026-05-09 的 CRB-scale audit 代表性结果。后续 single-frame static anchor 统一从 `replaySfStaticDualSatDiagnose.m` 观察，DoA-only signal-scale sanity 只保留 compact 表。
+
 ## 0. 状态摘要
 
 | 项目 | 内容 |
 |---|---|
-| 当前状态 | `representative / diagnostic-only / CRB-scale audit complete` |
+| 当前状态 | `archived / diagnostic-only / CRB-scale audit complete` |
 | 最新代表性 snapshot | `test/data/cache/replay/replaySfMsDoaCrbDiagnose_20260509-155057.mat` |
 | 当前一句话结论 | `MS-SF-DoA` 的 unit-gain CRB gap 主要来自 DoA-only CRB 没有按 second-sat effective pilot gain / path gain 缩放；amp-aware CRB 后 `Other-SF-DoA` 与 `MS-SF-DoA` 均回到 CRB-level 附近。 |
-| 决策影响 | 不继续调 `MS-SF-DoA` estimator；下一步应把 replay-local amp-aware deterministic CRB 口径 formalize 到 `performance/` 或 scan wrapper，再回到 `scanSfStaticMleCrbConsistency` 验证四种 static case。 |
-| 下一步动作 | 暂停本 replay 机制扩展；用本 snapshot 作为 CRB signal-scale 诊断代表，后续转向正式 CRB helper / `scanSfStaticMleCrbConsistency` 的 unit-vs-amp 对照字段。 |
+| 决策影响 | 不继续调 `MS-SF-DoA` estimator；DoA-only signal-scale 口径已转入 `crbPilotSfDoaOnlyEffective` / `scanSfStaticMleCrbConsistency`，本 replay 只保留历史定位证据。 |
+| 下一步动作 | 不再运行独立 replay；用本 snapshot 作为历史 CRB signal-scale 诊断代表，后续从 `replaySfStaticDualSatDiagnose.m` 的 compact `doaOnlyCrbScaleTable` 与 `scanSfStaticMleCrbConsistency` 观察。 |
 | 禁止误用 | 不能把 unit-gain CRB 下的 `MS-SF-DoA` gap 写成 estimator failure；不能把 replay-local amp-aware CRB 直接当成已正式修改的 paper-facing CRB；不能把 alpha sweep 下沉为默认权重策略。 |
+
+### 0.1 脚本合并状态
+
+`replaySfMsDoaCrbDiagnose.m` 不再作为独立 replay 维护；其 active 入口已合并到 `replaySfStaticDualSatDiagnose.m`。合并后只保留原脚本最核心的 DoA-only CRB-scale sanity：`SS/MS-SF-DoA` 的 pilot-model CRB、unit-gain diagnostic CRB、FIM trace scaling，以及 `ref/otherEffectiveGainAbs`。旧脚本中的 heavy audit、large probe、truth-init / Hessian / alpha-sweep 细表不再迁入 active replay，只通过本文档和历史 snapshot 保留证据链。
+
+后续若需要检查 single-frame static anchor，应运行 `replaySfStaticDualSatDiagnose.m`；若需要追溯为什么 `MS-SF-DoA` 的 unit-gain CRB gap 被改判为 signal-scale 口径问题，再阅读本文档和 `replaySfMsDoaCrbDiagnose_20260509-155057.mat`。
 
 ## 1. Replay 身份
 
-- 脚本：`test/dev/replay/replaySfMsDoaCrbDiagnose.m`
+- 脚本：`test/dev/replay/replaySfMsDoaCrbDiagnose.m`（已移除，历史入口）
 - 结果文档：`test/dev/replay/results/replaySfMsDoaCrbDiagnose.md`
 - replay 类型：小 MC / static anchor CRB 口径诊断 / post-probe representative run。
 - 主要问题：解释 `scanSfStaticMleCrbConsistency.m` 中 `MS-SF-DoA` 相对 DoA-only CRB 稳定约 `1.16 x` 的 gap，到底来自 MLE / solver / fusion 路径，还是来自 CRB / metric / signal-scale 口径。
@@ -188,7 +196,7 @@ amp-aware CRB 用 clean pilot-model effective gain 对 per-sat FIM 缩放后，`
 ## 8. 限制与禁止解释
 
 - 不要把 `Other-SF-DoA ~3 x unit CRB` 写成 other-sat estimator 失败；应先说明 unit CRB 未按 effective gain 缩放。
-- 不要把 replay-local amp-aware CRB 直接当成正式 paper-facing CRB；它仍需迁移到 `performance/` 或 scan wrapper 并统一命名。
+- 不要把旧 replay-local amp-aware CRB 与当前正式 `crbPilotSfDoaOnlyEffective` 结果混用；正式 paper-facing 口径以 scan / performance helper 为准。
 - 不要用 `MS-SF-DoA` 的 unit-CRB gap 继续驱动 solver / estimator 主核修改。
 - 不要把 `alphaSat2=2` 或 `alphaSat2=5` 的 probe 行解释成默认权重建议；probe seed 数太少，且该方向绕开了 CRB 口径主因。
 - 不要把 clean sanity 写成 noisy MLE 一定贴 CRB；它只排除硬模型 / 映射错误。
@@ -202,13 +210,7 @@ snapshotFile = 'test/data/cache/replay/replaySfMsDoaCrbDiagnose_20260509-155057.
 loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'replayData'}}));
 ```
 
-随后打开：
-
-```text
-test/dev/replay/replaySfMsDoaCrbDiagnose.m
-```
-
-只运行 `Summary output and plotting` 小节，即可重出 compact table 和图。完整 per-seed / Hessian / alpha sweep 表保存在 `replayData` 中；命令行默认只打印 compact preview。
+该 snapshot 可用于离线检查历史 `replayData` 表；独立脚本入口已经移除，不再建议复跑本 replay 或恢复旧 summary 小节。若需要 active SF anchor 诊断，请运行 `test/dev/replay/replaySfStaticDualSatDiagnose.m`，其中只保留 compact DoA-only CRB-scale sanity。
 
 ## 10. 历史备注
 
