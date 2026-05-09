@@ -18,6 +18,8 @@ test/dev/scan/scanYourTopic.m
 
 然后只修改 `Scan configuration`、task grid、summary 和 plot。模板只统一 section、checkpoint / snapshot / Telegram 壳和轻量 `scanData` 组织方式；不要把具体 strategy、schedule、candidate selection、resolved/outlier 分类或 metric parser 提前公共化。短 scan 保持 `checkpointEnable=false`，重 scan 才启用 `tmp/<scanName>/<stableRunKey>/` checkpoint。
 
+新增或改 scan 时，优先复用 `test/common/scan|report|summary` 中已有 header、checkpoint、snapshot、notify 和 compact table 壳；不要复制 replay / scan 中已有的工程 helper。具体扫描指标、plotData 和尚未稳定的分类逻辑继续留在脚本 local 或 results 文档。
+
 ## 统一脚本格式
 
 每个 scan 文件头部采用固定形式：

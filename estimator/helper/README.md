@@ -2,6 +2,8 @@
 
 `estimator/helper/` 放正式 estimator helper。这里的代码属于主实现，不是 dev-only glue。新增 helper 应直接反映功能边界，避免 `core`、`misc`、`tmp`、`util2` 这类含糊命名。
 
+新增 helper 前必须先确认现有 helper 不能覆盖该职责；重复出现且职责稳定的逻辑才抽到这里。不要为了单个 replay / probe 的临时需求复制或下沉诊断逻辑，也不要把尚未验证的 rescue / adoption / gate 策略提前变成正式 helper。
+
 ## model / init / bounds
 
 ### `buildDoaDopplerSfModel.m`

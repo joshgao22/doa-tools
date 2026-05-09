@@ -47,6 +47,14 @@ If the user request, external prompt, or README files conflict, choose the small
 - If a change can be absorbed in upper-level orchestration, do not push new interfaces down into lower-level helpers.
 - Formal estimator logic belongs in `estimator/` or `estimator/helper/`; scene / reference-satellite / Doppler geometry belongs in `satellite/scene/`; CRB / FIM / EFIM belongs in `performance/`; experiment orchestration and summaries belong in `test/`.
 
+## Helper reuse and no duplicated machinery
+
+- Before adding a helper, local function, replay / scan shell, summary printer, snapshot saver, notification formatter, geometry mapper, CRB/FIM utility, or reference-satellite / Doppler-state routine, first search the existing non-legacy implementation.
+- Prefer existing helpers from `estimator/helper/`, `satellite/scene/`, `satellite/signal/`, `performance/`, and `test/common/` over copying logic into a new script.
+- Do not duplicate checkpoint, snapshot, compact-summary, Telegram notification, table-formatting, progress, CRB metric, scene construction, reference-satellite, or Doppler-state logic unless the behavior is intentionally different and the reason is documented.
+- Local helpers are allowed only for script-specific glue, formatting, or one-off diagnostics. If the same logic is needed by two or more non-legacy entry points, promote it to the appropriate existing helper location instead of copying it.
+- Do not promote unstable numerical strategies into common helpers. Candidate selection, gate / adoption policy, rescue-bank logic, or hard-case classification must remain replay / scan level until validated.
+
 ## Test subsystem boundaries
 
 - `test/regression/`: automatic pass/fail contract guardrails.

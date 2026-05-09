@@ -81,6 +81,8 @@ covariance 侧 estimator 工具。
 
 ## 修改放置规则
 
+新增 estimator 侧逻辑前，先查 `estimator/helper/README.md` 中已有 model / init / bounds / branch / warm-anchor helper；不要在主入口或 compatibility wrapper 里复制正式逻辑。若只是 replay/probe 诊断，放到 `test/dev/` 或 `test/common/`，不要下沉到 estimator。
+
 ### 新的正式 MF model 字段构造
 
 放到：

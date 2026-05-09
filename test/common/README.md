@@ -2,6 +2,8 @@
 
 `test/common/` 放实验侧复用 helper。这里的 helper 服务 regression、dev、replay、scan、perf orchestration，不应长期承载正式 estimator 主核或正式 scene 语义。
 
+新增 test common helper 前，先查本目录已有 fixture / flow / probe / report / summary / replay / scan helper，避免为单个脚本复制 checkpoint、snapshot、summary、notify 或表格预览壳。只有两个以上非 legacy 入口稳定复用、且不改变 estimator 数值路径的工程逻辑，才适合放到这里。
+
 ## 子目录职责
 
 ### `case/`
@@ -110,6 +112,9 @@
 - `buildMfWideCoverageAggregateTable.m`
 - `buildMfBankAdoptionShadowTable.m`
 - `buildMfBankAdoptionShadowAggregateTable.m`
+- `buildMfBankAdoptionRejectAggregateTable.m`
+- `buildMfBankAdoptedCaseTable.m`
+- `buildMfBankRescueOutcomeTable.m`
 - `buildMfBankFamilyAggregateTable.m`
 - `printMfReportTableSection.m`
 
@@ -119,7 +124,7 @@
 - winner adoption；
 - objective 主核。
 
-`buildMfCandidateTraceTable.m`、`buildMfWideCoverageAggregateTable.m`、`buildMfBankFamilyAggregateTable.m` 与 `buildMfBankAdoptionShadow*.m` 只重组已有 case / probe 表，允许 replay 与 scan 复用候选来源、objective delta、angle improvement、damage 统计、bank family 拆分、in-tooth tooth/comb 诊断字段和离线 shadow-adoption 评价；它们不定义 MS rescue 策略，也不改变 estimator final winner。
+`buildMfCandidateTraceTable.m`、`buildMfWideCoverageAggregateTable.m`、`buildMfBankFamilyAggregateTable.m`、`buildMfBankAdoptionShadow*.m`、`buildMfBankAdoptionRejectAggregateTable.m`、`buildMfBankAdoptedCaseTable.m` 与 `buildMfBankRescueOutcomeTable.m` 只重组已有 case / probe 表，允许 replay 与 scan 复用候选来源、objective delta、angle improvement、damage 统计、bank family 拆分、in-tooth tooth/comb 诊断字段、离线 shadow-adoption 评价、fixed-SNR rescue 统计比率、angle-or-fdRef bad-gated replay 诊断和 CRB-normalized soft-damage / healthy-adopt / bad-rescue 指标；它们不定义 MS rescue 策略，也不改变 estimator final winner。
 
 ### `summary/`
 

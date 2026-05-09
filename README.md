@@ -157,6 +157,12 @@ regression、dev、replay、scan、strategy、实验 helper。
 
 ## 全局 coding 约束
 
+### 复用优先，避免重复造轮子
+
+新增 helper、local function、summary/table、checkpoint/snapshot、notify、scene/ref-sat/Doppler-state 或 CRB/FIM 相关逻辑前，先查已有非 legacy helper。优先复用 `estimator/helper/`、`satellite/scene/`、`satellite/signal/`、`performance/` 与 `test/common/` 中的正式或实验侧 helper；只有脚本私有 glue、一次性格式化和未稳定诊断才保留 local。
+
+不要为了统一外观复制一套已有工程壳，也不要把未验证稳定的 gate、adoption、candidate family、rescue bank 或 hard-case 分类提前公共化。新增 local helper 或 common helper 时，交付说明必须写明为什么不能复用已有 helper、为什么放在当前位置。
+
 ### 行为保持
 
 默认保持现有函数签名、默认参数、初始化策略、搜索边界、reference-sat 语义、sat 顺序、输出字段、summary 口径和 fallback 顺序。
