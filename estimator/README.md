@@ -102,7 +102,7 @@ covariance 侧 estimator 工具。
 - `estimator/helper/solveDoaDopplerMfBranches.m`；
 - `estimator/helper/runDoaDopplerMfUnknownWarmAnchor.m`。
 
-其中 MF continuous local estimator 的 truth-free DoA basin-entry acquisition 属于 branch solve orchestration：它使用同一个 objective 与 fd/fdRate 范围，只临时扩大 DoA 盒捕获盆地，并在最终出口回到 compact local polish。不要把 replay 的 truth probe 或 path probe 下沉到 estimator。
+其中 MF continuous local estimator 的 truth-free DoA basin-entry acquisition 属于 branch solve orchestration：它使用同一个 objective 与 fd/fdRate 范围，只临时扩大 DoA 盒捕获盆地，并在最终出口回到 compact local polish。该 acquisition 默认只作用于 single-sat MF local solve；multi-sat MS-MF 默认旁路，除非显式把 `modelOpt.doaBasinEntryScope` 设为 `all`。不要把 replay 的 truth probe 或 path probe 下沉到 estimator。
 
 ### candidate preference / final adoption
 

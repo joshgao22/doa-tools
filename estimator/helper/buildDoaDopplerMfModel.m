@@ -117,6 +117,9 @@ end
 if ~isfield(modelOpt, 'disableDoaBasinEntry') || isempty(modelOpt.disableDoaBasinEntry)
   modelOpt.disableDoaBasinEntry = false;
 end
+if ~isfield(modelOpt, 'doaBasinEntryScope') || isempty(modelOpt.doaBasinEntryScope)
+  modelOpt.doaBasinEntryScope = 'single-sat';
+end
 if ~isfield(modelOpt, 'doaBasinEntryHalfWidthList') || isempty(modelOpt.doaBasinEntryHalfWidthList)
   modelOpt.doaBasinEntryHalfWidthList = [];
 end
@@ -250,6 +253,14 @@ end
 if ~isscalar(modelOpt.disableDoaBasinEntry) || ~islogical(modelOpt.disableDoaBasinEntry)
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidDisableDoaBasinEntry', ...
     'modelOpt.disableDoaBasinEntry must be a logical scalar.');
+end
+if isstring(modelOpt.doaBasinEntryScope)
+  modelOpt.doaBasinEntryScope = char(modelOpt.doaBasinEntryScope);
+end
+modelOpt.doaBasinEntryScope = lower(strtrim(modelOpt.doaBasinEntryScope));
+if ~ismember(modelOpt.doaBasinEntryScope, {'single-sat', 'all', 'off'})
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidDoaBasinEntryScope', ...
+    'modelOpt.doaBasinEntryScope must be ''single-sat'', ''all'', or ''off''.');
 end
 if ~isempty(modelOpt.doaBasinEntryHalfWidthList)
   if ~isnumeric(modelOpt.doaBasinEntryHalfWidthList) || ...
@@ -535,6 +546,7 @@ model.freezeDoa = logical(modelOpt.freezeDoa);
 model.disableUnknownDoaReleaseFloor = logical(modelOpt.disableUnknownDoaReleaseFloor);
 model.unknownDoaReleaseHalfWidth = reshape(modelOpt.unknownDoaReleaseHalfWidth, [], 1);
 model.disableDoaBasinEntry = logical(modelOpt.disableDoaBasinEntry);
+model.doaBasinEntryScope = modelOpt.doaBasinEntryScope;
 model.doaBasinEntryHalfWidthList = modelOpt.doaBasinEntryHalfWidthList;
 model.continuousPhaseConsistencyWeight = modelOpt.continuousPhaseConsistencyWeight;
 model.continuousPhaseCollapsePenaltyWeight = modelOpt.continuousPhaseCollapsePenaltyWeight;

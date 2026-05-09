@@ -15,7 +15,7 @@ localPrintNumericList(scanConfig, 'seedList', 'seed list');
 localPrintNumericList(scanConfig, 'snrDbList', 'SNR list (dB)');
 localPrintNumericList(scanConfig, 'frameCountList', 'frame count list');
 if localHasField(scanConfig, 'frameIntvlSecList')
-  localPrintText('frame interval list (ms)', localFormatRow(scanConfig.frameIntvlSecList * 1e3));
+  localPrintText('frame interval list (ms)', localFormatNumericList(scanConfig.frameIntvlSecList * 1e3, 'frameIntvlSecList'));
 end
 localPrintField(scanConfig, 'snrDb', 'snr (dB)', '%.2f');
 localPrintField(scanConfig, 'primaryPlotSnrDb', 'primary plot SNR (dB)', '%.2f');
@@ -75,7 +75,7 @@ if ~(isnumeric(value) || islogical(value))
   localPrintText(labelText, char(string(value)));
   return;
 end
-localPrintText(labelText, localFormatRow(value));
+localPrintText(labelText, localFormatNumericList(value, fieldName));
 end
 
 function localPrintText(labelText, textValue)
@@ -88,12 +88,40 @@ function tf = localHasField(dataStruct, fieldName)
 tf = isstruct(dataStruct) && isfield(dataStruct, fieldName) && ~isempty(dataStruct.(fieldName));
 end
 
-function textValue = localFormatRow(value)
-% Format numeric values for compact logs.
+function textValue = localFormatNumericList(value, fieldName)
+% Format numeric vectors for compact logs.
 value = reshape(double(value), 1, []);
 if isempty(value)
   textValue = '';
-else
-  textValue = strjoin(compose('%.6g', value), ', ');
+  return;
 end
+
+if strcmp(fieldName, 'seedList') && localIsConsecutiveSeedList(value)
+  textValue = sprintf('%.0f:%.0f (%d seeds)', value(1), value(end), numel(value));
+  return;
+end
+
+maxFullCount = 16;
+maxEdgeCount = 6;
+if numel(value) <= maxFullCount
+  textValue = localJoinNumericValues(value);
+  return;
+end
+
+headText = localJoinNumericValues(value(1:maxEdgeCount));
+tailText = localJoinNumericValues(value((end - maxEdgeCount + 1):end));
+textValue = sprintf('%s, ..., %s (%d values)', headText, tailText, numel(value));
+end
+
+function tf = localIsConsecutiveSeedList(value)
+% Return true when seeds are an integer unit-stride range.
+tf = numel(value) > 1 ...
+  && all(isfinite(value)) ...
+  && all(abs(value - round(value)) < sqrt(eps)) ...
+  && all(diff(round(value)) == 1);
+end
+
+function textValue = localJoinNumericValues(value)
+% Join numeric values using the same compact scalar format as before.
+textValue = strjoin(compose('%.6g', value), ', ');
 end

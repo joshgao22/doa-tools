@@ -69,6 +69,22 @@
 典型文件：
 
 - `evalDoaDopplerMfProbePoint.m`
+- `buildMfObjectiveProbeRows.m`
+- `buildMfTargetedSolveProbeRows.m`
+- `buildMsCpuBankProbeRows.m`
+- `buildMfSolveProbeRowFromCase.m`
+- `buildMfDoaBasinEntryRowsFromCase.m`
+- `buildMfPerSatProbeRows.m`
+- `makeMfProbeOptVar.m` / `resolveMfProbeTruthScalar.m` / `extractMfProbeCoherenceFloor.m`
+- `emptyMfObjectiveProbeRow.m` / `emptyMfSolveProbeRow.m` / `emptyMfDoaBasinEntryRow.m` / `emptyMfPerSatProbeRow.m`
+
+`buildMfObjectiveProbeRows.m` 只负责构造 MF model 并重评估 static-seed / final / truth / mixed fixed-point objective，供 replay / scan 诊断复用；它不运行 solver、不选择 winner、不改变 estimator adoption。
+
+`buildMfTargetedSolveProbeRows.m` 负责 replay / scan 侧的 targeted controlled MF solver rerun：每个 method 记录 baseline row，默认只有 MS bad condition 才触发 truth-DoA、static-wide 或 SS-MF seed probe，并把 MS CP-U bank 委托给 `buildMsCpuBankProbeRows.m`。当上层显式传入 `solveProbeRoute="ss-parity"` 时，它只为 SS baseline parity 检查运行 SS truth / static-wide probe，用于对照 `replayMfSsMleCrbMetricDiagnose`；这仍然不改变 estimator final winner。
+
+`buildMsCpuBankProbeRows.m` 负责 MS-MF-CP-U 的 replay-only axis-cross bank probe：先用 CP-K cheap preselect 排序，再对 top candidate 做 CP-U release，用于定位 basin-entry / nuisance-rate release 风险；它不定义正式 rescue strategy，不进入 estimator 默认路径。
+
+`buildMfSolveProbeRowFromCase.m`、`buildMfDoaBasinEntryRowsFromCase.m`、`buildMfPerSatProbeRows.m` 与 `emptyMf*Row.m` 是 probe / replay 共用的表行 primitive，只负责把已有 estimator 输出重组为诊断表，不运行新 solver，也不做 candidate adoption。
 
 不应包含：
 
@@ -77,18 +93,33 @@
 
 ### `report/`
 
-负责报告表、CRB bundle、代表性 replay report。
+负责报告表、CRB bundle、代表性 replay report，以及 replay / scan 共用的 compact metric / runtime / tail 表格与命令行预览壳。
+
+`buildMfReleaseCompareTable.m`、`buildMfSeedChainTable.m`、`buildMfPerSatProbeTable.m`、`buildMfRuntimeTable.m` 与 `buildMfRuntimeRow.m` 是 replay / scan 侧的稳定报告表 helper，只收集或比较已有 case / probe rows，不定义诊断标签、不触发新 estimator 调用。
 
 典型文件：
 
 - `buildDynamicCaseSummaryTable.m`
 - `buildDynamicCrbSummaryTable.m`
+- `buildMfMetricAggregateTable.m`
+- `buildMfFilteredMetricAggregateTable.m`
+- `buildMfTailTable.m`
+- `buildMfRuntimeAggregateTable.m`
+- `buildMfTopSlowRuntimeTable.m`
+- `buildMfCandidateTraceTable.m`
+- `buildMfWideCoverageAggregateTable.m`
+- `buildMfBankAdoptionShadowTable.m`
+- `buildMfBankAdoptionShadowAggregateTable.m`
+- `buildMfBankFamilyAggregateTable.m`
+- `printMfReportTableSection.m`
 
 不应包含：
 
 - selection rule；
 - winner adoption；
 - objective 主核。
+
+`buildMfCandidateTraceTable.m`、`buildMfWideCoverageAggregateTable.m`、`buildMfBankFamilyAggregateTable.m` 与 `buildMfBankAdoptionShadow*.m` 只重组已有 case / probe 表，允许 replay 与 scan 复用候选来源、objective delta、angle improvement、damage 统计、bank family 拆分、in-tooth tooth/comb 诊断字段和离线 shadow-adoption 评价；它们不定义 MS rescue 策略，也不改变 estimator final winner。
 
 ### `summary/`
 

@@ -116,6 +116,7 @@ results/<scriptName>/<caseName>.md
 | `scanMfRegimeMapByWindow.m` | `scanMfRegimeMapByWindow.md` | `paper-facing` | 多帧窗口内 DoA 可近似静态，而 Doppler 漂移和静态 Doppler 相位误差已不可忽略；支持论文 regime justification。 |
 | `scanMfKnownUnknownInformationLoss.m` | `scanMfKnownUnknownInformationLoss.md` | `paper-facing` | known / unknown Doppler-rate 的 CRB / EFIM 信息损失 scan，是后续 unknown-rate nuisance 退化解释的主入口。 |
 | `scanMfCpIpInToothPerfMap.m` | `scanMfCpIpInToothPerfMap.md` | `paper-facing / representative` | controlled in-tooth 条件下，CP 稳定保住 center tooth、`fdRef` consistency 和 non-ref coherence；IP 在 angle RMSE 上可能更小，应解释为 angle-vs-Doppler-consistency trade-off。 |
+| `scanSfStaticMleCrbConsistency.m` | `scanSfStaticMleCrbConsistency.md` | `paper-facing / representative` | Single-frame static SS/MS DoA-Doppler MLE 与 CRB 的 static anchor；`SS-SF-Static` 全 SNR 贴 CRB，`MS-SF-Static` 中高 SNR 收敛到 joint CRB，可作为 dynamic gap 的健康对照。 |
 | `scanMfMleCrbInToothConsistency.m` | `scanMfMleCrbInToothConsistency.md` | `paper-facing / needs-rerun` | Doppler-aided / in-tooth local MLE 与 CRB 的一致性 scan；已升级为默认 auto MF initializer、loose/core/trimmed、MSE/CRB、top-tail 和 angle/fdRef 并列图，需按新口径重跑。 |
 | `scanMfCpIpPerfMap.m` | `scanMfCpIpPerfMap.md` | `stress-test` | full-flow CP/IP 结果被 wrong-tooth / same-tooth bad basin 污染，当前不能直接作为 CP/IP 论文性能图。 |
 | `scanMfBlockLength.m` | `scanMfBlockLength.md` | `diagnostic-only / appendix candidate` | 更长 pilot block 显著增强 `fdRef` comb / alias tooth separation，但块内 Doppler-rate 二次相位仍很小。 |

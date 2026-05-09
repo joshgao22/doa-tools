@@ -105,6 +105,15 @@ scan 顶层工程外壳可使用 `test/common/scan/` 的薄 helper：
 - checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfCpIpInToothPerfMap/<stableRunKey>/`。中断后用同一配置直接重跑可恢复已完成 task；成功构造 `scanData` 后默认清理 checkpoint 目录，失败时 `catch` 打印保留路径。
 - 存储口径：默认不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。
 
+#### `scanSfStaticMleCrbConsistency.m`
+
+- 作用：扫描 single-frame static DoA-Doppler MLE 与 pilot/static CRB 的一致性。
+- 用途：作为 static paper-facing 锚点，固定 SS/MS、DoA-only/static 四个 canonical case 的 full / resolved / CRB-local RMSE、P95、keep rate 与 CRB-normalized gap，为后续 dynamic MLE-vs-CRB 和 outlier 解释提供同口径对照。
+- 主要输出：`repeatTable`、`crbTable`、`perfTable`、`aggregateTable`、`crbLocalSummaryTable`、`topTailTable`、`topTailExportTable`、`checkpointSummaryTable` 与可重画 `plotData`；命令行打印 aggregate、CRB-local compact summary、top-tail 预览和 checkpoint summary，完整逐 repeat 表留在 `scanData`。
+- 统计口径：full 统计使用所有 finite estimate；resolved 统计使用 estimator `isResolved`；CRB-local 统计在 resolved 样本上按固定 normalized angle / fdRef cap 剔除极端 tail，并报告 keep rate / outlier rate。DoA-only case 复用同一 pilot/static CRB 作为同信号模型下的保守 lower bound，不单独构造 array-only CRB。
+- checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanSfStaticMleCrbConsistency/<stableRunKey>/`。中断后用同一配置直接重跑可恢复；成功构造 `scanData` 后默认清理 checkpoint 目录。
+- 存储口径：默认不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。
+
 #### `scanMfMleCrbInToothConsistency.m`
 
 - 作用：扫描 Doppler-aided / in-tooth 条件下 CP-K / CP-U local MLE 与 CRB 的一致性。
