@@ -129,6 +129,17 @@ scan 顶层工程外壳可使用 `test/common/scan/` 的薄 helper：
 - checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfMleCrbInToothConsistency/<shortRunKey>/`。`shortRunKey` 只保留 frame / SNR range / seed range / repeat 和 8 位 hash，完整语义签名写入 checkpoint meta，避免 Windows 路径超过 260 字符；中断后用同一配置直接重跑可恢复已完成 task，成功构造 `scanData` 后默认清理 checkpoint 目录。
 - 存储口径：默认不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。
 
+#### `scanMfMsMleCrbInToothConsistency.m`
+
+- 作用：MS 专用的 Doppler-aided / in-tooth MLE-vs-CRB 跨 SNR scan，只跑 `MS-MF-CP-K` 与 `MS-MF-CP-U`。
+- 用途：在不混入 SS 对照和 replay heavy bank/rescue solver 的前提下，统计 `-15:5:10 dB` 下 MS-MF 的 full / resolved / core / CRB-local 表现、outlier 类型分布和代表性 tail seed，用于反向指导 `replayMfMsMleCrbFlowDiagnose` 的定点机制排查。
+- 默认配置：`snrDbList=(-15:5:10).'`、`numRepeat=100`、`baseSeed=253`、`frameCountList=10`、`methodNameList=["MS-MF-CP-K"; "MS-MF-CP-U"]`。若只需快速看错误类型分布，可手动降为 `numRepeat=40`。
+- 主要输出：继承通用 in-tooth scan 的 `perfTable`、`aggregateTable`、`crbLocalSummaryTable`、`failureSummaryTable`、`topTailTable`、`topTailExportTable`、`repeatOutCell`、`checkpointSummaryTable` 与 `plotData`，并额外输出 `msErrorTypeSummaryTable` 和 `representativeSeedTable`。`crbLocalSummaryTable` 采用 CRB-normalized metric 优先口径，先报告 CRB-local / core / resolved / full 的 `RMSE/CRB` 与 CRB-local / core 的 `MSE/CRB`，再报告 `crbLocalRate` 等 keep-rate 诊断字段。
+- 错误类型口径：`msErrorTypeSummaryTable` 将逐 repeat 离线分类为 `crb-local`、`fdref-branch-tail`、`fd-rate-tail`、`coherence-collapse-tail`、`doa-basin-limited`、`angle-local-tail`、`solver-conditioning-tail` 或 `other-tail`。这些标签只用于 offline scan / replay seed selection，不进入 estimator、flow selector 或 runtime adoption。
+- 代表 seed 口径：`representativeSeedTable` 每个 `displayName × SNR × error type` 默认选 3 个 tail score 最大的 seed，字段包含 `taskSeed`、CRB-normalized angle/fdRef、fdRate error、non-ref coherence、iterations、first-order optimality、failure reason 与 tail subtype。后续 replay 应优先从这里选 seed，而不是凭单次日志印象挑 case。
+- checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfMsMleCrbInToothConsistency/<shortRunKey>/`；中断后同配置重跑可恢复，成功构造 `scanData` 后默认清理 checkpoint 目录。
+- 存储口径：默认不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。该 scan 是 baseline 分类器，不运行 `BankRescue / HealthGated / 0.006+0.012` replay bank。
+
 #### `scanMfKnownUnknownInformationLoss.m`
 
 - 作用：扫描 known/unknown Doppler-rate 条件下的 CRB / EFIM 信息损失。
