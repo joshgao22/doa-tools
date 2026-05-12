@@ -38,7 +38,9 @@ trimMinKeepRate = 0.8;
 topTailCountPerGroup = 5;
 representativeSeedCountPerType = 3;
 topTailPrintMaxRows = 60;
-diagnosticVersion = "ms-crb-normalized-error-type-v2";
+diagnosticVersion = "ms-crb-normalized-error-type-v4";
+crbFloorWarnMseRatio = 1.0;
+crbTargetMseRatio = 1.1;
 methodNameList = [
   "MS-MF-CP-K"
   "MS-MF-CP-U"
@@ -79,6 +81,8 @@ scanConfig.topTailCountPerGroup = topTailCountPerGroup;
 scanConfig.representativeSeedCountPerType = representativeSeedCountPerType;
 scanConfig.topTailPrintMaxRows = topTailPrintMaxRows;
 scanConfig.diagnosticVersion = string(diagnosticVersion);
+scanConfig.crbFloorWarnMseRatio = crbFloorWarnMseRatio;
+scanConfig.crbTargetMseRatio = crbTargetMseRatio;
 scanConfig.methodNameList = methodNameList;
 scanConfig.saveSnapshot = logical(saveSnapshot);
 scanConfig.checkpointEnable = logical(checkpointEnable);
@@ -152,6 +156,8 @@ try
   [perfTable, repeatOutCell] = localCollectTaskOutput(taskOutCell);
   aggregateTable = localBuildAggregateTable(perfTable, scanConfig);
   crbLocalSummaryTable = localBuildCrbLocalSummaryTable(aggregateTable);
+  crbFloorSummaryTable = localBuildCrbFloorSummaryTable(aggregateTable, scanConfig);
+  crbTargetAuditTable = localBuildCrbTargetAuditTable(aggregateTable, scanConfig);
   failureSummaryTable = localBuildFailureSummaryTable(perfTable);
   msErrorTypeSummaryTable = localBuildMsErrorTypeSummaryTable(perfTable, scanConfig);
   representativeSeedTable = localBuildRepresentativeSeedTable(perfTable, scanConfig);
@@ -175,6 +181,8 @@ try
   scanData.perfTable = perfTable;
   scanData.aggregateTable = aggregateTable;
   scanData.crbLocalSummaryTable = crbLocalSummaryTable;
+  scanData.crbFloorSummaryTable = crbFloorSummaryTable;
+  scanData.crbTargetAuditTable = crbTargetAuditTable;
   scanData.failureSummaryTable = failureSummaryTable;
   scanData.msErrorTypeSummaryTable = msErrorTypeSummaryTable;
   scanData.representativeSeedTable = representativeSeedTable;
@@ -215,6 +223,8 @@ try
 
   printMfScanSection('MS in-tooth MLE/CRB consistency aggregate', scanData.aggregateTable);
   printMfScanSection('MS CRB-normalized compact summary', scanData.crbLocalSummaryTable);
+  printMfScanSection('MS CRB floor sanity summary', scanData.crbFloorSummaryTable);
+  printMfScanSection('MS CRB-normalized 1.1 target audit', scanData.crbTargetAuditTable);
   printMfScanSection('MS error type summary', scanData.msErrorTypeSummaryTable);
   printMfScanSection('MS representative tail seeds', scanData.representativeSeedTable);
   printMfScanSection('Resolved failure reason summary', scanData.failureSummaryTable);
@@ -230,6 +240,7 @@ try
   fprintf('Runtime cache                    : context per frame, CRB per frame/SNR.\n');
   fprintf('Dynamic init mode                : %s\n', char(string(localGetFieldOrDefault(scanConfigForReport, 'initMode', ""))));
   fprintf('Diagnostic version               : %s\n', char(string(localGetFieldOrDefault(scanConfigForReport, 'diagnosticVersion', ""))));
+  fprintf('Aggregate MSE/CRB                : mean((error/CRB)^2), not MSE/median(CRB)^2.\n');
   fprintf('Representative seeds per type    : %d\n', localGetFieldOrDefault(scanConfigForReport, 'representativeSeedCountPerType', 0));
   fprintf('Repeats per config               : %d\n', localGetFieldOrDefault(scanConfigForReport, 'numRepeat', NaN));
   fprintf('fdRef oracle half-tooth fraction : %.3f\n', localGetFieldOrDefault(scanConfigForReport, 'oracleFdHalfToothFraction', NaN));
@@ -241,8 +252,8 @@ try
   fprintf('Trim minimum keep rate           : %.3f\n', localGetFieldOrDefault(scanConfigForReport, 'trimMinKeepRate', NaN));
   fprintf('Resolved rule                    : solver-valid, in-tooth, no frequency-boundary hit, fdRate healthy for CP-U.\n');
   fprintf('Core rule                        : resolved plus non-ref coherence floor for multi-sat cases.\n');
-  fprintf('Trim rule                        : core plus fixed CRB-normalized angle/fdRef cap; report keep rate separately.\n');
-  fprintf('CRB-local rule                   : alias of trimmed core; use as paper-facing local-regime subset.\n');
+  fprintf('Trim rule                        : core plus fixed CRB-normalized angle cap; fdRef cap is diagnostic only.\n');
+  fprintf('CRB-local rule                   : alias of angle-tail trimmed core; fdRef floor sanity is reported separately.\n');
   fprintf('CRB-normalized summary           : reports RMSE/CRB and MSE/CRB first; keep rates remain diagnostic.\n');
   fprintf('Angle error is report-only and is not used to define loose resolved samples.\n');
   if height(scanData.checkpointSummaryTable) > 0
@@ -928,6 +939,8 @@ row.isResolved = row.solverResolved && row.toothResolved && row.fdRateResolved &
   ~(row.freqBoundaryHit || row.fdRateBoundaryHit);
 row.coreResolved = row.isResolved && localIsCoreCoherenceResolved(row, scanConfig.coreCoherenceFloor);
 row.trimmedCore = localIsTrimmedCore(row, scanConfig.trimEnable, scanConfig.trimNormCap);
+row.fdRefNormTail = row.coreResolved && isfinite(row.fdRefNormErr) && ...
+  abs(row.fdRefNormErr) > scanConfig.trimNormCap;
 row.trimmedOutlier = row.coreResolved && ~row.trimmedCore;
 row.failureReason = localBuildFailureReason(row);
 row.tailSubtype = localBuildTailSubtype(row, scanConfig.trimNormCap);
@@ -968,7 +981,7 @@ tf = isfinite(row.nonRefCoherenceFloor) && row.nonRefCoherenceFloor >= coreCoher
 end
 
 function tf = localIsTrimmedCore(row, trimEnable, trimNormCap)
-%LOCALISTRIMMEDCORE Apply a fixed CRB-normalized tail trimming rule.
+%LOCALISTRIMMEDCORE Apply an angle-tail CRB-normalized trimming rule.
 
 if ~row.coreResolved
   tf = false;
@@ -978,8 +991,9 @@ if ~trimEnable
   tf = true;
   return;
 end
-tf = isfinite(row.angleNormErr) && isfinite(row.fdRefNormErr) && ...
-  abs(row.angleNormErr) <= trimNormCap && abs(row.fdRefNormErr) <= trimNormCap;
+% Do not condition fdRef MSE on fdRef error itself; otherwise the fdRef
+% CRB-floor check is biased downward after trimming.
+tf = isfinite(row.angleNormErr) && abs(row.angleNormErr) <= trimNormCap;
 end
 
 function crbRow = localFindCrbRow(crbTable, displayName)
@@ -1051,10 +1065,11 @@ function subtype = localBuildTailSubtype(row, normCap)
 %LOCALBUILDTAILSUBTYPE Classify the dominant outlier mechanism for diagnostics.
 
 subtype = "crb-local";
-if row.trimmedCore
+if row.coreResolved && isfinite(row.fdRefNormErr) && abs(row.fdRefNormErr) > normCap
+  subtype = "same-tooth-fdref-tail";
+elseif row.trimmedCore
   return;
-end
-if ~row.solverResolved
+elseif ~row.solverResolved
   subtype = "solver-tail";
 elseif ~row.toothResolved
   subtype = "outside-tooth-tail";
@@ -1062,8 +1077,6 @@ elseif row.freqBoundaryHit || row.fdRateBoundaryHit
   subtype = "fd-boundary-tail";
 elseif ~row.fdRateResolved
   subtype = "fdrate-unresolved-tail";
-elseif row.coreResolved && isfinite(row.fdRefNormErr) && abs(row.fdRefNormErr) > normCap
-  subtype = "same-tooth-fdref-tail";
 elseif row.coreResolved && isfinite(row.angleNormErr) && abs(row.angleNormErr) > normCap
   subtype = "angle-local-tail";
 elseif row.coherenceCollapsed
@@ -1095,7 +1108,8 @@ row = struct('displayName', "", 'satMode', "", 'phaseMode', "", 'fdRateMode', ""
   'fdRefNormErr', NaN, 'solverResolved', false, 'toothResolved', false, ...
   'fdRateResolved', false, 'freqBoundaryHit', false, 'fdRateBoundaryHit', false, ...
   'coherenceCollapsed', false, 'isResolved', false, 'coreResolved', false, ...
-  'trimmedCore', false, 'trimmedOutlier', false, 'failureReason', "", ...
+  'trimmedCore', false, 'fdRefNormTail', false, 'trimmedOutlier', false, ...
+  'failureReason', "", ...
   'tailSubtype', "", 'solveVariant', "", 'runTimeMs', NaN, 'wallTimeMs', NaN);
 end
 
@@ -1184,16 +1198,16 @@ for iRow = 1:height(groupKey)
   row.crbLocalAngleP95Deg = row.trimAngleP95Deg;
   row.crbLocalAngleP99Deg = row.trimAngleP99Deg;
   row.angleCrbStdDeg = median(perfTable.angleCrbStdDeg(crbMask), 'omitnan');
-  row.fullAngleRmseOverCrb = localSafeRatio(row.fullAngleRmseDeg, row.angleCrbStdDeg);
-  row.resolvedAngleRmseOverCrb = localSafeRatio(row.resolvedAngleRmseDeg, row.angleCrbStdDeg);
-  row.coreAngleRmseOverCrb = localSafeRatio(row.coreAngleRmseDeg, row.angleCrbStdDeg);
-  row.trimAngleRmseOverCrb = localSafeRatio(row.trimAngleRmseDeg, row.angleCrbStdDeg);
-  row.crbLocalAngleRmseOverCrb = row.trimAngleRmseOverCrb;
-  row.fullAngleMseOverCrb = localSafeRatio(row.fullAngleMseDeg2, row.angleCrbStdDeg.^2);
-  row.resolvedAngleMseOverCrb = localSafeRatio(row.resolvedAngleMseDeg2, row.angleCrbStdDeg.^2);
-  row.coreAngleMseOverCrb = localSafeRatio(row.coreAngleMseDeg2, row.angleCrbStdDeg.^2);
-  row.trimAngleMseOverCrb = localSafeRatio(row.trimAngleMseDeg2, row.angleCrbStdDeg.^2);
+  row.fullAngleMseOverCrb = localNormalizedMse(perfTable.angleErrDeg(mask), perfTable.angleCrbStdDeg(mask));
+  row.resolvedAngleMseOverCrb = localNormalizedMse(perfTable.angleErrDeg(resolvedMask), perfTable.angleCrbStdDeg(resolvedMask));
+  row.coreAngleMseOverCrb = localNormalizedMse(perfTable.angleErrDeg(coreMask), perfTable.angleCrbStdDeg(coreMask));
+  row.trimAngleMseOverCrb = localNormalizedMse(perfTable.angleErrDeg(trimMask), perfTable.angleCrbStdDeg(trimMask));
   row.crbLocalAngleMseOverCrb = row.trimAngleMseOverCrb;
+  row.fullAngleRmseOverCrb = sqrt(row.fullAngleMseOverCrb);
+  row.resolvedAngleRmseOverCrb = sqrt(row.resolvedAngleMseOverCrb);
+  row.coreAngleRmseOverCrb = sqrt(row.coreAngleMseOverCrb);
+  row.trimAngleRmseOverCrb = sqrt(row.trimAngleMseOverCrb);
+  row.crbLocalAngleRmseOverCrb = row.trimAngleRmseOverCrb;
   row.resolvedAngleNormP95 = localPrctileFinite(perfTable.angleNormErr(resolvedMask), 95);
   row.coreAngleNormP95 = localPrctileFinite(perfTable.angleNormErr(coreMask), 95);
   row.trimAngleNormP95 = localPrctileFinite(perfTable.angleNormErr(trimMask), 95);
@@ -1219,16 +1233,16 @@ for iRow = 1:height(groupKey)
   row.crbLocalFdRefP95Hz = row.trimFdRefP95Hz;
   row.crbLocalFdRefP99Hz = row.trimFdRefP99Hz;
   row.fdRefCrbStdHz = median(perfTable.fdRefCrbStdHz(crbMask), 'omitnan');
-  row.fullFdRefRmseOverCrb = localSafeRatio(row.fullFdRefRmseHz, row.fdRefCrbStdHz);
-  row.resolvedFdRefRmseOverCrb = localSafeRatio(row.resolvedFdRefRmseHz, row.fdRefCrbStdHz);
-  row.coreFdRefRmseOverCrb = localSafeRatio(row.coreFdRefRmseHz, row.fdRefCrbStdHz);
-  row.trimFdRefRmseOverCrb = localSafeRatio(row.trimFdRefRmseHz, row.fdRefCrbStdHz);
-  row.crbLocalFdRefRmseOverCrb = row.trimFdRefRmseOverCrb;
-  row.fullFdRefMseOverCrb = localSafeRatio(row.fullFdRefMseHz2, row.fdRefCrbStdHz.^2);
-  row.resolvedFdRefMseOverCrb = localSafeRatio(row.resolvedFdRefMseHz2, row.fdRefCrbStdHz.^2);
-  row.coreFdRefMseOverCrb = localSafeRatio(row.coreFdRefMseHz2, row.fdRefCrbStdHz.^2);
-  row.trimFdRefMseOverCrb = localSafeRatio(row.trimFdRefMseHz2, row.fdRefCrbStdHz.^2);
+  row.fullFdRefMseOverCrb = localNormalizedMse(perfTable.fdRefAbsErrHz(mask), perfTable.fdRefCrbStdHz(mask));
+  row.resolvedFdRefMseOverCrb = localNormalizedMse(perfTable.fdRefAbsErrHz(resolvedMask), perfTable.fdRefCrbStdHz(resolvedMask));
+  row.coreFdRefMseOverCrb = localNormalizedMse(perfTable.fdRefAbsErrHz(coreMask), perfTable.fdRefCrbStdHz(coreMask));
+  row.trimFdRefMseOverCrb = localNormalizedMse(perfTable.fdRefAbsErrHz(trimMask), perfTable.fdRefCrbStdHz(trimMask));
   row.crbLocalFdRefMseOverCrb = row.trimFdRefMseOverCrb;
+  row.fullFdRefRmseOverCrb = sqrt(row.fullFdRefMseOverCrb);
+  row.resolvedFdRefRmseOverCrb = sqrt(row.resolvedFdRefMseOverCrb);
+  row.coreFdRefRmseOverCrb = sqrt(row.coreFdRefMseOverCrb);
+  row.trimFdRefRmseOverCrb = sqrt(row.trimFdRefMseOverCrb);
+  row.crbLocalFdRefRmseOverCrb = row.trimFdRefRmseOverCrb;
   row.resolvedFdRefNormP95 = localPrctileFinite(perfTable.fdRefNormErr(resolvedMask), 95);
   row.coreFdRefNormP95 = localPrctileFinite(perfTable.fdRefNormErr(coreMask), 95);
   row.trimFdRefNormP95 = localPrctileFinite(perfTable.fdRefNormErr(trimMask), 95);
@@ -1315,7 +1329,8 @@ for iGroup = 1:height(groupKey)
     'fdRateAbsErrHzPerSec', 'nonRefCoherenceFloor', 'initAngleErrDeg', ...
     'finalMinusInitAngleDeg', 'fdRefInitMoveHz', 'fdRateInitMoveHzPerSec', ...
     'objectiveImprove', 'iterations', 'exitflag', 'firstOrderOpt', ...
-    'failureReason', 'tailSubtype', 'coreResolved', 'trimmedCore', 'trimmedOutlier'});
+    'failureReason', 'tailSubtype', 'coreResolved', 'trimmedCore', 'fdRefNormTail', ...
+    'trimmedOutlier'});
   topTable.tailScore = tailScore(keepIdx);
   tailTableCell{end + 1, 1} = topTable; %#ok<AGROW>
 end
@@ -1349,7 +1364,8 @@ fieldList = {'displayName', 'snrDb', 'numFrame', 'taskSeed', 'tailScore', ...
   'fdRateAbsErrHzPerSec', 'nonRefCoherenceFloor', 'initAngleErrDeg', ...
   'finalMinusInitAngleDeg', 'fdRefInitMoveHz', 'fdRateInitMoveHzPerSec', ...
   'objectiveImprove', 'iterations', 'exitflag', 'firstOrderOpt', ...
-  'failureReason', 'tailSubtype', 'coreResolved', 'trimmedCore', 'trimmedOutlier'};
+  'failureReason', 'tailSubtype', 'coreResolved', 'trimmedCore', 'fdRefNormTail', ...
+  'trimmedOutlier'};
 keepField = fieldList(ismember(fieldList, topTailTable.Properties.VariableNames));
 topTailExportTable = topTailTable(:, keepField);
 end
@@ -1423,6 +1439,10 @@ if ~isfield(scanData, 'elapsedSec')
 end
 
 scanData.crbLocalSummaryTable = localBuildCrbLocalSummaryTable(scanData.aggregateTable);
+scanData.crbTargetAuditTable = localBuildCrbTargetAuditTable(scanData.aggregateTable, scanData.config);
+if ~isfield(scanData, 'crbFloorSummaryTable') || ~istable(scanData.crbFloorSummaryTable)
+  scanData.crbFloorSummaryTable = localBuildCrbFloorSummaryTable(scanData.aggregateTable, scanData.config);
+end
 if ~isfield(scanData, 'perfTable') || ~istable(scanData.perfTable)
   scanData.perfTable = table();
 end
@@ -1470,6 +1490,8 @@ scanConfig = localSetMissingField(scanConfig, 'resolvedFdRateAbsTolHzPerSec', Na
 scanConfig = localSetMissingField(scanConfig, 'coreCoherenceFloor', 0.8);
 scanConfig = localSetMissingField(scanConfig, 'trimNormCap', 5);
 scanConfig = localSetMissingField(scanConfig, 'trimMinKeepRate', NaN);
+scanConfig = localSetMissingField(scanConfig, 'crbFloorWarnMseRatio', 1.0);
+scanConfig = localSetMissingField(scanConfig, 'crbTargetMseRatio', 1.1);
 scanConfig = localSetMissingField(scanConfig, 'topTailCountPerGroup', 5);
 scanConfig = localSetMissingField(scanConfig, 'topTailPrintMaxRows', 60);
 end
@@ -1531,6 +1553,69 @@ fieldList = {'displayName', 'snrDb', 'numFrame', 'numRepeat', ...
   'outlierRate', 'freqBoundaryHitRate', 'fdRateResolvedRate'};
 keepField = fieldList(ismember(fieldList, aggregateTable.Properties.VariableNames));
 crbLocalSummaryTable = aggregateTable(:, keepField);
+end
+
+function crbTargetAuditTable = localBuildCrbTargetAuditTable(aggregateTable, scanConfig)
+%LOCALBUILDCRBTARGETAUDITTABLE Flag rows against the intended trim MSE/CRB target.
+
+crbTargetAuditTable = table();
+if isempty(aggregateTable) || height(aggregateTable) == 0
+  return;
+end
+targetRatio = double(localGetFieldOrDefault(scanConfig, 'crbTargetMseRatio', 1.1));
+fieldList = {'displayName', 'snrDb', 'numFrame', 'numRepeat', ...
+  'crbLocalAngleMseOverCrb', 'crbLocalFdRefMseOverCrb', ...
+  'crbLocalAngleRmseOverCrb', 'crbLocalFdRefRmseOverCrb', ...
+  'crbLocalRate', 'crbLocalKeepRate', 'trimKeepRateBelowMin', ...
+  'coreAngleMseOverCrb', 'coreFdRefMseOverCrb'};
+keepField = fieldList(ismember(fieldList, aggregateTable.Properties.VariableNames));
+crbTargetAuditTable = aggregateTable(:, keepField);
+if ~all(ismember({'crbLocalAngleMseOverCrb', 'crbLocalFdRefMseOverCrb'}, ...
+    crbTargetAuditTable.Properties.VariableNames))
+  crbTargetAuditTable = table();
+  return;
+end
+crbTargetAuditTable.targetMseOverCrb = repmat(targetRatio, height(crbTargetAuditTable), 1);
+crbTargetAuditTable.angleTargetPass = crbTargetAuditTable.crbLocalAngleMseOverCrb <= targetRatio;
+crbTargetAuditTable.fdRefTargetPass = crbTargetAuditTable.crbLocalFdRefMseOverCrb <= targetRatio;
+crbTargetAuditTable.bothTargetPass = crbTargetAuditTable.angleTargetPass & crbTargetAuditTable.fdRefTargetPass;
+crbTargetAuditTable.angleGapToTarget = crbTargetAuditTable.crbLocalAngleMseOverCrb - targetRatio;
+crbTargetAuditTable.fdRefGapToTarget = crbTargetAuditTable.crbLocalFdRefMseOverCrb - targetRatio;
+mask = ~crbTargetAuditTable.bothTargetPass;
+if ismember('trimKeepRateBelowMin', crbTargetAuditTable.Properties.VariableNames)
+  mask = mask | crbTargetAuditTable.trimKeepRateBelowMin;
+end
+crbTargetAuditTable = crbTargetAuditTable(mask, :);
+end
+
+function crbFloorSummaryTable = localBuildCrbFloorSummaryTable(aggregateTable, scanConfig)
+%LOCALBUILDCRBFLOORSUMMARYTABLE Flag MSE/CRB rows below the CRB floor.
+
+crbFloorSummaryTable = table();
+if isempty(aggregateTable) || height(aggregateTable) == 0
+  return;
+end
+warnRatio = double(localGetFieldOrDefault(scanConfig, 'crbFloorWarnMseRatio', 1));
+fieldList = {'displayName', 'snrDb', 'numFrame', 'numRepeat', ...
+  'crbLocalAngleMseOverCrb', 'crbLocalFdRefMseOverCrb', ...
+  'coreAngleMseOverCrb', 'coreFdRefMseOverCrb', ...
+  'resolvedAngleMseOverCrb', 'resolvedFdRefMseOverCrb', ...
+  'fullAngleMseOverCrb', 'fullFdRefMseOverCrb', ...
+  'crbLocalRate', 'crbLocalKeepRate'};
+keepField = fieldList(ismember(fieldList, aggregateTable.Properties.VariableNames));
+summary = aggregateTable(:, keepField);
+requiredField = {'crbLocalAngleMseOverCrb', 'crbLocalFdRefMseOverCrb', ...
+  'coreAngleMseOverCrb', 'coreFdRefMseOverCrb'};
+if ~all(ismember(requiredField, summary.Properties.VariableNames))
+  return;
+end
+summary.crbLocalAngleBelowCrb = summary.crbLocalAngleMseOverCrb < warnRatio;
+summary.crbLocalFdRefBelowCrb = summary.crbLocalFdRefMseOverCrb < warnRatio;
+summary.coreAngleBelowCrb = summary.coreAngleMseOverCrb < warnRatio;
+summary.coreFdRefBelowCrb = summary.coreFdRefMseOverCrb < warnRatio;
+mask = summary.crbLocalAngleBelowCrb | summary.crbLocalFdRefBelowCrb | ...
+  summary.coreAngleBelowCrb | summary.coreFdRefBelowCrb;
+crbFloorSummaryTable = summary(mask, :);
 end
 
 function failureSummaryTable = localBuildFailureSummaryTable(perfTable)
@@ -1658,12 +1743,13 @@ function msErrorType = localClassifyMsErrorType(row, scanConfig)
 %LOCALCLASSIFYMSERRORTYPE Assign one offline MS error label.
 
 msErrorType = "other-tail";
-if logical(row.trimmedCore)
+if logical(row.fdRefNormTail)
+  msErrorType = "fdref-branch-tail";
+elseif logical(row.trimmedCore)
   msErrorType = "crb-local";
 elseif ~logical(row.solverResolved)
   msErrorType = "solver-conditioning-tail";
-elseif ~logical(row.toothResolved) || ...
-    (isfinite(row.fdRefNormErr) && abs(row.fdRefNormErr) > scanConfig.trimNormCap)
+elseif ~logical(row.toothResolved)
   msErrorType = "fdref-branch-tail";
 elseif ~logical(row.fdRateResolved) || logical(row.fdRateBoundaryHit) || logical(row.freqBoundaryHit)
   msErrorType = "fd-rate-tail";
@@ -1966,6 +2052,19 @@ if isempty(x)
   value = NaN;
 else
   value = prctile(x, p);
+end
+end
+
+function value = localNormalizedMse(err, crbStd)
+%LOCALNORMALIZEDMSE Mean squared CRB-normalized error over finite entries.
+
+err = reshape(double(err), [], 1);
+crbStd = reshape(double(crbStd), [], 1);
+mask = isfinite(err) & isfinite(crbStd) & crbStd > 0;
+if ~any(mask)
+  value = NaN;
+else
+  value = mean((err(mask) ./ crbStd(mask)).^2);
 end
 end
 
