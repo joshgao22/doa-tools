@@ -159,8 +159,8 @@ if isempty(value)
   textValue = '';
   return;
 end
-if strcmp(fieldName, 'seedList') && localIsConsecutiveSeedList(value)
-  textValue = sprintf('%.0f:%.0f (%d seeds)', value(1), value(end), numel(value));
+if strcmp(fieldName, 'seedList')
+  textValue = char(formatMfReplaySeedList(value));
   return;
 end
 maxFullCount = 8;
@@ -171,14 +171,6 @@ end
 textValue = sprintf('%s, ..., %s (%d values)', ...
   strjoin(compose('%.6g', value(1:3)), ', '), ...
   strjoin(compose('%.6g', value((end - 2):end)), ', '), numel(value));
-end
-
-function tf = localIsConsecutiveSeedList(value)
-% Return true when seeds are an integer unit-stride range.
-tf = numel(value) > 1 ...
-  && all(isfinite(value)) ...
-  && all(abs(value - round(value)) < sqrt(eps)) ...
-  && all(diff(round(value)) == 1);
 end
 
 function textValue = localScalarToString(value)

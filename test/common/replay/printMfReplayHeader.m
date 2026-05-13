@@ -12,6 +12,7 @@ localPrintField(replayConfig, 'numRepeat', 'repeats', '%d');
 localPrintField(replayConfig, 'numSearchRepeat', 'search repeats', '%d');
 localPrintField(replayConfig, 'snrDb', 'snr (dB)', '%.2f');
 localPrintField(replayConfig, 'baseSeed', 'base seed', '%d');
+localPrintSeedList(replayConfig, 'seedList', 'seed list');
 if isfield(replayConfig, 'contextBaseSeed')
   localPrintField(replayConfig, 'contextBaseSeed', 'context base seed', '%d');
 end
@@ -45,6 +46,19 @@ if ~(isnumeric(value) || islogical(value)) || ~isscalar(value)
   return;
 end
 fprintf(['  %-32s : ' formatText '\n'], labelText, value);
+end
+
+
+function localPrintSeedList(dataStruct, fieldName, labelText)
+% Print a seed list using compact consecutive-range notation.
+if ~isstruct(dataStruct) || ~isfield(dataStruct, fieldName)
+  return;
+end
+value = dataStruct.(fieldName);
+if isempty(value)
+  return;
+end
+fprintf('  %-32s : %s\n', labelText, char(formatMfReplaySeedList(value)));
 end
 
 function localPrintLogicalField(dataStruct, fieldName, labelText)
