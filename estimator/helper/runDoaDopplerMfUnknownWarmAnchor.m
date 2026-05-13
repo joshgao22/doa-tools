@@ -421,6 +421,29 @@ for iDoa = 1:numDoa
   doaLb(iDoa) = min(doaLb(iDoa), lbTarget);
   doaUb(iDoa) = max(doaUb(iDoa), ubTarget);
 end
+[doaLb, doaUb] = localApplyParentDoaEnvelope(model, doaLb, doaUb);
+end
+
+
+function [doaLb, doaUb] = localApplyParentDoaEnvelope(model, doaLb, doaUb)
+%LOCALAPPLYPARENTDOAENVELOPE Cap a warm-anchor DoA release by the upper-level box.
+
+if ~isfield(model, 'parentDoaLb') || ~isfield(model, 'parentDoaUb') || ...
+    isempty(model.parentDoaLb) || isempty(model.parentDoaUb)
+  return;
+end
+parentLb = reshape(model.parentDoaLb, [], 1);
+parentUb = reshape(model.parentDoaUb, [], 1);
+if numel(parentLb) ~= numel(doaLb) || numel(parentUb) ~= numel(doaUb) || ...
+    any(~isfinite(parentLb)) || any(~isfinite(parentUb))
+  return;
+end
+doaLb = max(reshape(doaLb, [], 1), parentLb);
+doaUb = min(reshape(doaUb, [], 1), parentUb);
+if any(doaLb > doaUb)
+  error('runDoaDopplerMfUnknownWarmAnchor:EmptyDoaParentIntersection', ...
+    'The warm-anchor DoA release box does not overlap the upper-level DoA envelope.');
+end
 end
 
 

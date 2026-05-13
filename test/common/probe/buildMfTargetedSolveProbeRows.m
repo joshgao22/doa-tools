@@ -4,8 +4,8 @@ function [solveRows, doaBasinEntryRows] = buildMfTargetedSolveProbeRows(method, 
 % This helper keeps the replay's fixed targeted route: every method records a
 % baseline row, expensive reruns are gated to MS failures, and the replay-only
 % MS CP-U bank is delegated to buildMsCpuBankProbeRows. The ms-bank-only route
-% skips deep solve reruns and keeps only baseline plus MS bank rows. It does
-% not alter the estimator result or final winner.
+% skips deep solve reruns and keeps only baseline plus all compact MS bank rows.
+% It does not alter the estimator result or final winner.
 
 solveRows = repmat(emptyMfSolveProbeRow(), 0, 1);
 doaBasinEntryRows = repmat(emptyMfDoaBasinEntryRow(), 0, 1);
@@ -89,7 +89,7 @@ end
 function shouldRun = localShouldRunDeepSolveProbe(method, baselineCase, truth, objectiveProbeRows, config)
 %LOCALSHOULDRUNDEEPSOLVEPROBE Gate expensive controlled solver reruns.
 
-probeRoute = string(localGetFieldOrDefault(config, 'solveProbeRoute', "ms-targeted"));
+probeRoute = string(localGetFieldOrDefault(config, 'solveProbeRoute', "targeted-deep"));
 if probeRoute == "disabled" || probeRoute == "ms-bank-only"
   shouldRun = false;
   return;
@@ -137,19 +137,13 @@ end
 if string(method.satMode) ~= "multi" || method.isKnownRate
   return;
 end
-probeRoute = string(localGetFieldOrDefault(config, 'solveProbeRoute', "ms-targeted"));
+probeRoute = string(localGetFieldOrDefault(config, 'solveProbeRoute', "targeted-deep"));
 if probeRoute == "disabled"
   return;
 end
 if probeRoute == "ms-bank-only"
   shouldRun = true;
   return;
-end
-truthPointBetter = false;
-finalObj = localProbeObj(objectiveProbeRows, "finalPoint");
-truthObj = localProbeObj(objectiveProbeRows, "truthPoint");
-if isfinite(finalObj) && isfinite(truthObj)
-  truthPointBetter = truthObj < finalObj - max(1e-6, 1e-9 * max(abs(finalObj), 1));
 end
 estResult = localGetFieldOrDefault(baselineCase, 'estResult', struct());
 estAux = localGetFieldOrDefault(estResult, 'aux', struct());
@@ -158,9 +152,18 @@ finalEval = localGetFieldOrDefault(estDebug, 'finalEval', struct());
 [~, nonRefCoherenceFloor] = extractMfProbeCoherenceFloor(finalEval);
 optimInfo = localGetFieldOrDefault(estResult, 'optimInfo', struct());
 firstOrderOpt = localGetFieldOrDefault(optimInfo, 'firstorderopt', NaN);
+iterationCount = localGetFieldOrDefault(optimInfo, 'iterations', NaN);
 nonRefCollapse = isfinite(nonRefCoherenceFloor) && ...
   nonRefCoherenceFloor < config.deepProbeNonRefCoherenceThreshold;
 conditioningBad = isfinite(firstOrderOpt) && firstOrderOpt > config.deepProbeFirstOrderOptThreshold;
+iterationBad = isfinite(iterationCount) && isfield(config, 'msBankHealthGateIterationMin') && ...
+  iterationCount >= config.msBankHealthGateIterationMin;
+truthPointBetter = false;
+finalObj = localProbeObj(objectiveProbeRows, "finalPoint");
+truthObj = localProbeObj(objectiveProbeRows, "truthPoint");
+if isfinite(finalObj) && isfinite(truthObj)
+  truthPointBetter = truthObj < finalObj - max(1e-6, 1e-9 * max(abs(finalObj), 1));
+end
 shouldRun = truthPointBetter || nonRefCollapse || conditioningBad;
 end
 

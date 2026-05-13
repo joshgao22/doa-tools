@@ -11,11 +11,17 @@ if isfield(model, 'lb') && isfield(model, 'ub') && ...
     ~isempty(model.lb) && ~isempty(model.ub)
   lb = model.lb;
   ub = model.ub;
+  if numel(lb) >= 2 && numel(ub) >= 2
+    [doaLb, doaUb] = localApplyParentDoaEnvelope(model, lb(1:2), ub(1:2));
+    lb(1:2) = doaLb;
+    ub(1:2) = doaUb;
+  end
   return;
 end
 
 [doaLb, doaUb] = localBuildDoaBounds(model);
 [doaLb, doaUb] = localApplyUnknownDoaReleaseFloor(model, doaLb, doaUb);
+[doaLb, doaUb] = localApplyParentDoaEnvelope(model, doaLb, doaUb);
 
 lb = [doaLb; model.fdRange(1)];
 ub = [doaUb; model.fdRange(2)];
@@ -58,9 +64,33 @@ end
 
 doaLb = max(doaLb, doaLbLocal);
 doaUb = min(doaUb, doaUbLocal);
-invalidMask = doaLb > doaUb;
-doaLb(invalidMask) = baseRange(invalidMask, 1);
-doaUb(invalidMask) = baseRange(invalidMask, 2);
+if any(doaLb > doaUb)
+  error('estimatorDoaDopplerMlePilotMfOpt:EmptyDoaBounds', ...
+    'The requested MF DoA box does not overlap the active DoA grid.');
+end
+end
+
+
+function [doaLb, doaUb] = localApplyParentDoaEnvelope(model, doaLb, doaUb)
+%LOCALAPPLYPARENTDOAENVELOPE Cap a child DoA box by the upper-level box.
+
+if ~isfield(model, 'parentDoaLb') || ~isfield(model, 'parentDoaUb') || ...
+    isempty(model.parentDoaLb) || isempty(model.parentDoaUb)
+  return;
+end
+parentLb = reshape(model.parentDoaLb, [], 1);
+parentUb = reshape(model.parentDoaUb, [], 1);
+if numel(parentLb) ~= numel(doaLb) || numel(parentUb) ~= numel(doaUb) || ...
+    any(~isfinite(parentLb)) || any(~isfinite(parentUb))
+  return;
+end
+
+doaLb = max(reshape(doaLb, [], 1), parentLb);
+doaUb = min(reshape(doaUb, [], 1), parentUb);
+if any(doaLb > doaUb)
+  error('estimatorDoaDopplerMlePilotMfOpt:EmptyDoaParentIntersection', ...
+    'The child MF DoA box does not overlap the upper-level DoA envelope.');
+end
 end
 
 
@@ -134,13 +164,10 @@ for iDim = 1:numel(doaLb)
   end
 end
 
-invalidMask = doaLb > doaUb;
-doAResetLb = reshape(baseRange(invalidMask, 1), [], 1);
-doAResetUb = reshape(baseRange(invalidMask, 2), [], 1);
-doAIdx = find(invalidMask);
-for iIdx = 1:numel(doAIdx)
-  doaLb(doAIdx(iIdx)) = doAResetLb(iIdx);
-  doaUb(doAIdx(iIdx)) = doAResetUb(iIdx);
+[doaLb, doaUb] = localApplyParentDoaEnvelope(model, doaLb, doaUb);
+if any(doaLb > doaUb)
+  error('estimatorDoaDopplerMlePilotMfOpt:EmptyUnknownDoaReleaseBounds', ...
+    'The CP-U DoA release box does not overlap the active DoA range.');
 end
 end
 

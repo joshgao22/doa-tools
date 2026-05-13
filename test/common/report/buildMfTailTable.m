@@ -13,10 +13,14 @@ if isempty(caseTable) || height(caseTable) == 0
 end
 
 tailMask = caseTable.isDynamicMethod & (~caseTable.healthResolved | ~caseTable.trimKeep);
+if ismember('fdRefNormTail', caseTable.Properties.VariableNames)
+  tailMask = tailMask | (caseTable.isDynamicMethod & caseTable.fdRefNormTail);
+end
 columnList = {'displayName', 'snrDb', 'taskSeed', 'mfInitMode', 'sphericalAngleErrDeg', ...
   'angleErrOverSphericalCrb', 'fdRefAbsErrHz', 'fdRefErrOverCrb', ...
   'fdRateAbsErrHzPerSec', 'iterations', 'objectiveImprove', 'fdRefBoundaryHit', ...
-  'fdRateBoundaryHit', 'healthResolved', 'trimKeep', 'rejectReason'};
+  'fdRateBoundaryHit', 'healthResolved', 'trimKeep', 'fdRefNormTail', 'jointTrimKeep', ...
+  'rejectReason'};
 columnList = columnList(ismember(columnList, caseTable.Properties.VariableNames));
 tailTable = caseTable(tailMask, columnList);
 if height(tailTable) > 0

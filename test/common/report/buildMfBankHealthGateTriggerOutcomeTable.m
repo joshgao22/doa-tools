@@ -143,6 +143,8 @@ if numel(partSet) == 1
       triggerGroup = "boundary";
     case "noSolve"
       triggerGroup = "noSolve";
+    case "candidateObjective"
+      triggerGroup = "candidateObjective";
     otherwise
       triggerGroup = partSet(1);
   end

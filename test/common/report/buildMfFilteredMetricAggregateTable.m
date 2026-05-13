@@ -35,16 +35,24 @@ end
 
 function row = localFillMetricFields(row, caseTable, mask)
 %LOCALFILLMETRICFIELDS Fill common metric fields for one filtered group.
-row.angleRmseDeg = localRmse(caseTable.sphericalAngleErrDeg(mask));
+row.angleMseDeg2 = localMse(caseTable.sphericalAngleErrDeg(mask));
+row.angleRmseDeg = sqrt(row.angleMseDeg2);
 row.angleMedianDeg = median(caseTable.sphericalAngleErrDeg(mask), 'omitnan');
 row.angleMaxDeg = max(caseTable.sphericalAngleErrDeg(mask), [], 'omitnan');
 row.angleCrbSphericalMedianDeg = median(caseTable.crbSphericalApproxStdDeg(mask), 'omitnan');
 row.angleCrbTraceMedianDeg = median(caseTable.crbTraceStdDeg(mask), 'omitnan');
-row.angleRmseOverSphericalCrb = localSafeRatio(row.angleRmseDeg, row.angleCrbSphericalMedianDeg);
-row.angleRmseOverTraceCrb = localSafeRatio(row.angleRmseDeg, row.angleCrbTraceMedianDeg);
-row.fdRefRmseHz = localRmse(caseTable.fdRefAbsErrHz(mask));
+row.angleMseOverSphericalCrb = localNormalizedMse(caseTable.sphericalAngleErrDeg(mask), ...
+  caseTable.crbSphericalApproxStdDeg(mask));
+row.angleMseOverTraceCrb = localNormalizedMse(caseTable.sphericalAngleErrDeg(mask), ...
+  caseTable.crbTraceStdDeg(mask));
+row.angleRmseOverSphericalCrb = sqrt(row.angleMseOverSphericalCrb);
+row.angleRmseOverTraceCrb = sqrt(row.angleMseOverTraceCrb);
+row.fdRefMseHz2 = localMse(caseTable.fdRefAbsErrHz(mask));
+row.fdRefRmseHz = sqrt(row.fdRefMseHz2);
 row.fdRefCrbMedianHz = median(caseTable.fdRefCrbStdHz(mask), 'omitnan');
-row.fdRefRmseOverCrb = localSafeRatio(row.fdRefRmseHz, row.fdRefCrbMedianHz);
+row.fdRefMseOverCrb = localNormalizedMse(caseTable.fdRefAbsErrHz(mask), ...
+  caseTable.fdRefCrbStdHz(mask));
+row.fdRefRmseOverCrb = sqrt(row.fdRefMseOverCrb);
 row.fdRateRmseHzPerSec = localRmse(caseTable.fdRateAbsErrHzPerSec(mask));
 row.initAngleMedianDeg = median(caseTable.initAngleErrDeg(mask), 'omitnan');
 row.finalMinusInitMedianDeg = median(caseTable.finalMinusInitAngleDeg(mask), 'omitnan');
@@ -60,11 +68,14 @@ end
 function row = localEmptyFilteredAggregateRow()
 %LOCALEMPTYFILTEREDAGGREGATEROW Return one typed filtered aggregate row.
 row = struct('displayName', "", 'frameMode', "", 'fdRateMode', "", 'snrDb', NaN, ...
-  'numRepeat', NaN, 'angleRmseDeg', NaN, 'angleMedianDeg', NaN, ...
-  'angleMaxDeg', NaN, 'angleCrbSphericalMedianDeg', NaN, ...
-  'angleCrbTraceMedianDeg', NaN, 'angleRmseOverSphericalCrb', NaN, ...
-  'angleRmseOverTraceCrb', NaN, 'fdRefRmseHz', NaN, ...
+  'numRepeat', NaN, 'angleMseDeg2', NaN, 'angleRmseDeg', NaN, ...
+  'angleMedianDeg', NaN, 'angleMaxDeg', NaN, ...
+  'angleCrbSphericalMedianDeg', NaN, 'angleCrbTraceMedianDeg', NaN, ...
+  'angleRmseOverSphericalCrb', NaN, 'angleRmseOverTraceCrb', NaN, ...
+  'angleMseOverSphericalCrb', NaN, 'angleMseOverTraceCrb', NaN, ...
+  'fdRefMseHz2', NaN, 'fdRefRmseHz', NaN, ...
   'fdRefCrbMedianHz', NaN, 'fdRefRmseOverCrb', NaN, ...
+  'fdRefMseOverCrb', NaN, ...
   'fdRateRmseHzPerSec', NaN, 'initAngleMedianDeg', NaN, ...
   'finalMinusInitMedianDeg', NaN, 'fdRefInitMoveMedianHz', NaN, ...
   'fdRateInitMoveMedianHzPerSec', NaN, 'objectiveImproveMedian', NaN, ...
@@ -73,13 +84,30 @@ row = struct('displayName', "", 'frameMode', "", 'fdRateMode', "", 'snrDb', NaN,
   'rawCount', NaN, 'keepCount', NaN, 'keepRate', NaN, 'rejectRate', NaN);
 end
 
-function value = localRmse(x)
-%LOCALRMSE Root-mean-square of finite entries.
+function value = localMse(x)
+%LOCALMSE Mean-square of finite entries.
 x = x(isfinite(x));
 if isempty(x)
   value = NaN;
 else
-  value = sqrt(mean(x(:).^2));
+  value = mean(x(:).^2);
+end
+end
+
+function value = localRmse(x)
+%LOCALRMSE Root-mean-square of finite entries.
+value = sqrt(localMse(x));
+end
+
+function value = localNormalizedMse(err, crbStd)
+%LOCALNORMALIZEDMSE Mean squared CRB-normalized error over finite entries.
+err = reshape(double(err), [], 1);
+crbStd = reshape(double(crbStd), [], 1);
+mask = isfinite(err) & isfinite(crbStd) & crbStd > 0;
+if ~any(mask)
+  value = NaN;
+else
+  value = mean((err(mask) ./ crbStd(mask)).^2);
 end
 end
 

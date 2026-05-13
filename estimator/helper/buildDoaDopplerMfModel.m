@@ -24,6 +24,51 @@ model = localBuildModel(sceneSeq, rxSig, pilotWave, carrierFreq, sampleRate, ...
 [lb, ub] = localBuildBounds(model);
 end
 
+
+function [parentDoaLb, parentDoaUb] = localBuildParentDoaEnvelope(model)
+%LOCALBUILDPARENTDOAENVELOPE Freeze an explicit upper-level DoA box.
+
+parentDoaLb = [];
+parentDoaUb = [];
+if isempty(model.initDoaParam) || isempty(model.initDoaHalfWidth)
+  return;
+end
+if numel(model.initDoaParam) ~= 2 || numel(model.initDoaHalfWidth) ~= 2
+  return;
+end
+if any(~isfinite(model.initDoaParam(:))) || any(~isfinite(model.initDoaHalfWidth(:))) || ...
+    any(model.initDoaHalfWidth(:) < 0)
+  return;
+end
+
+baseRange = model.doaGrid{1}.range;
+if isempty(baseRange) || any(size(baseRange) ~= [2, 2])
+  return;
+end
+
+center = reshape(model.initDoaParam, [], 1);
+halfWidth = reshape(model.initDoaHalfWidth, [], 1);
+localLb = center - halfWidth;
+localUb = center + halfWidth;
+if strcmp(model.doaType, 'angle')
+  center(1) = mod(center(1), 2 * pi);
+  localLb(1) = center(1) - halfWidth(1);
+  localUb(1) = center(1) + halfWidth(1);
+  if localLb(1) < baseRange(1, 1) || localUb(1) > baseRange(1, 2)
+    localLb(1) = baseRange(1, 1);
+    localUb(1) = baseRange(1, 2);
+  end
+end
+
+parentDoaLb = max(baseRange(:, 1), localLb);
+parentDoaUb = min(baseRange(:, 2), localUb);
+if any(parentDoaLb > parentDoaUb)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidParentDoaEnvelope', ...
+    ['The upper-level initDoaParam +/- initDoaHalfWidth box must ', ...
+     'overlap the DoA grid in every dimension.']);
+end
+end
+
 function modelOpt = localParseModelOpt(modelOpt, sceneSeq)
 %LOCALPARSEMODELOPT Parse optional estimator settings.
 
@@ -102,6 +147,9 @@ end
 if ~isfield(modelOpt, 'debugMaxEvalTrace') || isempty(modelOpt.debugMaxEvalTrace)
   modelOpt.debugMaxEvalTrace = 400;
 end
+if ~isfield(modelOpt, 'disableKnownEmbedded') || isempty(modelOpt.disableKnownEmbedded)
+  modelOpt.disableKnownEmbedded = false;
+end
 if ~isfield(modelOpt, 'disableUnknownWarmAnchor') || isempty(modelOpt.disableUnknownWarmAnchor)
   modelOpt.disableUnknownWarmAnchor = false;
 end
@@ -122,6 +170,18 @@ if ~isfield(modelOpt, 'doaBasinEntryScope') || isempty(modelOpt.doaBasinEntrySco
 end
 if ~isfield(modelOpt, 'doaBasinEntryHalfWidthList') || isempty(modelOpt.doaBasinEntryHalfWidthList)
   modelOpt.doaBasinEntryHalfWidthList = [];
+end
+if ~isfield(modelOpt, 'doaBasinEntryCenterList') || isempty(modelOpt.doaBasinEntryCenterList)
+  modelOpt.doaBasinEntryCenterList = [];
+end
+if ~isfield(modelOpt, 'doaBasinEntryCenterSourceList') || isempty(modelOpt.doaBasinEntryCenterSourceList)
+  modelOpt.doaBasinEntryCenterSourceList = strings(0, 1);
+end
+if ~isfield(modelOpt, 'doaBasinEntryOffsetList') || isempty(modelOpt.doaBasinEntryOffsetList)
+  modelOpt.doaBasinEntryOffsetList = [];
+end
+if ~isfield(modelOpt, 'doaBasinEntryAdoptionMode') || isempty(modelOpt.doaBasinEntryAdoptionMode)
+  modelOpt.doaBasinEntryAdoptionMode = 'objective';
 end
 if ~isfield(modelOpt, 'continuousPhaseConsistencyWeight') || isempty(modelOpt.continuousPhaseConsistencyWeight)
   modelOpt.continuousPhaseConsistencyWeight = 0;
@@ -222,6 +282,10 @@ if ~isscalar(modelOpt.debugMaxEvalTrace) || modelOpt.debugMaxEvalTrace <= 0 || .
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidDebugMaxEvalTrace', ...
     'modelOpt.debugMaxEvalTrace must be a positive integer scalar.');
 end
+if ~isscalar(modelOpt.disableKnownEmbedded) || ~islogical(modelOpt.disableKnownEmbedded)
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidDisableKnownEmbedded', ...
+    'modelOpt.disableKnownEmbedded must be a logical scalar.');
+end
 if ~isscalar(modelOpt.disableUnknownWarmAnchor) || ~islogical(modelOpt.disableUnknownWarmAnchor)
   error('estimatorDoaDopplerMlePilotMfOpt:InvalidDisableUnknownWarmAnchor', ...
     'modelOpt.disableUnknownWarmAnchor must be a logical scalar.');
@@ -270,6 +334,36 @@ if ~isempty(modelOpt.doaBasinEntryHalfWidthList)
       ['modelOpt.doaBasinEntryHalfWidthList must be empty or a positive ', ...
        'finite numeric vector / 2-column matrix.']);
   end
+end
+if ~isempty(modelOpt.doaBasinEntryCenterList)
+  if ~isnumeric(modelOpt.doaBasinEntryCenterList) || ...
+      any(~isfinite(modelOpt.doaBasinEntryCenterList(:)))
+    error('estimatorDoaDopplerMlePilotMfOpt:InvalidDoaBasinEntryCenterList', ...
+      'modelOpt.doaBasinEntryCenterList must be empty or a finite numeric 2-by-N / N-by-2 matrix.');
+  end
+end
+if ~isempty(modelOpt.doaBasinEntryCenterSourceList)
+  modelOpt.doaBasinEntryCenterSourceList = reshape(string(modelOpt.doaBasinEntryCenterSourceList), [], 1);
+  centerCount = localCountDoaColumns(modelOpt.doaBasinEntryCenterList);
+  if centerCount > 0 && numel(modelOpt.doaBasinEntryCenterSourceList) ~= centerCount
+    error('estimatorDoaDopplerMlePilotMfOpt:InvalidDoaBasinEntryCenterSourceList', ...
+      'modelOpt.doaBasinEntryCenterSourceList must have one label per external DoA basin-entry center.');
+  end
+end
+if ~isempty(modelOpt.doaBasinEntryOffsetList)
+  if ~isnumeric(modelOpt.doaBasinEntryOffsetList) || ...
+      any(~isfinite(modelOpt.doaBasinEntryOffsetList(:)))
+    error('estimatorDoaDopplerMlePilotMfOpt:InvalidDoaBasinEntryOffsetList', ...
+      'modelOpt.doaBasinEntryOffsetList must be empty or a finite numeric 2-by-N / N-by-2 matrix.');
+  end
+end
+if isstring(modelOpt.doaBasinEntryAdoptionMode)
+  modelOpt.doaBasinEntryAdoptionMode = char(modelOpt.doaBasinEntryAdoptionMode);
+end
+modelOpt.doaBasinEntryAdoptionMode = lower(strtrim(modelOpt.doaBasinEntryAdoptionMode));
+if ~ismember(modelOpt.doaBasinEntryAdoptionMode, {'objective', 'diagnostic-only'})
+  error('estimatorDoaDopplerMlePilotMfOpt:InvalidDoaBasinEntryAdoptionMode', ...
+    'modelOpt.doaBasinEntryAdoptionMode must be ''objective'' or ''diagnostic-only''.');
 end
 if ~isscalar(modelOpt.continuousPhaseConsistencyWeight) || ...
     ~isfinite(modelOpt.continuousPhaseConsistencyWeight) || ...
@@ -535,12 +629,14 @@ model.refVelEci = refSatVelEci;
 model.initFdCount = modelOpt.initFdCount;
 model.initDoaParam = reshape(modelOpt.initDoaParam, [], 1);
 model.initDoaHalfWidth = reshape(modelOpt.initDoaHalfWidth, [], 1);
+[model.parentDoaLb, model.parentDoaUb] = localBuildParentDoaEnvelope(model);
 model.optimOpt = modelOpt.optimOpt;
 model.verbose = logical(modelOpt.verbose);
 model.debugEnable = modelOpt.debugEnable;
 model.debugTruth = modelOpt.debugTruth;
 model.debugStoreEvalTrace = modelOpt.debugStoreEvalTrace;
 model.debugMaxEvalTrace = modelOpt.debugMaxEvalTrace;
+model.disableKnownEmbedded = logical(modelOpt.disableKnownEmbedded);
 model.disableUnknownWarmAnchor = logical(modelOpt.disableUnknownWarmAnchor);
 model.freezeDoa = logical(modelOpt.freezeDoa);
 model.disableUnknownDoaReleaseFloor = logical(modelOpt.disableUnknownDoaReleaseFloor);
@@ -548,6 +644,10 @@ model.unknownDoaReleaseHalfWidth = reshape(modelOpt.unknownDoaReleaseHalfWidth, 
 model.disableDoaBasinEntry = logical(modelOpt.disableDoaBasinEntry);
 model.doaBasinEntryScope = modelOpt.doaBasinEntryScope;
 model.doaBasinEntryHalfWidthList = modelOpt.doaBasinEntryHalfWidthList;
+model.doaBasinEntryCenterList = modelOpt.doaBasinEntryCenterList;
+model.doaBasinEntryCenterSourceList = modelOpt.doaBasinEntryCenterSourceList;
+model.doaBasinEntryOffsetList = modelOpt.doaBasinEntryOffsetList;
+model.doaBasinEntryAdoptionMode = modelOpt.doaBasinEntryAdoptionMode;
 model.continuousPhaseConsistencyWeight = modelOpt.continuousPhaseConsistencyWeight;
 model.continuousPhaseCollapsePenaltyWeight = modelOpt.continuousPhaseCollapsePenaltyWeight;
 model.continuousPhaseNegativeProjectionPenaltyWeight = modelOpt.continuousPhaseNegativeProjectionPenaltyWeight;
@@ -1158,6 +1258,25 @@ else
   timeOffsetSec = reshape(timeOffsetSecIn, 1, []);
 end
 end
+
+function n = localCountDoaColumns(rawMat)
+%LOCALCOUNTDOACOLUMNS Count DoA center columns after 2-by-N normalization.
+
+n = 0;
+if isempty(rawMat) || ~isnumeric(rawMat)
+  return;
+end
+if isvector(rawMat)
+  if numel(rawMat) == 2
+    n = 1;
+  end
+elseif size(rawMat, 1) == 2
+  n = size(rawMat, 2);
+elseif size(rawMat, 2) == 2
+  n = size(rawMat, 1);
+end
+end
+
 
 function [doaLb, doaUb] = localBuildDoaBounds(model)
 %LOCALBUILDDOABOUNDS Build the DoA search box used by all MF refinements.

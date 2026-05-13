@@ -214,6 +214,11 @@
 - 覆盖：confident、tooth disagree、drift、untrusted、off-tooth、disabled。
 - 不再另建重复的 random-rescue regression。
 
+### `regressionMfDoaBasinEntrySplit.m`
+
+- 唯一契约：SS-MF DoA basin-entry 分支拆分、父级 DoA 范围继承与 actual-path 去重。
+- 覆盖：默认 single-sat continuous MF 会评估 entry candidates；`disableDoaBasinEntry=true` 必须旁路 entry；diagnostic-only adoption 不应采用候选；entry / selected / final DoA 不得超过上层 `initDoaParam ± initDoaHalfWidth`；多个 proposed width 若在父级范围交集后产生相同 actual bounds 和 clipped init，只能求解一次。
+
 ### `regressionMfUnknownFinalSelectionRules.m`
 
 - 唯一契约：unknown final winner selection 的表驱动规则。

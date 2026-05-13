@@ -47,6 +47,7 @@
 典型文件：
 
 - `runSimpleDynamicSubsetPeriodicFlow.m`
+- `buildDoaDopplerStaticTransitionBundle.m`
 - `evaluateDynamicSubsetBank.m`
 - `shouldRunSimpleSameToothBasinEntryRescue.m`
 
@@ -62,7 +63,7 @@
 - profile likelihood 主核；
 - satellite geometry 语义。
 
-如果 flow 里的逻辑开始成为正式算法，应迁移到 `estimator/helper/`。
+如果 flow 里的逻辑开始成为正式算法，应迁移到 `estimator/helper/`。`buildDoaDopplerStaticTransitionBundle.m` 默认保持完整 SF static transition ladder；只在 replay / scan 显式传入 `bundleMode="ms-seed-only"` 时跳过 other-sat ablation 与 weight sweep，用于 MS dynamic init 诊断提速，不改变默认 flow 语义。
 
 ### `probe/`
 
@@ -82,11 +83,11 @@
 
 `buildMfObjectiveProbeRows.m` 只负责构造 MF model 并重评估 static-seed / final / truth / mixed fixed-point objective，供 replay / scan 诊断复用；它不运行 solver、不选择 winner、不改变 estimator adoption。
 
-`buildMfTargetedSolveProbeRows.m` 负责 replay / scan 侧的 targeted controlled MF solver rerun：每个 method 记录 baseline row，默认只有 MS bad condition 才触发 truth-DoA、static-wide 或 SS-MF seed probe，并把 MS CP-U bank 委托给 `buildMsCpuBankProbeRows.m`。当上层显式传入 `solveProbeRoute="ss-parity"` 时，它只为 SS baseline parity 检查运行 SS truth / static-wide probe，用于对照 `replayMfSsMleCrbMetricDiagnose`；这仍然不改变 estimator final winner。
+`buildMfTargetedSolveProbeRows.m` 负责 replay / scan 侧的 targeted controlled MF solver rerun：每个 method 记录 baseline row，默认只有 MS bad condition 才触发 truth-DoA、static-wide 或 SS-MF seed probe，并把 MS CP-U bank 委托给 `buildMsCpuBankProbeRows.m`。`solveProbeRoute="ms-bank-only"` 对所有 MS CP-U case 跑 compact bank，用于 coverage-first 诊断和 adopted-row 上限确认；上一版 no-truth-health-only targeted bank 会漏 hidden angle-only tail，当前不再作为 replay 公开路线。上层显式传入 `solveProbeRoute="ss-parity"` 时，它只为 SS baseline parity 检查运行 SS truth / static-wide probe，用于对照 `replayMfSsMleCrbMetricDiagnose`；这些 probe 都不改变 estimator final winner。
 
 `buildMsCpuBankProbeRows.m` 负责 MS-MF-CP-U 的 replay-only axis-cross bank probe：先用 CP-K cheap preselect 排序，再对 top candidate 做 CP-U release，用于定位 basin-entry / nuisance-rate release 风险；它不定义正式 rescue strategy，不进入 estimator 默认路径。
 
-`buildMfSolveProbeRowFromCase.m`、`buildMfDoaBasinEntryRowsFromCase.m`、`buildMfPerSatProbeRows.m` 与 `emptyMf*Row.m` 是 probe / replay 共用的表行 primitive，只负责把已有 estimator 输出重组为诊断表，不运行新 solver，也不做 candidate adoption。
+`buildMfSolveProbeRowFromCase.m`、`buildMfDoaBasinEntryRowsFromCase.m`、`buildMfPerSatProbeRows.m` 与 `emptyMf*Row.m` 是 probe / replay 共用的表行 primitive，只负责把已有 estimator 输出重组为诊断表，不运行新 solver，也不做 candidate adoption。`buildMfDoaBasinEntryRowsFromCase.m` 会透传 estimator 的 baseline / entry / polish / selected objective、entry / polish / selected 参数、entry center / offset / center-source 与 `entryAdoptionMode` 字段，用于 replay 侧判断 estimator-side DoA basin-entry 是未构造、未评估、外部 center 是否进入，评估后没有赢过 baseline，还是已有 truth-free candidate 本身就无法解释 trim 后 CRB gap；selected row 归因优先使用 basin-entry 诊断中的 `selectedVariant / bestTag`，避免 unknown warm-anchor 后续 `solveVariant` 覆盖 entry family。外部 center 可携带 source label，便于 replay 汇总 MS entry family 的 selected rate、selected-trim rate 与 CRB-normalized residual；当前 MS replay 默认采用 trim-focused family：只保留 `ssmf-center` 作为外部 truth-free center；`static-center`、`static-axis`、`static-diagonal` 与 `ssmf-axis` 不再默认维护。CRB/FIM variant 与 trim-kept residual 分母对照仍保留在 replay local helper 中，尚未稳定到 common report helper。
 
 不应包含：
 
@@ -104,6 +105,8 @@
 - `buildDynamicCaseSummaryTable.m`
 - `buildDynamicCrbSummaryTable.m`
 - `buildMfMetricAggregateTable.m`
+
+  - MF metric aggregate 的 `angleMseOver*SphericalCrb` / `fdRefMseOverCrb` 使用逐样本 `mean((error/CRB)^2)`；`RMSE/CRB` 为该值平方根。物理量 RMSE、MSE 与 CRB median 仍保留为诊断字段，但不再用 `MSE/median(CRB)^2` 作为主 MSE/CRB 口径。
 - `buildMfFilteredMetricAggregateTable.m`
 - `buildMfTailTable.m`
 - `buildMfRuntimeAggregateTable.m`
@@ -125,7 +128,7 @@
 - winner adoption；
 - objective 主核。
 
-`buildMfCandidateTraceTable.m`、`buildMfWideCoverageAggregateTable.m`、`buildMfBankFamilyAggregateTable.m`、`buildMfBankAdoptionShadow*.m`、`buildMfBankAdoptionRejectAggregateTable.m`、`buildMfBankAdoptedCaseTable.m`、`buildMfBankRescueOutcomeTable.m` 与 `buildMfBankHealthGateTriggerOutcomeTable.m` 只重组已有 case / probe 表，允许 replay 与 scan 复用候选来源、objective delta、angle improvement、damage 统计、bank family 拆分、in-tooth tooth/comb 诊断字段、离线 shadow-adoption 评价、fixed-SNR rescue 统计比率、angle-or-fdRef bad-gated replay 诊断、runtime-health-gated replay 诊断、触发源分组诊断和 CRB-normalized soft-damage / healthy-adopt / bad-rescue 指标；它们不定义 MS rescue 策略，也不改变 estimator final winner。
+`buildMfCandidateTraceTable.m`、`buildMfWideCoverageAggregateTable.m`、`buildMfBankFamilyAggregateTable.m`、`buildMfBankAdoptionShadow*.m`、`buildMfBankAdoptionRejectAggregateTable.m`、`buildMfBankAdoptedCaseTable.m`、`buildMfBankRescueOutcomeTable.m` 与 `buildMfBankHealthGateTriggerOutcomeTable.m` 只重组已有 case / probe 表，允许 replay 与 scan 复用候选来源、objective delta、angle improvement、damage 统计、bank family 拆分、in-tooth tooth/comb 诊断字段、离线 shadow-adoption 评价、fixed-SNR rescue 统计比率、angle-or-fdRef bad-gated replay 诊断、runtime-health-gated replay 诊断、truth-free candidate-objective 健康触发、触发源分组诊断和 CRB-normalized soft-damage / healthy-adopt / bad-rescue 指标；它们不定义 MS rescue 策略，也不改变 estimator final winner。
 
 ### `summary/`
 

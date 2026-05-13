@@ -102,9 +102,10 @@ covariance 侧 estimator 工具。
 放到：
 
 - `estimator/helper/solveDoaDopplerMfBranches.m`；
+- `estimator/helper/runDoaDopplerMfDoaBasinEntry.m`；
 - `estimator/helper/runDoaDopplerMfUnknownWarmAnchor.m`。
 
-其中 MF continuous local estimator 的 truth-free DoA basin-entry acquisition 属于 branch solve orchestration：它使用同一个 objective 与 fd/fdRate 范围，只临时扩大 DoA 盒捕获盆地，并在最终出口回到 compact local polish。该 acquisition 默认只作用于 single-sat MF local solve；multi-sat MS-MF 默认旁路，除非显式把 `modelOpt.doaBasinEntryScope` 设为 `all`。不要把 replay 的 truth probe 或 path probe 下沉到 estimator。
+其中 `solveDoaDopplerMfBranches.m` 只负责 branch orchestration；truth-free DoA basin-entry acquisition 与 compact polish 已独立到 `runDoaDopplerMfDoaBasinEntry.m`，以便区分 one-shot MLE core 与 estimator route enhancement。该 acquisition 使用同一个 objective 与 fd/fdRate 范围，只临时扩大 DoA 盒捕获盆地，并在最终出口回到 compact local polish。默认只作用于 single-sat MF local solve；multi-sat MS-MF 默认旁路，除非显式把 `modelOpt.doaBasinEntryScope` 设为 `all`。外部 center / offset family 仍只能通过 truth-free orchestration 输入，不允许传入 truth DoA。`modelOpt.disableKnownEmbedded`、`modelOpt.disableDoaBasinEntry` 与 `modelOpt.disableUnknownWarmAnchor` 仅用于显式 core-only replay / scan 口径，默认不改变正式 estimator 行为。不要把 replay 的 truth probe 或 path probe 下沉到 estimator。
 
 ### candidate preference / final adoption
 

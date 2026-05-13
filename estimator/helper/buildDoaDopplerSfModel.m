@@ -314,11 +314,9 @@ for iSrc = 1:model.numSource
   doaUb(:, iSrc) = min(doaUb(:, iSrc), currentUb);
 end
 
-invalidMask = doaLb > doaUb;
-for iSrc = 1:model.numSource
-  badIdx = invalidMask(:, iSrc);
-  doaLb(badIdx, iSrc) = baseRange(badIdx, 1);
-  doaUb(badIdx, iSrc) = baseRange(badIdx, 2);
+if any(doaLb(:) > doaUb(:))
+  error('estimatorDoaDopplerMlePilotSfOpt:EmptyDoaBounds', ...
+    'The requested SF DoA box does not overlap the active DoA grid.');
 end
 end
 

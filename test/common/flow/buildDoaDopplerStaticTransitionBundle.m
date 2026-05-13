@@ -1,9 +1,11 @@
 function bundle = buildDoaDopplerStaticTransitionBundle(viewRefOnly, viewOtherOnly, viewMs, ...
   wavelen, pilotWave, carrierFreq, sampleRate, fdRange, truth, ...
-  otherSatIdxGlobal, optVerbose, doaOnlyOpt, staticBaseOpt, weightSweepAlpha, staticMsHalfWidth)
+  otherSatIdxGlobal, optVerbose, doaOnlyOpt, staticBaseOpt, weightSweepAlpha, staticMsHalfWidth, bundleMode)
 %BUILDDOADOPPLERSTATICTRANSITIONBUNDLE Build the shared SF transition cases.
 % This helper keeps the single-frame SS/MS DoA and static DoA-Doppler
-% ladder identical between the static and dynamic dev scripts. The static
+% ladder identical between the static and dynamic dev scripts by default.
+% Replay/scan callers may request bundleMode="ms-seed-only" to build only
+% the SS/MS static seeds needed by MS dynamic init diagnostics. The static
 % sat-weight sweep stays serial by default because it only evaluates a few
 % small cases and parfor overhead usually dominates.
 
@@ -23,25 +25,28 @@ arguments
   staticBaseOpt (1, 1) struct = struct()
   weightSweepAlpha (:, 1) double = [0; 0.25; 0.5; 1]
   staticMsHalfWidth (:, 1) double = [0.002; 0.002]
+  bundleMode (1, 1) string = "full"
+end
+
+bundleMode = string(bundleMode);
+if ~(bundleMode == "full" || bundleMode == "ms-seed-only")
+  error('buildDoaDopplerStaticTransitionBundle:UnsupportedBundleMode', ...
+    'Unsupported bundleMode "%s".', char(bundleMode));
 end
 
 bundle = struct();
 bundle.doaOnlyOpt = doaOnlyOpt;
 bundle.staticBaseOpt = staticBaseOpt;
 bundle.weightSweepAlpha = weightSweepAlpha;
+bundle.bundleMode = bundleMode;
 
- bundle.caseRefDoa = localRunDoaOnlyCase("SS-SF-DoA", "single", ...
+bundle.caseRefDoa = localRunDoaOnlyCase("SS-SF-DoA", "single", ...
   viewRefOnly, wavelen, pilotWave, optVerbose, doaOnlyOpt);
 bundle.caseMsDoa = localRunDoaOnlyCase("MS-SF-DoA", "multi", ...
   viewMs, wavelen, pilotWave, optVerbose, doaOnlyOpt);
-bundle.caseOtherDoa = localRunDoaOnlyCase(sprintf("SS-SF-DoA-otherSat(g%d)", otherSatIdxGlobal), ...
-  "single", viewOtherOnly, wavelen, pilotWave, optVerbose, doaOnlyOpt);
 
 bundle.staticRefOpt = staticBaseOpt;
 bundle.staticRefOpt.initDoaParam = bundle.caseRefDoa.estResult.doaParamEst(:);
-
-bundle.staticOtherOpt = staticBaseOpt;
-bundle.staticOtherOpt.initDoaParam = bundle.caseOtherDoa.estResult.doaParamEst(:);
 
 bundle.staticMsOpt = staticBaseOpt;
 bundle.staticMsOpt.initDoaParam = bundle.caseMsDoa.estResult.doaParamEst(:);
@@ -49,6 +54,32 @@ bundle.staticMsOpt.initDoaHalfWidth = reshape(staticMsHalfWidth, [], 1);
 
 bundle.caseStaticRefOnly = localRunStaticDoaDopplerCase("SS-SF-Static", "single", ...
   viewRefOnly, pilotWave, carrierFreq, sampleRate, fdRange, optVerbose, bundle.staticRefOpt);
+bundle.caseStaticMs = localRunStaticDoaDopplerCase("MS-SF-Static", "multi", ...
+  viewMs, pilotWave, carrierFreq, sampleRate, fdRange, optVerbose, bundle.staticMsOpt);
+
+if bundleMode == "ms-seed-only"
+  bundle.caseOtherDoa = buildDoaDopplerCaseResult( ...
+    sprintf("SS-SF-DoA-otherSat(g%d)", otherSatIdxGlobal), "single", "single", ...
+    "doa", "none", struct());
+  bundle.staticOtherOpt = staticBaseOpt;
+  bundle.staticOtherOpt.initDoaParam = NaN(2, 1);
+  bundle.caseStaticRefAbl = bundle.caseStaticRefOnly;
+  bundle.caseStaticRefAbl.displayName = sprintf("MS-SF-Static-refSat(g%d)", ...
+    getDoaDopplerFieldOrDefault(truth, 'refSatIdxGlobal', NaN));
+  bundle.caseStaticRefAbl.satMode = "multi";
+  bundle.caseStaticOtherOnly = buildDoaDopplerCaseResult( ...
+    sprintf("MS-SF-Static-otherSat(g%d)", otherSatIdxGlobal), "multi", "single", ...
+    "doa-doppler", "static", struct());
+  bundle.weightCase = repmat(buildDoaDopplerCaseResult("", "multi", "single", ...
+    "doa-doppler", "static", struct()), 1, 0);
+  bundle.bestStaticMsCase = bundle.caseStaticMs;
+  return;
+end
+
+bundle.caseOtherDoa = localRunDoaOnlyCase(sprintf("SS-SF-DoA-otherSat(g%d)", otherSatIdxGlobal), ...
+  "single", viewOtherOnly, wavelen, pilotWave, optVerbose, doaOnlyOpt);
+bundle.staticOtherOpt = staticBaseOpt;
+bundle.staticOtherOpt.initDoaParam = bundle.caseOtherDoa.estResult.doaParamEst(:);
 bundle.caseStaticRefAbl = bundle.caseStaticRefOnly;
 bundle.caseStaticRefAbl.displayName = sprintf("MS-SF-Static-refSat(g%d)", ...
   getDoaDopplerFieldOrDefault(truth, 'refSatIdxGlobal', NaN));
@@ -57,9 +88,6 @@ bundle.caseStaticRefAbl.satMode = "multi";
 bundle.caseStaticOtherOnly = localRunStaticDoaDopplerCase( ...
   sprintf("MS-SF-Static-otherSat(g%d)", otherSatIdxGlobal), "multi", ...
   viewOtherOnly, pilotWave, carrierFreq, sampleRate, fdRange, optVerbose, bundle.staticOtherOpt);
-
-bundle.caseStaticMs = localRunStaticDoaDopplerCase("MS-SF-Static", "multi", ...
-  viewMs, pilotWave, carrierFreq, sampleRate, fdRange, optVerbose, bundle.staticMsOpt);
 
 bundle.weightCase = repmat(buildDoaDopplerCaseResult("", "multi", "single", ...
   "doa-doppler", "static", struct()), 1, numel(weightSweepAlpha));

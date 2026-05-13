@@ -54,6 +54,12 @@
 - 典型入口：`scanMfFdRefComb`、`scanMfTauSchedule`、`scanMfTruthNeighborhood`
 - 特点：比 replay 更重，用于建立机制证据；入口文件统一以 `scan` 开头。
 
+### 我想重画论文 / 汇报图
+
+- 去：`test/paper/`
+- 典型入口：`plotMfRegimeMapByWindowPaper`、`plotMfKnownUnknownInformationLossPaper`
+- 特点：读取已有轻量 snapshot，整理成 paper-facing 图；不重新运行 estimator、scan 或 replay。
+
 ### 我想比较 flow 策略或记录不通方向
 
 - 去：`test/dev/strategy/`
@@ -136,6 +142,14 @@
 
 - 比较 subset bank、periodic/non-periodic selection、polish gate 等规则；
 - `blockedDynamicDirections.md` 记录已证伪或不建议回流主路径的方向。
+
+### `paper/`
+
+论文 / 汇报图重绘入口。
+
+- 读取 `test/data/cache/` 下的轻量 snapshot；
+- 将 scan / replay 已有结果整理为 paper-facing 图或简表；
+- 不重新运行 estimator、scan 或 replay，也不维护第二套数值逻辑。
 
 ### `dev/trace/`
 

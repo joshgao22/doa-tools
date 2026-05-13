@@ -43,6 +43,12 @@
 - 职责：MF objective 包装评估。
 - 用途：分支、selection、probe 中统一调用正式 objective。
 
+### `buildDoaDopplerMfHypothesis.m`
+
+- 职责：MF dynamic 的 DoA state 与 reference-sat Doppler hypothesis 统一构造。
+- 用途：`evaluateDoaDopplerMfObjective` 与 `buildDoaDopplerMfInit` 共享同一条 `global DoA -> local DoA / deltaFd / fdSat` 链，避免 init 与 objective 维护两份几何 / Doppler 映射。
+- 规则：只做确定性映射，不做 objective、branch selection、truth probe 或 replay 诊断。
+
 ### `buildPilotAtomSfKernel.m`
 
 - 职责：SF block kernel helper。
@@ -62,10 +68,17 @@
 
 ### `solveDoaDopplerMfBranches.m`
 
-- 职责：MF known/unknown 分支求解。
-- 当前连续相位 MF local solve 在存在 `initDoaParam / initDoaHalfWidth` 时，可运行 truth-free DoA basin-entry acquisition：用较宽 DoA 盒捕获好盆地，再回到原 compact local box 做 final polish；该逻辑只改变 DoA entry，不改变 fdRef / fdRate 范围、reference-sat 语义或 objective。默认 scope 为 `single-sat`，即只保护已验证有效的 SS-MF local solve；MS-MF 默认返回 `scope-multi-sat-disabled` 诊断，需显式设置 `modelOpt.doaBasinEntryScope='all'` 才会复用该 acquisition。
+- 职责：MF known/unknown 分支求解 orchestration。
+- 内容：先运行 one-shot `runDoaDopplerMfOptimization`，再按 opt-in 设置调用 known embedded、DoA basin-entry、unknown warm-anchor。`modelOpt.disableKnownEmbedded=true` 可显式关闭 known embedded branch，用于 replay 的 core-only MLE 口径；默认仍保持原 branch 顺序。
 - CP-U warm-anchor 会锚定在当前最佳 DoA basin 后再释放 fdRate，避免 unknown-rate 分支重复继承旧 static basin。
 - 注意：这是 branch orchestration，不应塞 dev-only 诊断或大体量 trace；truth / path probe 仍只能放在 replay。
+
+### `runDoaDopplerMfDoaBasinEntry.m`
+
+- 职责：truth-free DoA basin-entry acquisition 与 compact polish。
+- 内容：在存在 `initDoaParam / initDoaHalfWidth` 时，用较宽 DoA 盒捕获好盆地，再回到原 compact local box 做 final polish；该逻辑只改变 DoA entry，不改变 fdRef / fdRate 范围、reference-sat 语义或 objective。默认 scope 为 `single-sat`，即只保护已验证有效的 SS-MF local solve；MS-MF 默认返回 `scope-multi-sat-disabled` 诊断，需显式设置 `modelOpt.doaBasinEntryScope='all'` 才会复用该 acquisition。`modelOpt.doaBasinEntryCenterList` 与 `modelOpt.doaBasinEntryOffsetList` 是显式 opt-in 的外部 DoA entry center / offset 诊断入口，默认空，因此 SS 路径和已有 estimator 默认行为不变；`modelOpt.doaBasinEntryCenterSourceList` 是等长诊断标签，只影响 `optimInfo.doaBasinEntry` 的表格可读性，不参与求解或 objective。`modelOpt.doaBasinEntryAdoptionMode` 默认 `objective` 保持原行为，`diagnostic-only` 只评估候选并保留表格，不触发 compact polish 或 final adoption。
+- 范围继承：当上层显式给出 `initDoaParam / initDoaHalfWidth` 时，entry candidate 的实际求解范围必须先与父级 DoA envelope 取交集；若多个 proposed width 在交集后产生相同 actual bounds 与 clipped init，只保留第一个候选，避免重复 `fmincon` 路径。
+- 规则：该 helper 仍属于正式 estimator branch route，不允许加入 replay 的 truth probe、CRB variant 或 truth-aware winner 逻辑。
 
 ### `runDoaDopplerMfUnknownWarmAnchor.m`
 

@@ -50,6 +50,10 @@ for iRow = 1:height(baseRows)
   detail.baselineBoundaryHit = logical(localTableValue(baseRows(iRow, :), 'fdRefBoundaryHit', false)) || ...
     logical(localTableValue(baseRows(iRow, :), 'fdRateBoundaryHit', false));
   detail.baselineNoSolveFlag = ~logical(localTableValue(baseRows(iRow, :), 'notNoSolve', true));
+  customGateVar = string(opt.BaselineCustomGateVarName);
+  if strlength(customGateVar) > 0
+    detail.baselineCustomGateFlag = logical(localTableValue(baseRows(iRow, :), char(customGateVar), false));
+  end
   detail.baselineObj = localTableValue(baseRows(iRow, :), 'finalObj', NaN);
 
   [baselineBadEnough, baselineBadReason] = localIsBaselineBadEnough(detail, opt);
@@ -108,7 +112,8 @@ opt = struct('MethodList', "MS-MF-CP-U", 'DiagnosticSuffix', "CenterRescue", ...
   'BaselineBadFdRefNormMin', Inf, 'BaselineFirstOrderOptMin', Inf, ...
   'BaselineIterationMin', Inf, 'BaselineNonRefCoherenceMax', -Inf, ...
   'BaselineRequireFirstOrderAndIteration', false, ...
-  'BaselineBoundaryGateEnable', false, 'BaselineNoSolveGateEnable', false);
+  'BaselineBoundaryGateEnable', false, 'BaselineNoSolveGateEnable', false, ...
+  'BaselineCustomGateVarName', "", 'BaselineCustomGateReason', "custom");
 if mod(numel(varargin), 2) ~= 0
   error('buildMfBankAdoptedCaseTable:InvalidNameValue', 'Name-value arguments must be paired.');
 end
@@ -138,6 +143,10 @@ for iArg = 1:2:numel(varargin)
       opt.BaselineBoundaryGateEnable = logical(value);
     case "baselinenosolvegateenable"
       opt.BaselineNoSolveGateEnable = logical(value);
+    case "baselinecustomgatevarname"
+      opt.BaselineCustomGateVarName = string(value);
+    case "baselinecustomgatereason"
+      opt.BaselineCustomGateReason = string(value);
     otherwise
       error('buildMfBankAdoptedCaseTable:UnknownOption', 'Unknown option "%s".', char(name));
   end
@@ -186,10 +195,15 @@ end
 if logical(opt.BaselineNoSolveGateEnable) && logical(detail.baselineNoSolveFlag)
   reasonList(end + 1, 1) = "noSolve"; %#ok<AGROW>
 end
+customGateVar = string(opt.BaselineCustomGateVarName);
+customGateActive = strlength(customGateVar) > 0;
+if customGateActive && isfield(detail, 'baselineCustomGateFlag') && logical(detail.baselineCustomGateFlag)
+  reasonList(end + 1, 1) = string(opt.BaselineCustomGateReason); %#ok<AGROW>
+end
 
 noGateConfigured = ~angleGateActive && ~fdRefGateActive && ...
   ~isfinite(firstOrderOptMin) && ~isfinite(iterationMin) && ~isfinite(coherenceMax) && ...
-  ~logical(opt.BaselineBoundaryGateEnable) && ~logical(opt.BaselineNoSolveGateEnable);
+  ~logical(opt.BaselineBoundaryGateEnable) && ~logical(opt.BaselineNoSolveGateEnable) && ~customGateActive;
 if noGateConfigured
   tf = true;
   reason = "not-gated";
@@ -365,6 +379,7 @@ row = struct('displayName', "", 'baselineDisplayName', "", 'snrDb', NaN, 'taskSe
   'baselineFdRefErrOverCrb', NaN, 'baselineFirstOrderOpt', NaN, ...
   'baselineIterations', NaN, 'baselineNonRefCoherenceFloor', NaN, ...
   'baselineBoundaryHit', false, 'baselineNoSolveFlag', false, ...
+  'baselineCustomGateFlag', false, ...
   'selectedFdRefErrOverTooth', NaN, 'fdToothShift', NaN, ...
   'baselineObj', NaN, 'selectedObjMinusBaseline', NaN, 'selectedFirstOrderOpt', NaN, ...
   'selectedNonRefCoherenceFloor', NaN, 'damageFlag', false, 'detailReason', "");

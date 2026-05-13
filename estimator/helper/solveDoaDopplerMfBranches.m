@@ -41,21 +41,27 @@ if verbose
 end
 
 if strcmp(model.fdRateMode, 'known')
-  solveEmbed = runDoaDopplerMfKnownEmbeddedOptimization(model, initParam, baseOptimOpt);
-  if verbose
-    localPrintSolveSummary('knownEmbed', solveEmbed);
-  end
-  if preferDoaDopplerMfSolveResult(solveEmbed, solveStd)
-    solveUse = solveEmbed;
+  if localGetModelLogical(model, 'disableKnownEmbedded', false)
     if verbose
-      fprintf('[MfBranchTrace] selected known embedded branch.\n');
+      fprintf('[MfBranchTrace] known embedded branch disabled.\n');
     end
-  elseif verbose
-    fprintf('[MfBranchTrace] kept standard known branch.\n');
+  else
+    solveEmbed = runDoaDopplerMfKnownEmbeddedOptimization(model, initParam, baseOptimOpt);
+    if verbose
+      localPrintSolveSummary('knownEmbed', solveEmbed);
+    end
+    if preferDoaDopplerMfSolveResult(solveEmbed, solveStd)
+      solveUse = solveEmbed;
+      if verbose
+        fprintf('[MfBranchTrace] selected known embedded branch.\n');
+      end
+    elseif verbose
+      fprintf('[MfBranchTrace] kept standard known branch.\n');
+    end
   end
 end
 
-[solveUse, doaBasinEntry] = localRunDoaBasinEntry( ...
+[solveUse, doaBasinEntry] = runDoaDopplerMfDoaBasinEntry( ...
   model, initParam, solveUse, baseOptimOpt, verbose);
 
 if strcmp(model.fdRateMode, 'unknown')
@@ -115,181 +121,6 @@ if verbose
 end
 end
 
-
-function [solveUse, basinDiag] = localRunDoaBasinEntry(model, initParam, solveUse, baseOptimOpt, verbose)
-%LOCALRUNDOABASINENTRY Run truth-free wide DoA acquisition before final polish.
-% The acquisition uses the same MF objective and keeps fd/fdRate ranges
-% unchanged. Only the DoA search box is widened temporarily, then the winner
-% is polished again inside the normal compact local box.
-
-basinDiag = localInitDoaBasinEntryDiag(model);
-[shouldRunEntry, skipReason] = localShouldRunDoaBasinEntry(model);
-if ~shouldRunEntry
-  basinDiag.reason = skipReason;
-  return;
-end
-
-halfWidthMat = localResolveDoaBasinEntryHalfWidths(model);
-if isempty(halfWidthMat)
-  basinDiag.reason = "no-entry-half-width";
-  return;
-end
-
-baseCenter = reshape(model.initDoaParam, [], 1);
-compactHalfWidth = reshape(model.initDoaHalfWidth, [], 1);
-solveOpt = struct('useScaledSolve', false, 'enableFallbackSqp', false);
-entryRows = repmat(localEmptyDoaBasinEntryRow(), 0, 1);
-bestSolve = solveUse;
-bestTag = "baseline";
-bestEntryIdx = 0;
-
-for iEntry = 1:size(halfWidthMat, 2)
-  entryHalfWidth = halfWidthMat(:, iEntry);
-  entryTag = sprintf('doaBasinEntry%.4g', localHalfWidthDisplayValue(model, entryHalfWidth));
-  entryModel = localBuildDoaBoxModel(model, baseCenter, entryHalfWidth);
-  [entryLb, entryUb] = buildDoaDopplerMfBounds(entryModel);
-  entryInit = localClipParamToBounds(initParam, entryLb, entryUb, entryModel);
-
-  entrySolve = runDoaDopplerMfOptimization( ...
-    entryModel, entryInit, entryLb, entryUb, [], [], baseOptimOpt, solveOpt);
-  entrySolve.solveVariant = string(entryTag);
-
-  adopted = preferDoaDopplerMfSolveResult(entrySolve, bestSolve);
-  entryRows(end + 1, 1) = localBuildDoaBasinEntryRow( ... %#ok<AGROW>
-    string(entryTag), entryHalfWidth, entrySolve, entrySolve, adopted);
-  if adopted
-    bestSolve = entrySolve;
-    bestTag = string(entrySolve.solveVariant);
-    bestEntryIdx = numel(entryRows);
-  end
-
-  if verbose
-    localPrintSolveSummary(char(entryTag), entrySolve);
-  end
-end
-
-if bestEntryIdx > 0
-  polishModel = localBuildDoaBoxModel(model, bestSolve.optVar(1:2), compactHalfWidth);
-  [polishLb, polishUb] = buildDoaDopplerMfBounds(polishModel);
-  polishInit = localClipParamToBounds(bestSolve.optVar, polishLb, polishUb, polishModel);
-  polishSolve = runDoaDopplerMfOptimization( ...
-    polishModel, polishInit, polishLb, polishUb, [], [], baseOptimOpt, solveOpt);
-  polishSolve.solveVariant = bestTag + "Polish";
-
-  entryRows(bestEntryIdx).polishFval = localGetStructField(polishSolve, 'fval', NaN);
-  entryRows(bestEntryIdx).polishExitflag = localGetStructField(polishSolve, 'exitflag', NaN);
-  entryRows(bestEntryIdx).polishIterations = ...
-    localGetOutputField(localGetStructField(polishSolve, 'output', struct()), 'iterations', NaN);
-  if preferDoaDopplerMfSolveResult(polishSolve, bestSolve)
-    bestSolve = polishSolve;
-    bestTag = string(polishSolve.solveVariant);
-  end
-  entryRows(bestEntryIdx).selectedFval = localGetStructField(bestSolve, 'fval', NaN);
-  entryRows(bestEntryIdx).selectedVariant = string(localGetStructField(bestSolve, 'solveVariant', ""));
-end
-
-solveUse = bestSolve;
-basinDiag.enabled = true;
-basinDiag.reason = "evaluated";
-basinDiag.bestTag = bestTag;
-basinDiag.numCandidate = numel(entryRows);
-basinDiag.entryTable = entryRows;
-end
-
-function basinDiag = localInitDoaBasinEntryDiag(model)
-%LOCALINITDOABASINENTRYDIAG Initialize one compact basin-entry diagnostic.
-
-basinDiag = struct();
-basinDiag.enabled = false;
-basinDiag.reason = "disabled";
-basinDiag.bestTag = "baseline";
-basinDiag.numCandidate = 0;
-basinDiag.entryTable = repmat(localEmptyDoaBasinEntryRow(), 0, 1);
-basinDiag.phaseMode = string(localGetStructField(model, 'phaseMode', ""));
-basinDiag.fdRateMode = string(localGetStructField(model, 'fdRateMode', ""));
-basinDiag.scope = string(localGetStructField(model, 'doaBasinEntryScope', "single-sat"));
-basinDiag.numSat = localGetStructField(model, 'numSat', NaN);
-end
-
-function [tf, reason] = localShouldRunDoaBasinEntry(model)
-%LOCALSHOULDRUNDOABASINENTRY Decide whether the formal MF local solve needs DoA acquisition.
-
-tf = false;
-reason = "disabled";
-if localGetModelLogical(model, 'disableDoaBasinEntry', false)
-  reason = "disabled-by-option";
-  return;
-end
-scope = string(localGetStructField(model, 'doaBasinEntryScope', "single-sat"));
-if scope == "off"
-  reason = "scope-off";
-  return;
-end
-if scope == "single-sat" && localGetStructField(model, 'numSat', Inf) ~= 1
-  reason = "scope-multi-sat-disabled";
-  return;
-end
-if localGetModelLogical(model, 'freezeDoa', false)
-  reason = "freeze-doa";
-  return;
-end
-if ~strcmp(localGetStructField(model, 'phaseMode', ''), 'continuous')
-  reason = "non-continuous-phase";
-  return;
-end
-if isempty(localGetStructField(model, 'initDoaParam', [])) || ...
-    isempty(localGetStructField(model, 'initDoaHalfWidth', []))
-  reason = "missing-init-doa-box";
-  return;
-end
-if numel(model.initDoaParam) ~= 2 || numel(model.initDoaHalfWidth) ~= 2
-  reason = "invalid-init-doa-size";
-  return;
-end
-if any(~isfinite(model.initDoaParam(:))) || ...
-    any(~isfinite(model.initDoaHalfWidth(:))) || any(model.initDoaHalfWidth(:) <= 0)
-  reason = "invalid-init-doa-box";
-  return;
-end
-tf = true;
-reason = "ready";
-end
-
-function halfWidthMat = localResolveDoaBasinEntryHalfWidths(model)
-%LOCALRESOLVEDOABASINENTRYHALFWIDTHS Resolve wide acquisition boxes.
-
-rawList = localGetStructField(model, 'doaBasinEntryHalfWidthList', []);
-if isempty(rawList)
-  if strcmp(localGetStructField(model, 'doaType', ''), 'angle')
-    rawList = deg2rad([0.012, 0.024, 0.048]);
-  else
-    rawList = [0.012, 0.024, 0.048];
-  end
-end
-
-rawList = double(rawList);
-if isvector(rawList)
-  rawList = reshape(rawList, 1, []);
-  halfWidthMat = repmat(rawList, 2, 1);
-elseif size(rawList, 1) == 2
-  halfWidthMat = rawList;
-elseif size(rawList, 2) == 2
-  halfWidthMat = rawList.';
-else
-  halfWidthMat = zeros(2, 0);
-end
-
-if isempty(halfWidthMat)
-  return;
-end
-compactHalfWidth = reshape(model.initDoaHalfWidth, [], 1);
-keepMask = all(isfinite(halfWidthMat), 1) & all(halfWidthMat > 0, 1) & ...
-  any(halfWidthMat > compactHalfWidth + 1e-12, 1);
-halfWidthMat = halfWidthMat(:, keepMask);
-[~, keepIdx] = unique(round(halfWidthMat.' / 1e-12) * 1e-12, 'rows', 'stable');
-halfWidthMat = halfWidthMat(:, keepIdx);
-end
-
 function modelBox = localBuildDoaBoxModel(model, doaCenter, doaHalfWidth)
 %LOCALBUILDDOABOXMODEL Build one model copy with a different DoA box.
 
@@ -305,6 +136,7 @@ modelBox.lb = [];
 modelBox.ub = [];
 modelBox.cachedBoundsReady = false;
 end
+
 
 function modelWarm = localBuildWarmAnchorModel(model, solveUse)
 %LOCALBUILDWARMANCHORMODEL Anchor CP-U release to the best DoA basin.
@@ -327,50 +159,6 @@ if strcmp(localGetStructField(model, 'doaType', ''), 'angle') && ~isempty(optVar
   optVar(1) = mod(optVar(1), 2 * pi);
 end
 end
-
-function row = localEmptyDoaBasinEntryRow()
-%LOCALEMPTYDOABASINENTRYROW Build one empty basin-entry diagnostic row.
-
-row = struct( ...
-  'tag', "", ...
-  'halfWidth1', NaN, ...
-  'halfWidth2', NaN, ...
-  'entryFval', NaN, ...
-  'polishFval', NaN, ...
-  'selectedFval', NaN, ...
-  'selectedVariant', "", ...
-  'entryExitflag', NaN, ...
-  'polishExitflag', NaN, ...
-  'entryIterations', NaN, ...
-  'polishIterations', NaN, ...
-  'adoptedOverPreviousBest', false);
-end
-
-function row = localBuildDoaBasinEntryRow(tag, halfWidth, entrySolve, selectedSolve, adopted)
-%LOCALBUILDDOABASINENTRYROW Build one basin-entry diagnostic row.
-
-row = localEmptyDoaBasinEntryRow();
-row.tag = tag;
-row.halfWidth1 = halfWidth(1);
-row.halfWidth2 = halfWidth(2);
-row.entryFval = localGetStructField(entrySolve, 'fval', NaN);
-row.selectedFval = localGetStructField(selectedSolve, 'fval', NaN);
-row.selectedVariant = string(localGetStructField(selectedSolve, 'solveVariant', ""));
-row.entryExitflag = localGetStructField(entrySolve, 'exitflag', NaN);
-row.entryIterations = localGetOutputField(localGetStructField(entrySolve, 'output', struct()), 'iterations', NaN);
-row.adoptedOverPreviousBest = logical(adopted);
-end
-
-function displayValue = localHalfWidthDisplayValue(model, halfWidth)
-%LOCALHALFWIDTHDISPLAYVALUE Return a compact half-width value for tags.
-
-if strcmp(localGetStructField(model, 'doaType', ''), 'angle')
-  displayValue = rad2deg(max(abs(halfWidth(:))));
-else
-  displayValue = max(abs(halfWidth(:)));
-end
-end
-
 
 function modelType = localGetModelType(model)
 %LOCALGETMODELTYPE Get the estimator model tag for script-level dispatch.
@@ -415,6 +203,8 @@ optimInfo.debugMaxEvalTrace = model.debugMaxEvalTrace;
 optimInfo.enableFdAliasUnwrap = model.enableFdAliasUnwrap;
 optimInfo.fdAliasStepHz = model.fdAliasStepHz;
 optimInfo.doaBasinEntryScope = string(localGetStructField(model, 'doaBasinEntryScope', "single-sat"));
+optimInfo.disableKnownEmbedded = localGetModelLogical(model, 'disableKnownEmbedded', false);
+optimInfo.disableUnknownWarmAnchor = localGetModelLogical(model, 'disableUnknownWarmAnchor', false);
 optimInfo.usedScaledSolve = localGetStructField(output, 'usedScaledSolve', false);
 optimInfo.usedFallbackAlgorithm = localGetStructField(output, 'usedFallbackAlgorithm', '');
 optimInfo.fallbackTriggered = localGetStructField(output, 'fallbackTriggered', false);
