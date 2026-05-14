@@ -62,8 +62,14 @@ function [rxSig, sampleCov, cleanSig, noiseSig, meta] = genMultiFrameSnapshots( 
 %                     .phase.timeModel      - phase-time model
 %                                             - 'global'     : absolute-time
 %                                                              continuous phase
+%                                                              from frame-wise
+%                                                              Doppler samples
 %                                             - 'frameLocal' : phase restarts
 %                                                              at each frame
+%                                             - 'linearRef'  : absolute-time
+%                                                              affine Doppler
+%                                                              fitted from the
+%                                                              reference chain
 %                                             - 'custom'     : use precomputed
 %                                                              phaseSeqCell
 %                                             default: 'global'
@@ -276,6 +282,8 @@ if strcmp(genOpt.phaseTimeModel, 'global')
   meta.dopplerMode = 'continuous';
 elseif strcmp(genOpt.phaseTimeModel, 'framelocal')
   meta.dopplerMode = 'frameLocal';
+elseif strcmp(genOpt.phaseTimeModel, 'linearref')
+  meta.dopplerMode = 'linearRef';
 else
   meta.dopplerMode = 'custom';
 end
@@ -450,7 +458,7 @@ else
 end
 
 genOpt.phaseTimeModel = phaseTimeModel;
-validPhaseTimeModel = {'global', 'framelocal', 'custom'};
+validPhaseTimeModel = {'global', 'framelocal', 'linearref', 'custom'};
 if ~ismember(genOpt.phaseTimeModel, validPhaseTimeModel)
   error('genMultiFrameSnapshots:UnsupportedPhaseTimeModel', ...
     'Unsupported phase.timeModel: %s.', genOpt.phaseTimeModel);
@@ -841,6 +849,12 @@ for iFrame = 1:numFrame
   fdCube(:, :, iFrame) = currentFd;
 end
 
+linearRefFit = [];
+if strcmp(genOpt.phaseTimeModel, 'linearref')
+  linearRefFit = localBuildLinearRefDopplerFit( ...
+    linkParamCell, sceneSeq.timeOffsetSec, numSat, numUser);
+end
+
 phaseSeqCell = cell(1, numFrame);
 for iFrame = 1:numFrame
   numRxSnap = frameTimeInfoCell{iFrame}.numRxSnap;
@@ -862,6 +876,11 @@ for iFrame = 1:numFrame
           currentFd = linkParamCell{iFrame}.fdGeom(iSat, iUser);
           phaseVec = 2*pi * currentFd * timeRelSec;
 
+        case 'linearref'
+          phaseVec = localEvalLinearRefDopplerPhase( ...
+            linearRefFit.fdSat0(iSat, iUser), ...
+            linearRefFit.fdRateSat(iSat, iUser), queryAbsTimeSec);
+
         otherwise
           error('genMultiFrameSnapshots:UnsupportedPhaseTimeModel', ...
             'Unsupported phaseTimeModel: %s.', genOpt.phaseTimeModel);
@@ -876,6 +895,102 @@ for iFrame = 1:numFrame
 
   phaseSeqCell{iFrame} = currentPhaseCell;
 end
+end
+
+
+function linearRefFit = localBuildLinearRefDopplerFit(linkParamCell, timeOffsetSec, numSat, numUser)
+%LOCALBUILDLINEARREFDOPPLERFIT Fit reference-tied affine Doppler lines.
+
+timeVec = reshape(double(timeOffsetSec), 1, []);
+numFrame = numel(linkParamCell);
+if numel(timeVec) ~= numFrame
+  error('genMultiFrameSnapshots:LinearRefTimeSizeMismatch', ...
+    'timeOffsetSec must contain one entry per linkParam frame.');
+end
+
+fdRef0 = zeros(1, numUser);
+fdRateRef = zeros(1, numUser);
+deltaFd0 = zeros(numSat, numUser);
+deltaFdRate = zeros(numSat, numUser);
+
+for iUser = 1:numUser
+  fdRefSeries = zeros(1, numFrame);
+  deltaFdSeries = zeros(numSat, numFrame);
+
+  for iFrame = 1:numFrame
+    linkParam = linkParamCell{iFrame};
+    localCheckLinearRefLinkParam(linkParam, numSat, numUser, iFrame);
+    fdRefSeries(iFrame) = linkParam.ref.fdGeom(1, iUser);
+    deltaFdSeries(:, iFrame) = linkParam.ref.deltaFdGeom(:, iUser);
+  end
+
+  [fdRef0(1, iUser), fdRateRef(1, iUser)] = localFitAffineDopplerLine(timeVec, fdRefSeries);
+  for iSat = 1:numSat
+    [deltaFd0(iSat, iUser), deltaFdRate(iSat, iUser)] = ...
+      localFitAffineDopplerLine(timeVec, deltaFdSeries(iSat, :));
+  end
+end
+
+linearRefFit = struct();
+linearRefFit.fdRef0 = fdRef0;
+linearRefFit.fdRateRef = fdRateRef;
+linearRefFit.deltaFd0 = deltaFd0;
+linearRefFit.deltaFdRate = deltaFdRate;
+linearRefFit.fdSat0 = deltaFd0 + repmat(fdRef0, numSat, 1);
+linearRefFit.fdRateSat = deltaFdRate + repmat(fdRateRef, numSat, 1);
+end
+
+
+function localCheckLinearRefLinkParam(linkParam, numSat, numUser, iFrame)
+%LOCALCHECKLINEARREFLINKPARAM Validate reference Doppler fields.
+
+if ~isstruct(linkParam) || ~isfield(linkParam, 'ref') || ~isstruct(linkParam.ref)
+  error('genMultiFrameSnapshots:MissingLinearRefFields', ...
+    'linkParamCell{%d}.ref is required for phase.timeModel=''linearRef''.', iFrame);
+end
+if ~isfield(linkParam.ref, 'fdGeom') || ~isnumeric(linkParam.ref.fdGeom) || ...
+    ~isequal(size(linkParam.ref.fdGeom), [1, numUser])
+  error('genMultiFrameSnapshots:InvalidLinearRefFdGeom', ...
+    'linkParamCell{%d}.ref.fdGeom must have size 1 x numUser.', iFrame);
+end
+if ~isfield(linkParam.ref, 'deltaFdGeom') || ~isnumeric(linkParam.ref.deltaFdGeom) || ...
+    ~isequal(size(linkParam.ref.deltaFdGeom), [numSat, numUser])
+  error('genMultiFrameSnapshots:InvalidLinearRefDeltaFdGeom', ...
+    'linkParamCell{%d}.ref.deltaFdGeom must have size numSat x numUser.', iFrame);
+end
+if any(~isfinite(linkParam.ref.fdGeom(:))) || any(~isfinite(linkParam.ref.deltaFdGeom(:)))
+  error('genMultiFrameSnapshots:InvalidLinearRefDopplerValue', ...
+    'Reference Doppler fields must contain finite values for linearRef generation.');
+end
+end
+
+
+function [fd0, fdRate] = localFitAffineDopplerLine(timeSec, fdSeries)
+%LOCALFITAFFINEDOPPLERLINE Fit fd(t) = fd0 + fdRate * t.
+
+timeSec = reshape(double(timeSec), [], 1);
+fdSeries = reshape(double(fdSeries), [], 1);
+validMask = isfinite(timeSec) & isfinite(fdSeries);
+if nnz(validMask) == 0
+  fd0 = 0;
+  fdRate = 0;
+elseif nnz(validMask) == 1
+  fd0 = fdSeries(validMask);
+  fdRate = 0;
+else
+  regMat = [ones(nnz(validMask), 1), timeSec(validMask)];
+  coef = regMat \ fdSeries(validMask);
+  fd0 = coef(1);
+  fdRate = coef(2);
+end
+end
+
+
+function phaseVec = localEvalLinearRefDopplerPhase(fd0, fdRate, queryTimeSec)
+%LOCALEVALLINEARREFDOPPLERPHASE Evaluate affine-Doppler absolute-time phase.
+
+queryTimeSec = reshape(queryTimeSec, 1, []);
+phaseVec = 2*pi * (fd0 * queryTimeSec + 0.5 * fdRate * (queryTimeSec .^ 2));
 end
 
 
