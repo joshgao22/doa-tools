@@ -133,12 +133,26 @@ scan 顶层工程外壳可使用 `test/common/scan/` 的薄 helper：
 
 - 作用：MS 专用的 Doppler-aided / in-tooth MLE-vs-CRB 跨 SNR scan，只跑 `MS-MF-CP-K` 与 `MS-MF-CP-U`。
 - 用途：在不混入 SS 对照和 replay heavy bank/rescue solver 的前提下，统计 `-15:5:10 dB` 下 MS-MF 的 full / resolved / core / CRB-local 表现、outlier 类型分布和代表性 tail seed，用于反向指导 `replayMfMsMleCrbFlowDiagnose` 的定点机制排查。
-- 默认配置：`snrDbList=(-15:5:10).'`、`numRepeat=100`、`baseSeed=253`、`frameCountList=10`、`methodNameList=["MS-MF-CP-K"; "MS-MF-CP-U"]`。若只需快速看错误类型分布，可手动降为 `numRepeat=40`。
-- 主要输出：继承通用 in-tooth scan 的 `perfTable`、`aggregateTable`、`crbLocalSummaryTable`、`failureSummaryTable`、`topTailTable`、`topTailExportTable`、`repeatOutCell`、`checkpointSummaryTable` 与 `plotData`，并额外输出 `msErrorTypeSummaryTable`、`representativeSeedTable`、`crbFloorSummaryTable` 和 `crbTargetAuditTable`。`crbLocalSummaryTable` 采用 CRB-normalized metric 优先口径，先报告 CRB-local / core / resolved / full 的 `RMSE/CRB` 与 CRB-local / core 的 `MSE/CRB`，再报告 `crbLocalRate` 等 keep-rate 诊断字段；其中 CRB-local trim 为 angle-tail trim，`fdRef` 超 cap 只进入 `fdRefNormTail` / CRB-floor 诊断。
+- 默认配置：`snrDbList=(-15:5:10).'`、`numRepeat=40`、`baseSeed=253`、`frameCountList=10`、`dynamicObjectiveMode="pureMle"`、`localSearchBoxMode="truthCrbFloor"`、`localBoxCrbSigmaMultiplier=1`、`localBoxRequestedDoaHalfWidthListDeg=[0.003;0.006;0.012;0.024;0.048]`、`localBoxRequestedFdHalfToothFractionList=0.4`、`methodNameList=["MS-MF-CP-K"; "MS-MF-CP-U"]`。该版本默认 `numRepeat=40` 先做宽度失效点粗筛，确认趋势后再提高到 `100` 或更多。
+- 目标函数口径：默认 `dynamicObjectiveMode="pureMle"`，仅在本 scan 调用 dynamic estimator 前将 CP consistency / collapse / negative-projection / non-ref floor 等工程惩罚置零，并关闭 `enableFdAliasUnwrap`，使 MLE-vs-CRB 与无惩罚 deterministic CRB 口径一致；`dynamicObjectiveMode="flowDefault"` 仅用于复现旧工程诊断口径，不作为 P0 paper-facing 主结果。
+- 局部搜索盒口径：默认 `localSearchBoxMode="truthCrbFloor"`，这是 controlled oracle-box 诊断而不是 runtime selector。该模式把 DoA 与 `fdRef` 搜索盒中心放在 truth，先按文件头请求半宽构造 hard envelope，再与 `localBoxCrbSigmaMultiplier` 倍对应 MS-MF CRB 标准差取较大值；后续 core solve 只能在该 truth-centered hard bound 内。当前主用法是扫描 `localBoxRequestedDoaHalfWidthListDeg`，从真值附近逐步扩大 DoA 搜索范围，观察从哪个宽度开始出现 bad basin / CRB-local 失效；`localBoxRequestedFdHalfToothFractionList` 默认只有 `0.4 tooth`，如需单独排查 fdRef 宽度再扩成列表。若要复现纯 auto 初始化，把 `localSearchBoxMode="off"`。若要隔离 DoA 或 fdRef，可分别设置 `localSearchBoxMode="truthDoaCrbFloor"` 或 `"truthFdCrbFloor"`。
+- 主要输出：继承通用 in-tooth scan 的 `perfTable`、`aggregateTable`、`crbLocalSummaryTable`、`failureSummaryTable`、`topTailTable`、`topTailExportTable`、`repeatOutCell`、`checkpointSummaryTable` 与 `plotData`，并额外输出 `msErrorTypeSummaryTable`、`representativeSeedTable`、`crbFloorSummaryTable` 和 `crbTargetAuditTable`。`crbLocalSummaryTable` 采用 CRB-normalized metric 优先口径，先报告 CRB-local / core / resolved / full 的 `RMSE/CRB` 与 CRB-local / core 的 `MSE/CRB`，再报告 `crbLocalRate` 等 keep-rate 诊断字段；其中 CRB-local trim 为 angle-tail trim，`fdRef` 超 cap 只进入 `fdRefNormTail` / CRB-floor 诊断；宽度扫描轴会进入 `requestedDoaHalfWidthDeg`、`requestedFdHalfToothFraction`、实际 CRB-floor 后 half-width 与 `doaTruthBoxViolationRate` 等字段。
 - 错误类型口径：`msErrorTypeSummaryTable` 将逐 repeat 离线分类为 `crb-local`、`fdref-branch-tail`、`fd-rate-tail`、`coherence-collapse-tail`、`doa-basin-limited`、`angle-local-tail`、`solver-conditioning-tail` 或 `other-tail`。这些标签只用于 offline scan / replay seed selection，不进入 estimator、flow selector 或 runtime adoption。
-- 代表 seed 口径：`representativeSeedTable` 每个 `displayName × SNR × error type` 默认选 3 个 tail score 最大的 seed，字段包含 `taskSeed`、CRB-normalized angle/fdRef、fdRate error、non-ref coherence、iterations、first-order optimality、failure reason 与 tail subtype。后续 replay 应优先从这里选 seed，而不是凭单次日志印象挑 case。
+- 代表 seed 口径：`representativeSeedTable` 每个 `displayName × SNR × requested width × error type` 默认选 3 个 tail score 最大的 seed，字段包含 `taskSeed`、CRB-normalized angle/fdRef、fdRate error、non-ref coherence、iterations、first-order optimality、failure reason 与 tail subtype。后续 replay 应优先从这里选 seed，而不是凭单次日志印象挑 case。
 - checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfMsMleCrbInToothConsistency/<shortRunKey>/`；中断后同配置重跑可恢复，成功构造 `scanData` 后默认清理 checkpoint 目录。
 - 存储口径：默认不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。该 scan 是 baseline 分类器，不运行 `BankRescue / HealthGated / 0.006+0.012` replay bank。
+
+#### `scanMfMsMleCrbCleanBoundConsistency.m`
+
+- 作用：把 `replayMfMsMleCrbCleanTrim` 固定成 paper-facing 的 truth-centered clean-bound MLE-vs-CRB scan，同时纳入 `SS/MS`、`SF/MF`、`CP/IP`、`K/U` 方法组。
+- 用途：服务论文中的局部 MLE 与对应 CRB 对照。在显式给定 DoA / `fdRef` 局部范围后，检查 estimator 是否达到对应模型的 CRB，并把 full / health / joint-trim、SS-vs-MS、K-vs-U、range audit 和 outlier 表一起保存到 `scanData`。
+- 默认配置：`snrDbList=(-15:5:10).'`、`numRepeat=100`、`baseSeed=253`、`numFrame=10`、`methodNameList=["SS-SF-Static";"MS-SF-Static";"SS-MF-CP-K";"SS-MF-CP-U";"MS-MF-CP-K";"MS-MF-CP-U";"SS-MF-IP-K";"SS-MF-IP-U";"MS-MF-IP-K";"MS-MF-IP-U"]`。默认 `methodRangeTable` 对所有 method 使用 `doaCrbScale=2`、`fdRefHalfToothFraction=0.3`、`fdRefCrbScale=3`、`fdRateHalfWidthHzPerSec=1000`。
+- 局部范围口径：配置区的 `methodRangeTable` 是显式 method-level 表格，每行绑定一个 `methodName`，可分别指定 DoA half-width 的 CRB 倍数、`fdRef` half-tooth fraction、`fdRef` CRB floor 倍数和 `fdRate` truth-local half-width。需要精细调参时，直接修改对应 method 行；不要把不同范围作为额外 profile 维度重复跑所有 method，也不向 estimator helper 扩接口。
+- IP 口径：脚本在本地 CRB bundle 中补充 independent-phase 的 `IP-K/IP-U` CRB，不改 `buildDynamicCrbBundle` 公共 helper；estimator 侧只通过 `dynOpt.phaseMode='independent'` 调用正式 dynamic estimator。
+- 主要输出：`caseTable`、`cleanAggregateTable`、`cleanHealthAggregateTable`、`cleanTrimAggregateTable`、`cleanSsMsCompareTable`、`cleanKnownUnknownCompareTable`、`cleanSnrCurveTable`、`cleanEstimateCrbCurveTable`、`cleanSearchRangeAuditTable`、`cleanOutlierTable`、`runtimeAggregateTable`、`topSlowRuntimeTable`、`checkpointSummaryTable` 和 `plotData`。summary section 只读取 `scanData` 内字段；从 snapshot 恢复后不依赖 workspace 中的临时 aggregate 变量。
+- 限制：这是 controlled / oracle local scan，不证明默认 full-flow acquisition 已通过；`2×CRB` 或其它 truth-centered DoA hard box 必须在论文图注中标明为 local-bound 条件。DoA box、`fdRef` box、geometry、frame count 与 information-loss 曲线的系统扫描应由本 scan 或专门 information-loss scan 承担，不再继续堆到 CleanTrim replay。
+- checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfMsMleCrbCleanBoundConsistency/<shortRunKey>/`；成功构造 `scanData` 后默认清理 checkpoint 目录。
+- 存储口径：`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache，不保存 `rxSigCell`、完整 `sceneSeq` 或图片。
 
 #### `scanMfKnownUnknownInformationLoss.m`
 
@@ -310,3 +324,31 @@ loadExpSnapshot(snapshotFile, 'caller', struct('varNames', {{'scanData'}}));
 - progressbar 开始前的长耗时不能靠 `optVerbose` 解释；应默认打印紧凑 stage log，例如 context build、strategy resolve、grid build、repeat mode、enter parfor。
 - `optVerbose=true` 只用于 estimator / flow 内部 trace，不作为 scan orchestration 进度显示开关。
 - 清理只能删除无效工程外壳，不能改变默认数值路径、reference-sat 语义、subset 顺序、candidate ranking 或 final selection。
+
+- `methodRangeTable` uses method-level ranges. The static seed stage is lazy: SS-only runs do not require a `MS-SF-Static` range row.
+
+#### `scanMfPairGeometryCrbAudit.m`
+
+- 作用：在大 TLE 星座文件中做 reference / cooperative satellite set 的几何与 MF-CRB 健康度筛选；不跑 MLE，不遍历全组合。
+- 用途：排查当前 `4154+1165` 这类 MS-MF hard pair 是否由选星几何病态、EFIM condition、DoA-fdRef coupling 或 Doppler 线性残差导致，并为后续 `replayMfPairChoiceCompare` 或 paper-facing MS-MF scan 选出更健康的代表性卫星集合。
+- 默认场景：`usrLla=[37.78;36.59;0]`、`statlink_20260318.tle`、`numFrame=10`、`frameIntvlSec=1/750`。TLE 文件直接交给 `tleread`，要求用户已把 TLE 所在目录加入 MATLAB path，不再在脚本内维护私有 path resolver。先按参考时刻可见星筛 reference candidate，再用 `refSelectionMode="cooperativeBestScore"` 对 reference 的 second-sat 配合能力做轻量 pair audit，选出 cooperative reference 后固定该 reference 枚举 second-sat candidates，最后用 greedy marginal CRB health 扩展到 `L=1,2,4,6,8,10` 的 nested sets。
+- 模型口径：只评估 paper-facing 的 global DoA 恒定、Doppler 一阶变化、continuous-phase MF-CP 模型；代码中 `signalModelTag="constant-doa-affine-doppler-cp"`，CRB 使用 `phaseMode='continuous'`、`fdRateMode='known/unknown'` 与拟合得到的 `fdRefFit/fdRateFit`。`steeringMode='framewise'` 只表示同一个固定 `usrLla` 在不同卫星帧下重新映射为 local steering，不表示估计时引入时变 DoA 主参数。
+- reference 选择口径：默认 `refSelectionMode="cooperativeBestScore"`，不是单纯选择最大仰角 reference。脚本先评估最多 `maxCooperativeReferenceEval` 个 single-sat reference candidate，并对每个 reference 的 second-sat 候选计算 pair CRB health，形成 `refCooperativeScoreTable`；该表报告 best/top-5 pair score、healthy/hard-coupled pair 数量、best-pair EFIM condition 和 DoA-fdRef coupling。`refSelectionMode="maxElevation"`、`"singleSatBestScore"` 和 `"manual"` 仍保留为对照。
+- 排名口径：主 pair 排名使用 `pairScore`，它综合 `MS/SS` angle CRB gain、fdRef CRB gain、MS EFIM condition、DoA-fdRef canonical coupling、fdRef coupling fraction 与 Doppler fitted-phase residual。表中同时保留 `rankByAngleGain`、`rankByLowCoupling` 和 raw CRB/coupling 字段，避免把单一 score 写死成论文结论。
+- 主要输出：`contextSummaryTable`、`referencePreselectTable`、`referenceCandidateTable`、`refCooperativeScoreTable`、`allReferencePairRankTable`、`candidatePreselectTable`、`pairCandidateTable`、`pairRankTable`、`greedyCandidateTable`、`greedyStepTable`、`satSetSummaryTable`、`rankPreviewTable`、`checkpointSummaryTable` 和轻量 `plotData`。命令行只打印 reference preview、cooperative reference preview、selected-reference pair top preview、greedy 选星表和 selected-set summary，不打印 9000+ TLE 的全量信息。
+- checkpoint / progress / runtime log：默认开启 task-level checkpoint，路径为仓库根目录 `tmp/scanMfPairGeometryCrbAudit/<stageRunKey>/`。reference、pair 和每个 greedy step 分 stage 保存；中断后同配置重跑可恢复，progressbar 只对未完成 task reset，parfor 时通过 client-side `DataQueue` 或 checkpoint callback 更新；脚本会打印轻量 stage-level runtime log，说明当前处于 context、reference、pair、greedy、checkpoint cleanup 或 summary 阶段；成功构造 `scanData` 后默认清理已完成 checkpoint，并把固定字段的 `checkpointCleanupReport` 写入 `scanData`。
+- 限制：该 scan 只评估几何与 CRB 健康度，不证明 estimator 在所选 set 上一定贴 CRB；被选出的 healthy / hard-coupled set 需要再用小 MC replay 或 paper-facing scan 验证 MLE / CRB consistency。
+
+#### `scanMfGeoSatGeometryCrbAudit.m`
+
+- 作用：在一组候选地理位置上做 Starlink-inspired location + cooperative satellite-set 初筛；不跑 MLE，不遍历全组合，不替代固定位置的 `scanMfPairGeometryCrbAudit.m`。
+- 用途：为论文仿真选择 representative `usrLla` 与候选卫星集合。该 scan 是上层场景筛选器，默认采用 `geoScanMode="coarseL4"`：每个候选 `usrLla` 只做轻量 cooperative reference / pair CRB-health 粗筛，并只对排名靠前的少数位置贪心到 `L=1,2,4`；完整 `L=1,2,4,6,8,10` 深挖交给固定位置的 `scanMfPairGeometryCrbAudit.m`。
+- 默认地理位置：第一轮只做轻量纬度 sweep，并保留当前坐标作为 anchor：`[37.78,36.59,0]`、`25/35/40/45/50/53/55/60 deg` 纬度且经度固定 `36.59 deg`。若该轮显示中纬度更健康，再手动扩展经度列表；不要把第一版写成全球经纬网格搜索。
+- 模型口径：与 `scanMfPairGeometryCrbAudit.m` 一致，只评估 global DoA 恒定、Doppler 一阶变化、continuous-phase MF-CP 模型；`signalModelTag="constant-doa-affine-doppler-cp"`，CRB 使用 `phaseMode='continuous'`、`fdRateMode='known/unknown'`、`steeringMode='framewise'`。
+- 地理位置评分：`geoPreScore` 只作为排序辅助，综合 best cooperative reference score、可见星数量、best-pair EFIM condition 与 DoA-fdRef coupling。表中保留 raw `numAvailableAtRef`、best pair class、best pair CRB、coupling fraction、healthy/hard-coupled pair 数量，避免把单一 score 写成论文结论。
+- coarse 口径：默认 `maxReferenceCandidateEval=16`、`maxCooperativeReferenceEval=12`、`maxCandidateSecondSat=8`、`maxGreedyCandidatePerStep=12`，避免每个地理点完整复制单位置 scan 的 `40 + 12×51` task 流程。cooperative reference audit 不再按 reference 逐个开小 `parfor`，而是把同一地理点下的 `maxCooperativeReferenceEval × maxCandidateSecondSat` 个 pair task 合并成一个 `geoXX_coopAll` checkpoint / parfor 批次，以提高 worker 利用率并减少 stage overhead。默认只对 `numGeoGreedyKeep=3` 个地理位置运行 `L=1,2,4` greedy satellite-set scan。输出 `paperCandidateSetTable` 用于挑后续单位置深挖 / MLE-CRB paper-facing scan 起点；它不是最终性能结论。
+- 主要输出：`geoCandidateTable`、`geoReferenceSummaryTable`、`referenceCandidateTable`、`refCooperativeScoreTable`、`allReferencePairRankTable`、`geoGreedyStepTable`、`geoGreedyCandidateTable`、`geoSatSetSummaryTable`、`paperCandidateSetTable`、`bestGeoSummaryTable`、`checkpointSummaryTable` 和轻量 `plotData`。命令行只打印地理位置列表、top geo cooperative summary、top geo 的 selected-set summary 和 paper candidate preview。
+- checkpoint / progress / runtime log：默认开启 task-level checkpoint，路径为仓库根目录 `tmp/scanMfGeoSatGeometryCrbAudit/<stageRunKey>/`。checkpoint key 带 `geoXX` 前缀，避免不同地理位置下相同 reference / pair stage 互相覆盖；成功构造 `scanData` 后默认清理已完成 checkpoint。
+- 与 `scanMfPairGeometryCrbAudit.m` 的关系：本 scan 负责“多个地理位置中选场景”，默认只筛到 `L=4`；`scanMfPairGeometryCrbAudit.m` 负责“给定一个地理位置后深挖 reference / pair / `L=1,2,4,6,8,10` greedy set”。两者都应保留；若要解释某个具体位置为什么被选中，或要得到最终 6/8/10 星集合，应回到固定位置 scan 继续看。
+- 最新结果文档：`test/dev/scan/results/scanMfGeoSatGeometryCrbAudit.md` 记录 2026-05-14 coarse-L4 地理位置初筛结果；当前结论是 `[45,36.59,0]` 为主候选，`[60,36.59,0]` 为 stress candidate，原 `[37.78,36.59,0]` 降级为 anchor / stress 对照。
+
