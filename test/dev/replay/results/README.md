@@ -93,6 +93,7 @@ results/<scriptName>/<caseName>.md
 
 | replay | 结果文档 | representative snapshot | 当前结论 |
 |---|---|---|---|
+| `replayMfCrbTexConsistencyAudit.m` | `replayMfCrbTexConsistencyAudit.md` | 不固定 snapshot；运行很快，按终端输出记录 | CRB dispatch / reported fdRef / K-U Schur loss 正常；`MF-Static` 是 continuous zero-rate `CP-K` 退化，MS 的 fdRef scalar gain 被 DoA-fdRef coupling 抵消。 |
 | `replayMfCombToothSurface.m` | `replayMfCombToothSurface.md` | `test/data/cache/replay/replayMfCombToothSurface_20260508-141941.mat` | CP-K 的 DoA 局部信息未退化，主要问题是 `fdRef` wrong-tooth；CP-U 另有 DoA-`fdRef`-`fdRate` coupling / bad basin。 |
 | `replayMfPeriodicVsSubsetToothSelect.m` | `replayMfPeriodicVsSubsetToothSelect.md` | `test/data/cache/replay/replayMfPeriodicVsSubsetToothSelect_20260425-182612.mat` | subset 负责选齿，periodic 主要负责同齿 refine；warning 只作为诊断元数据保留。 |
 | `replayMfRandomRescueEffectiveness.m` | `replayMfRandomRescueEffectiveness.md` | `test/data/cache/replay/replayMfRandomRescueEffectiveness_20260427-110427.mat` | rescue/random bank 明显提升 central tooth 命中率，但已有 easy-case damage，后续应转 scan/gate 验证而非 blanket 常驻。 |
