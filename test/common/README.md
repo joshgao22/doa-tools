@@ -169,6 +169,8 @@
 - `printMfScanSection.m`
 - `notifyMfScanStatus.m`
 - `finalizeMfScanResult.m`
+- `buildMfScanCheckpointSummaryTable.m`
+- `cleanupMfScanCheckpointRuns.m`
 
 使用边界：
 
