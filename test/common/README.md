@@ -29,10 +29,11 @@
 典型文件：
 
 - `buildDynamicDualSatEciContext.m`
+- `buildDynamicMultiSatEciContext.m`
 - `buildDynamicSubsetFixtureBank.m`
 - `buildMfUnknownReleaseFixture.m`
 
-`buildDynamicDualSatEciContext.m` 负责动态双星 dev/replay/scan/regression 的统一代表性场景入口。它内置一组固定默认仿真参数；只有当某个 replay / scan 明确要改变场景或 waveform 时，才由上层脚本显式传入覆盖项。
+`buildDynamicDualSatEciContext.m` 负责动态双星 dev/replay/scan/regression 的 legacy 代表性场景入口。它内置一组固定默认仿真参数；只有当某个 replay / scan 明确要改变场景或 waveform 时，才由上层脚本显式传入覆盖项。`buildDynamicMultiSatEciContext.m` 是新的多星场景入口，用于 L4/L6/L8 等 paper-facing clean replay / scan；它只构造 scene、truth、pilot 和 context，不定义 estimator strategy。`buildDynamicFrameSubsetFixture.m` 已支持 `N>=1` 的 frame fixture：`viewRefOnly` 与 `viewMs` 始终构造，`viewOtherOnly / otherSat*` 只在双星 legacy case 中保留。
 
 不应包含：
 
