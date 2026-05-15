@@ -142,6 +142,17 @@ scan 顶层工程外壳可使用 `test/common/scan/` 的薄 helper：
 - checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfMsMleCrbInToothConsistency/<shortRunKey>/`；中断后同配置重跑可恢复，成功构造 `scanData` 后默认清理 checkpoint 目录。
 - 存储口径：默认不保存图片；`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache。该 scan 是 baseline 分类器，不运行 `BankRescue / HealthGated / 0.006+0.012` replay bank。
 
+#### `scanMfMsMleCrbCleanBoundScale.m`
+
+- 作用：在 `replayMfMsMleCrbCleanTrim` 的 6 星 truth-centered clean-bound 口径上，二维扫描 DoA hard box 的 CRB 倍数与 `fdRef` hard box 的 CRB 倍数，观察局部 MLE 的 RMSE/CRB、trim keep rate、range boundary 和 outlier 类型如何随搜索范围变化。
+- 用途：回答 CleanTrim 中 `truthLocalDoaCrbScale` / `truthLocalFdRefCrbScale` 是否过紧、是否出现 oracle-bound 截断、以及 DoA/fdRef 范围是否存在耦合；它是 controlled / oracle local range-surface scan，不证明 full-flow acquisition。
+- 默认配置：固定 `snrDbList=0`、`numRepeat=30`、`baseSeed=253`、`numFrame=10`、6 星组合 `usrLla=[55;36.59;0]`、`selectedSatIdxGlobal=[5259 1243 348 5652 14 4437]`、`refSatIdxGlobal=5259`，默认只跑 `SS/MS-MF-CP-K/U`。扫描轴为 `truthLocalDoaCrbScaleList=[1;1.5;2;3;5]` 和 `truthLocalFdRefCrbScaleList=[1;1.5;2;3;5;8]`；确认 knee 后再局部加密或扩展 SNR。
+- 局部范围口径：`fdRefRangeMode="crb-scale"` 使用纯 CRB-scaled `fdRef` hard box，并以 `fdRefMaxHalfToothFraction` 限制在 tooth 内；这不同于 CleanTrim 中“请求 tooth box + CRB floor”的默认写法，目的是让 `fdRef` scale 列表真正成为扫描轴。`fdRate` 仍使用 truth-local 固定半宽，不参与本 scan 维度。
+- 主要输出：`caseTable`、`scaleRawAggregateTable`、`scaleHealthAggregateTable`、`scaleJointTrimAggregateTable`、`scaleReadableRmseCrbTable`、`scaleSurfaceSummaryTable`、`scaleSearchRangeAuditTable`、`scaleOutlierTable`、`runtimeAggregateTable`、`topSlowRuntimeTable`、`checkpointSummaryTable` 和 `plotData`。summary section 只读取 `scanData` 内字段；从 snapshot 恢复后不依赖 workspace 临时变量。
+- 解释口径：若小 scale 下 RMSE/CRB 小于 1，应优先解释为 truth-centered hard box 截断 / oracle-bound 条件；若放宽 DoA 或 `fdRef` 后 RMSE/CRB、boundary hit 或 reject reason 明显变化，才说明对应范围参与了 basin / branch 选择。
+- checkpoint：默认开启 per-task checkpoint，路径为仓库根目录 `tmp/scanMfMsMleCrbCleanBoundScale/<runKey>/`；成功构造 `scanData` 后默认清理 checkpoint 目录。
+- 存储口径：`saveSnapshot=true` 时只保存轻量 `scanData` 到 scan cache，不保存 `rxSigCell`、完整 `sceneSeq`、fixture cache、transition bundle、全量 objective map 或图片。
+
 #### `scanMfMsMleCrbCleanBoundConsistency.m`
 
 - 作用：把 `replayMfMsMleCrbCleanTrim` 固定成 paper-facing 的 truth-centered clean-bound MLE-vs-CRB scan，同时纳入 `SS/MS`、`SF/MF`、`CP/IP`、`K/U` 方法组。
