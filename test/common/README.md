@@ -153,6 +153,7 @@
 典型文件：
 
 - `plotDoaDopplerGeometryComparison.m`
+- `enableLegendToggle.m`：为已有 axes 的 legend 增加点击显示 / 隐藏曲线的交互行为；只改变图窗交互，不解析 `scanData` / `replayData`，不保存图片，也不改变任何数值结果。
 
 不应包含：
 
